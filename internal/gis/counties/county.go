@@ -1,62 +1,84 @@
 package counties
 
 import (
+	"fmt"
 	"net/http"
-  "fmt"
-  "net/url"
+	"net/url"
 )
 
 /*
-  all counties that I onboard onto this will use this struct
+all counties that I onboard onto this will use this struct
 */
 type BaseCountyConnector struct {
-   baseUrl string
-   county string
-   dataDesc string 
-   client *http.Client  
+	baseUrl  string
+	county   string
+	dataDesc string
+	client   *http.Client
 }
 
 /*
-  returns description of which data that will will be fetching. 
+returns description of which data that will will be fetching.
 */
 func (bcc BaseCountyConnector) Description() string {
-   return bcc.dataDesc  
-} 
-
-/*
-  returns the name of the county that we are working within.
-*/
-func (bcc BaseCountyConnector) County() string {
-  return bcc.county
+	return bcc.dataDesc
 }
 
 /*
-  Creates a new county connector to be used 
-  for any of the specific downstream counties
+returns the name of the county that we are working within.
+*/
+func (bcc BaseCountyConnector) County() string {
+	return bcc.county
+}
+
+/*
+  validates the baseUrl to ensure it is a valid URL
+*/
+func validateUrl(baseUrl string) error {
+	parsed, err := url.Parse(baseUrl)
+
+	if err != nil {
+    return fmt.Errorf("invalid baseUrl! invalid format: %v", err)
+	}
+  // check the scheme. needs to be http or https
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("invalid baseUrl! must include scheme (http:// or https://)")
+	}
+  
+  // check the host. needs to be a non-empty string
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid baseUrl! must include host")
+	}
+
+	return nil
+}
+
+/*
+Creates a new county connector to be used
+for any of the specific downstream counties
 */
 func NewCountyConnector(
-  baseUrl string,
-  county string,
-  dataDesc string,
-  client *http.Client,
+	baseUrl string,
+	county string,
+	dataDesc string,
+	client *http.Client,
 ) (*BaseCountyConnector, error) {
 
-  if baseUrl == "" {
-    return nil, fmt.Errorf("baseUrl cannot be empty")  
-  }
+	if baseUrl == "" {
+		return nil, fmt.Errorf("baseUrl cannot be empty")
+	}
 
-  if _, err := url.Parse(baseUrl); err != nil {
-    return nil, fmt.Errorf("invalid baseUrl! needs to be a valid URL")
-  }
+	if err := validateUrl(baseUrl); err != nil {
+		return nil, err 
+	}
 
-  if client == nil {
-    return nil, fmt.Errorf("*http.Client cannot be empty")
-  }
-  
-  return &BaseCountyConnector{
-    baseUrl: baseUrl,
-    county: county,
-    dataDesc: dataDesc,
-    client: client, 
-  }, nil
+	if client == nil {
+		return nil, fmt.Errorf("*http.Client cannot be empty")
+	}
+
+	return &BaseCountyConnector{
+		baseUrl:  baseUrl,
+		county:   county,
+		dataDesc: dataDesc,
+		client:   client,
+	}, nil
 }

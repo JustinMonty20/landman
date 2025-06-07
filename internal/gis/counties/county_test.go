@@ -19,14 +19,50 @@ func TestNewCountyConnector(t *testing.T) {
 		errorMsg    string
 	}{
 		{
-			"invalid url test",
+			"invalid url test (no scheme)",
 			"invalid-url-duh",
 			"Union",
 			"Union County Parcel Data",
 			validClient,
 			true,
-			"invalid baseUrl! needs to be a valid URL",
+			"invalid baseUrl! must include scheme (http:// or https://)",
 		},
+		{
+			"invalid url test (no host)",
+			"http://",
+			"Mecklenburg",
+			"Union",
+			validClient,
+			true,
+			"invalid baseUrl! must include host",
+		},
+    {
+      "nil http client",
+      "https://ucwater.unioncountync.gov/arcgis/rest/services/GoMaps/UnionGoMaps/MapServer/10",
+      "Union", 
+      "Union County Parcel Data",
+      nil,
+      true,
+      "*http.Client cannot be empty",
+    },
+    {
+      "empty base url",
+      "",
+      "Union",
+      "Union County Parcel Data",
+      validClient,
+      true,
+      "baseUrl cannot be empty",
+    },
+    {
+      "valid NewCountyConnector",
+      "https://ucwater.unioncountync.gov/arcgis/rest/services/GoMaps/UnionGoMaps/MapServer/10",
+      "Union",
+      "Union County Parcel Data",
+      validClient,
+      false,
+      "",
+    },
 	}
 
 	for _, tt := range tests {
@@ -37,7 +73,7 @@ func TestNewCountyConnector(t *testing.T) {
 				tt.dataDesc,
 				tt.client,
 			)
-
+      
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
 				return
@@ -51,27 +87,32 @@ func TestNewCountyConnector(t *testing.T) {
 			if tt.expectError && err != nil {
 				if !strings.Contains(err.Error(), tt.errorMsg) {
 					t.Errorf("Expected error message to contain '%s', got '%s'", tt.errorMsg, err.Error())
+					return
 				}
 			}
 
-			if result == nil {
-				t.Error("Expected non-nil result")
-			}
+			if result == nil && tt.expectError {
+				return
+			} else {
+				if result != nil && result.baseUrl != tt.baseUrl {
+					t.Errorf("Expected baseUrl '%s' but got '%s'", tt.baseUrl, result.baseUrl)
+					return
+				}
 
-			if result.baseUrl != tt.baseUrl {
-				t.Errorf("Expected baseUrl '%s' but got '%s'", tt.baseUrl, result.baseUrl)
-			}
+				if result.county != tt.county {
+					t.Errorf("Expected county '%s' but got '%s'", tt.county, result.county)
+					return
+				}
+				if result.dataDesc != tt.dataDesc {
+					t.Errorf("Expected dataDesc '%s' but got '%s'", tt.dataDesc, result.dataDesc)
+					return
+				}
 
-			if result.county != tt.county {
-				t.Errorf("Expected county '%s' but got '%s'", tt.county, result.county)
+				if result.client != tt.client {
+					t.Errorf("Expected client to match provided client")
+					return
+				}
 			}
-			if result.dataDesc != tt.dataDesc {
-				t.Errorf("Expected dataDesc '%s' but got '%s'", tt.dataDesc, result.dataDesc)
-			}
-
-      if result.client != tt.client {
-        t.Errorf("Expected client to match provided client")
-      }
 
 		})
 	}
