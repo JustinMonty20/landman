@@ -1,20 +1,19 @@
 package counties
 
 import (
-	"net/http"
 	"strings"
 	"testing"
 )
 
 func TestNewCountyConnector(t *testing.T) {
-	validClient := &http.Client{}
+  validClient := &RateLimitedClient{}
 
 	tests := []struct {
 		name        string
 		baseUrl     string
 		county      string
 		dataDesc    string
-		client      *http.Client
+		client      *RateLimitedClient
 		expectError bool
 		errorMsg    string
 	}{
