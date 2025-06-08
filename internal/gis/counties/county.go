@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+  "net"
+  "time"
+  "golang.org/x/time/rate"
 )
 
 /*
@@ -13,14 +16,24 @@ type BaseCountyConnector struct {
 	baseUrl  string
 	county   string
 	dataDesc string
-	client   *http.Client
+	client   *RateLimitedClient 
+}
+
+/*
+rate limited client for the county connector.
+Unsure how the government apis will handle this many requests.
+Want to add rate limiting in early to not overwhelm the api.
+*/
+type RateLimitedClient struct {
+  client *http.Client
+  limiter *rate.Limiter
 }
 
 /*
 interface for all county query params
 */
 type QueryParams interface {
-  ToUrlValues() url.Values
+  ToUrlValues() (url.Values, error)
 }
 
 /*
@@ -40,9 +53,12 @@ func (bcc BaseCountyConnector) County() string {
 /*
  builds the url for the county to query parcel data.
 */
-func (bcc BaseCountyConnector) BuildUrl(qp QueryParams) string {
-  queryParams := qp.ToUrlValues() 
-  return fmt.Sprintf("%s?%s", bcc.baseUrl, queryParams.Encode())
+func (bcc BaseCountyConnector) BuildUrl(qp QueryParams) (string, error) {
+  queryParams, err := qp.ToUrlValues() 
+  if err != nil {
+    return "", err 
+  }
+  return fmt.Sprintf("%s?%s", bcc.baseUrl, queryParams.Encode()), nil
 }
 
 /*
@@ -68,6 +84,47 @@ func validateUrl(baseUrl string) error {
 }
 
 /*
+  creates a new http client
+*/
+func NewHttpClient() *http.Client {
+   return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			// Timeouts
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+			// KeepAlive
+			DisableKeepAlives:     false,
+			ExpectContinueTimeout: 1 * time.Second,
+			DialContext: (&net.Dialer{
+				Timeout: 5 * time.Second,
+			}).DialContext,
+		},
+	}
+}
+
+/*
+  creates a new rate limited client
+*/
+func NewRateLimitedClient(
+  client *http.Client,
+  reqPerSecond int,
+) *RateLimitedClient {
+  // default to 1 req/second
+  if reqPerSecond == 0 {
+    reqPerSecond = 1
+  }
+  return &RateLimitedClient {
+    client: client,
+    // burst of 1
+    limiter: rate.NewLimiter(rate.Limit(reqPerSecond), 1),
+  }
+}
+
+/*
 Creates a new county connector to be used
 for any of the specific downstream counties
 */
@@ -75,7 +132,7 @@ func NewCountyConnector(
 	baseUrl string,
 	county string,
 	dataDesc string,
-	client *http.Client,
+	client *RateLimitedClient,
 ) (*BaseCountyConnector, error) {
 
 	if baseUrl == "" {
