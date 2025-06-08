@@ -17,6 +17,13 @@ type BaseCountyConnector struct {
 }
 
 /*
+interface for all county query params
+*/
+type QueryParams interface {
+  ToUrlValues() url.Values
+}
+
+/*
 returns description of which data that will will be fetching.
 */
 func (bcc BaseCountyConnector) Description() string {
@@ -28,6 +35,14 @@ returns the name of the county that we are working within.
 */
 func (bcc BaseCountyConnector) County() string {
 	return bcc.county
+}
+
+/*
+ builds the url for the county to query parcel data.
+*/
+func (bcc BaseCountyConnector) BuildUrl(qp QueryParams) string {
+  queryParams := qp.ToUrlValues() 
+  return fmt.Sprintf("%s?%s", bcc.baseUrl, queryParams.Encode())
 }
 
 /*
