@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+  "context"
   "net"
   "time"
   "golang.org/x/time/rate"
@@ -16,7 +17,7 @@ type BaseCountyConnector struct {
 	baseUrl  string
 	county   string
 	dataDesc string
-	client   *RateLimitedClient 
+	Client   *RateLimitedClient 
 }
 
 /*
@@ -25,8 +26,15 @@ Unsure how the government apis will handle this many requests.
 Want to add rate limiting in early to not overwhelm the api.
 */
 type RateLimitedClient struct {
-  client *http.Client
+  Client *http.Client
   limiter *rate.Limiter
+}
+
+func (rlc *RateLimitedClient) Do (ctx context.Context, req *http.Request) (*http.Response, error) {
+  if err := rlc.limiter.Wait(ctx); err != nil {
+    return nil, err
+  }
+  return rlc.Client.Do(req)
 }
 
 /*
@@ -55,6 +63,7 @@ func (bcc BaseCountyConnector) County() string {
 */
 func (bcc BaseCountyConnector) BuildUrl(qp QueryParams) (string, error) {
   queryParams, err := qp.ToUrlValues() 
+  fmt.Println("baseUrl %s", bcc.baseUrl)
   if err != nil {
     return "", err 
   }
@@ -118,7 +127,7 @@ func NewRateLimitedClient(
     reqPerSecond = 1
   }
   return &RateLimitedClient {
-    client: client,
+    Client: client,
     // burst of 1
     limiter: rate.NewLimiter(rate.Limit(reqPerSecond), 1),
   }
@@ -144,13 +153,13 @@ func NewCountyConnector(
 	}
 
 	if client == nil {
-		return nil, fmt.Errorf("*http.Client cannot be empty")
+		return nil, fmt.Errorf("*RateLimitedClient cannot be empty")
 	}
 
 	return &BaseCountyConnector{
 		baseUrl:  baseUrl,
 		county:   county,
 		dataDesc: dataDesc,
-		client:   client,
+		Client:   client,
 	}, nil
 }

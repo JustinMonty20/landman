@@ -2,10 +2,11 @@ package counties
 
 import (
 	"fmt"
-	"github.com/tidwall/gjson"
 	"io"
-	"net/http"
+  "context"	
+  "net/http"
 	"net/url"
+  "github.com/tidwall/gjson"
 )
 
 type UnionCountyConnector struct {
@@ -20,6 +21,7 @@ type UCArcGisParams struct {
 	ResultOffset      int // pagination mechanism
 	ResultRecordCount int // batch size
 	Format            string
+  OutFields         string
 }
 
 // Union County Data Connector
@@ -45,19 +47,19 @@ func NewUnionCountyConnector(
 	}, nil
 }
 
-func (ucc *UnionCountyConnector) QueryTotalParcels(qp UCArcGisParams) (int64, error) {
+func (ucc *UnionCountyConnector) QueryTotalParcels(ctx context.Context, qp UCArcGisParams) (int64, error) {
 	url, err := ucc.BuildUrl(qp)
 	if err != nil {
 		return 0, err
 	}
 	// don't like the client.client refactor eventually.
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx,"GET", url, nil)
 	if err != nil {
 		return 0, err
 	}
 
 	req.Header.Set("User-Agent", "ParcelDataCollection/0.0.1")
-	resp, err := ucc.client.client.Do(req)
+	resp, err := ucc.Client.Do(ctx, req)
 	if err != nil {
 		return 0, err
 	}
@@ -107,5 +109,36 @@ func (qp UCArcGisParams) ToUrlValues() (url.Values, error) {
 		qps.Add("f", qp.Format)
 	}
 
+  if qp.OutFields == "" {
+    qps.Add("outFields", "*")
+  }
+
 	return qps, nil
+}
+
+func (ucc *UnionCountyConnector) GetData(ctx context.Context, params UCArcGisParams) ([]gjson.Result, error) {
+  url, err := ucc.BuildUrl(params); 
+  if err != nil {
+    return nil, err
+  }
+  req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+  if err != nil {
+    return nil, err
+  }
+  req.Header.Set("User-Agent", "ParcelDataCollection/0.0.1")
+  resp, err := ucc.Client.Do(ctx, req)
+  // if something goes wrong with the request we want to return the error. 
+  // we probably want to state of the params so I can store the request to be retried later.
+  if err != nil {
+    return nil, err 
+  }
+  defer resp.Body.Close()
+  body, err := io.ReadAll(resp.Body)
+  if err != nil {
+    return nil, err
+  }
+  json := string(body)
+  result := gjson.Get(json, "features|@pretty").Array()
+
+  return result, nil
 }
