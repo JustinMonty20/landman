@@ -1,58 +1,102 @@
 package main
 
 import (
+	"context"
 	"fmt"
-  "context"
+	"log"
 	"time"
-	"github.com/JustinMonty20/landman/internal/gis/counties"
-  "github.com/JustinMonty20/landman/internal/worker"
+
+	"github.com/JustinMonty20/landman/internal/connector"
+	"github.com/JustinMonty20/landman/internal/connector/union"
 )
 
 func main() {
-  ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-  defer cancel()
-	mainClient := counties.NewHttpClient()
-	rateLimitedClient := counties.NewRateLimitedClient(mainClient, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 
-	ucc, err := counties.NewUnionCountyConnector(
-		"https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query",
-		"Union",
-		"Union County Parcel Data",
-		rateLimitedClient,
-	)
+	// Step 1: Register Union County connectors
+	// This registers the GIS DataSource, Translator, and Merger with the global registry
+	// Each data source manages its own configuration internally
+	if err := union.Register(); err != nil {
+		log.Fatalf("Failed to register Union County: %v", err)
+	}
 
+	fmt.Println("Union County connectors registered successfully")
+
+	// Step 2: Get the Union County GIS data source from the registry
+	gisSource, err := connector.GetSource("union_county_gis")
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to get GIS source: %v", err)
 	}
 
-	params := counties.UCArcGisParams{
-		Where:           "1=1",
-		ReturnCountOnly: true,
-		Format:          "json",
-	}
-
-	count, err := ucc.QueryTotalParcels(ctx, params)
+	// Step 3: Fetch all data
+	// The DataSource handles pagination/batching internally
+	fmt.Println("Fetching parcel data from Union County GIS...")
+	rawRecords, err := gisSource.Fetch(ctx)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to fetch data: %v", err)
 	}
 
-	fmt.Printf("Total parcels as of %v: %d\n", time.Now().UTC(), count)
+	fmt.Printf("Fetched %d raw records\n", len(rawRecords))
 
-	// I would initialize my batching process here based on the the count.
-  batch, err := worker.NewBatch(count, 50)
-  
-  if err != nil {
-    panic(err)
-  }
-  
-  fmt.Printf("Batch count: %d\n", batch.BatchCount);
+	// Step 4: Get the translator for Union County
+	translators := connector.GetTranslatorsForCounty("union")
+	if len(translators) == 0 {
+		log.Fatal("No translator found for Union County")
+	}
+	translator := translators[0]
 
-  params.ReturnCountOnly = false
-  params.ResultRecordCount = 50
+	// Step 5: Translate raw records to normalized Parcels
+	fmt.Println("Translating raw records to normalized Parcels...")
+	var parcels []*connector.RawRecord
+	for i := range rawRecords {
+		// Translate each record
+		_, err := translator.Translate(rawRecords[i])
+		if err != nil {
+			log.Printf("Warning: failed to translate record %s: %v", rawRecords[i].ParcelID, err)
+			continue
+		}
+		parcels = append(parcels, &rawRecords[i])
+	}
 
-  first50, err := ucc.GetData(ctx, params)
-  if err != nil {
-    panic(err)   
-  }
-  fmt.Printf("First 50 parcels: %v\n", first50)
+	fmt.Printf("Successfully translated %d parcels\n", len(parcels))
+
+	// Step 6: Show sample of first few parcels
+	sampleSize := 5
+	if len(parcels) < sampleSize {
+		sampleSize = len(parcels)
+	}
+
+	fmt.Printf("\nSample of first %d parcels:\n", sampleSize)
+	for i := 0; i < sampleSize; i++ {
+		fmt.Printf("  Parcel %d: ID=%s, Source=%s, FetchedAt=%s\n",
+			i+1,
+			parcels[i].ParcelID,
+			parcels[i].SourceName,
+			parcels[i].FetchedAt.Format(time.RFC3339),
+		)
+	}
+
+	// Future: When we add the Merger and have multiple sources:
+	// Step 6: Group parcels by ParcelID
+	// Step 7: Merge parcels from different sources using the Merger
+	// Step 8: Save to database using repository layer
 }
+
+// NOTES FOR FUTURE EXPANSION:
+//
+// When adding Mecklenburg County:
+// 1. Create internal/connector/mecklenburg/ package
+// 2. Implement MecklenburgCountyGISSource (DataSource interface)
+// 3. Implement MecklenburgCountyTranslator (Translator interface)
+// 4. Implement MecklenburgCountyMerger (Merger interface)
+// 5. Create mecklenburg.Register() function
+// 6. Call mecklenburg.Register() here in main()
+//
+// When adding Union County Tax source:
+// 1. Create internal/connector/union/tax_source.go
+// 2. Implement UnionCountyTaxSource (DataSource interface)
+// 3. Update union.Register() to register the tax source
+// 4. Update UnionCountyMerger to merge GIS + Tax data
+//
+// The core connector interfaces don't change - only add new implementations!
