@@ -2,10 +2,15 @@ package union
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/JustinMonty20/landman/internal/connector"
 )
 
 func TestNewUnionCountyGISSource(t *testing.T) {
@@ -238,6 +243,102 @@ func TestUnionCountyGISSource_Fetch_ContextCancellation(t *testing.T) {
 	_, err = source.Fetch(ctx)
 	if err == nil {
 		t.Error("expected error from cancelled context")
+	}
+}
+
+func TestUnionCountyGISSource_FetchBatches(t *testing.T) {
+	const total = 5
+
+	type feature struct {
+		Attributes map[string]string `json:"attributes"`
+	}
+	type response struct {
+		Features []feature `json:"features"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		q := r.URL.Query()
+		if q.Get("returnCountOnly") == "true" {
+			fmt.Fprintf(w, `{"count": %d}`, total)
+			return
+		}
+
+		offset, _ := strconv.Atoi(q.Get("resultOffset"))
+		limit, _ := strconv.Atoi(q.Get("resultRecordCount"))
+		if limit <= 0 {
+			limit = total
+		}
+
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+
+		features := make([]feature, 0, end-offset)
+		for i := offset; i < end; i++ {
+			pid := fmt.Sprintf("PID-%d", i+1)
+			features = append(features, feature{
+				Attributes: map[string]string{"PID": pid},
+			})
+		}
+
+		enc := json.NewEncoder(w)
+		if err := enc.Encode(response{Features: features}); err != nil {
+			t.Fatalf("failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	source, err := NewUnionCountyGISSource(GISSourceConfig{
+		BaseURL:   server.URL,
+		RateLimit: 100,
+		BatchSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("failed to create source: %v", err)
+	}
+	source.httpClient = NewRateLimitedClient(server.Client(), 100)
+
+	var batches [][]string
+	ctx := context.Background()
+	err = source.FetchBatches(ctx, func(batch []connector.RawRecord) error {
+		ids := make([]string, 0, len(batch))
+		for _, r := range batch {
+			ids = append(ids, r.ParcelID)
+		}
+		batches = append(batches, ids)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("FetchBatches returned error: %v", err)
+	}
+
+	if got := len(batches); got != 3 {
+		t.Fatalf("expected 3 batches, got %d", got)
+	}
+
+	wantSizes := []int{2, 2, 1}
+	for i, want := range wantSizes {
+		if got := len(batches[i]); got != want {
+			t.Errorf("batch %d size = %d, want %d", i, got, want)
+		}
+	}
+
+	var all []string
+	for _, batch := range batches {
+		all = append(all, batch...)
+	}
+	if got := len(all); got != total {
+		t.Fatalf("expected %d total IDs, got %d", total, got)
+	}
+
+	for i := 0; i < total; i++ {
+		want := fmt.Sprintf("PID-%d", i+1)
+		if all[i] != want {
+			t.Errorf("id %d = %q, want %q", i, all[i], want)
+		}
 	}
 }
 

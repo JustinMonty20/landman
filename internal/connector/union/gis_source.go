@@ -115,6 +115,24 @@ func (s *UnionCountyGISSource) FetchSince(ctx context.Context, since time.Time) 
 // Fetch retrieves all parcel data from Union County GIS
 // This method handles pagination internally and returns all records
 func (s *UnionCountyGISSource) Fetch(ctx context.Context) ([]connector.RawRecord, error) {
+	var allRecords []connector.RawRecord
+	err := s.FetchBatches(ctx, func(batch []connector.RawRecord) error {
+		allRecords = append(allRecords, batch...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return allRecords, nil
+}
+
+// FetchBatches retrieves all parcel data from Union County GIS in batches.
+// The provided hook is called once per batch.
+func (s *UnionCountyGISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHook) error {
+	if onBatch == nil {
+		return fmt.Errorf("onBatch cannot be nil")
+	}
+
 	// Step 1: Query total count
 	countParams := ArcGISParams{
 		Where:           "1=1", // Get all records
@@ -124,7 +142,7 @@ func (s *UnionCountyGISSource) Fetch(ctx context.Context) ([]connector.RawRecord
 
 	totalCount, err := s.queryTotalParcels(ctx, countParams)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query total parcels: %w", err)
+		return fmt.Errorf("failed to query total parcels: %w", err)
 	}
 
 	log.Printf("[%s] Total parcels to fetch: %d", s.Name(), totalCount)
@@ -135,7 +153,6 @@ func (s *UnionCountyGISSource) Fetch(ctx context.Context) ([]connector.RawRecord
 	log.Printf("[%s] Batch size: %d, Total batches: %d", s.Name(), s.batchSize, batchCount)
 
 	// Step 3: Fetch all batches
-	var allRecords []connector.RawRecord
 	fetchedAt := time.Now()
 
 	dataParams := ArcGISParams{
@@ -147,11 +164,12 @@ func (s *UnionCountyGISSource) Fetch(ctx context.Context) ([]connector.RawRecord
 		OutFields:         "*",
 	}
 
+	var totalFetched int
 	for i := 0; i < batchCount; i++ {
 		select {
 		case <-ctx.Done():
 			log.Printf("[%s] Fetch cancelled after %d batches", s.Name(), i)
-			return nil, ctx.Err()
+			return ctx.Err()
 		default:
 		}
 
@@ -159,24 +177,24 @@ func (s *UnionCountyGISSource) Fetch(ctx context.Context) ([]connector.RawRecord
 
 		batchRecords, err := s.fetchBatch(ctx, dataParams, fetchedAt)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch batch %d: %w", i, err)
+			return fmt.Errorf("failed to fetch batch %d: %w", i, err)
 		}
 
-		allRecords = append(allRecords, batchRecords...)
+		totalFetched += len(batchRecords)
 
 		// Log batch progress with a sample parcel from this batch
-		sampleParcel := ""
-		if len(batchRecords) > 0 {
-			sampleParcel = fmt.Sprintf(", sample: PID=%s", batchRecords[0].ParcelID)
+		log.Printf("[%s] Batch %d/%d complete: fetched %d records (total so far: %d)",
+			s.Name(), i+1, batchCount, len(batchRecords), totalFetched)
+
+		if err := onBatch(batchRecords); err != nil {
+			return err
 		}
-		log.Printf("[%s] Batch %d/%d complete: fetched %d records (total so far: %d)%s",
-			s.Name(), i+1, batchCount, len(batchRecords), len(allRecords), sampleParcel)
 	}
 
 	log.Printf("[%s] Fetch complete: %d total records in %v",
-		s.Name(), len(allRecords), time.Since(fetchedAt))
+		s.Name(), totalFetched, time.Since(fetchedAt))
 
-	return allRecords, nil
+	return nil
 }
 
 // queryTotalParcels queries the total number of parcels
@@ -240,7 +258,6 @@ func (s *UnionCountyGISSource) fetchBatch(ctx context.Context, params ArcGISPara
 	for _, feature := range features {
 		// Extract parcel ID (Union County uses "PID" field)
 		// Other counties might use "PARCEL_ID", "REID", etc.
-    fmt.Println(feature)
 		parcelID := feature.Get("attributes.PID").String()
 
 		// Convert feature to map for RawData
