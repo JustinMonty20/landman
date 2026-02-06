@@ -8,6 +8,7 @@ import (
 
 	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/service"
 )
 
 func main() {
@@ -29,53 +30,59 @@ func main() {
 		log.Fatalf("Failed to get GIS source: %v", err)
 	}
 
-	// Step 3: Fetch all data
-	// The DataSource handles pagination/batching internally
-	fmt.Println("Fetching parcel data from Union County GIS...")
-	rawRecords, err := gisSource.Fetch(ctx)
+	spatialistConfig := union.DefaultSpatialistConfig()
+	spatialist, err := union.NewUnionCountySpatialist(spatialistConfig)
 	if err != nil {
-		log.Fatalf("Failed to fetch data: %v", err)
+		log.Fatalf("Failed to create Spatialist fetcher: %v", err)
 	}
 
-	fmt.Printf("Fetched %d raw records\n", len(rawRecords))
-
-	// Step 4: Get the translator for Union County
-	translators := connector.GetTranslatorsForCounty("union")
-	if len(translators) == 0 {
-		log.Fatal("No translator found for Union County")
+	fetchers := map[string]connector.SingleParcelFetcher{
+		spatialist.Name(): spatialist,
 	}
-	translator := translators[0]
 
-	// Step 5: Translate raw records to normalized Parcels
-	fmt.Println("Translating raw records to normalized Parcels...")
-	var parcels []*connector.RawRecord
-	for i := range rawRecords {
-		// Translate each record
-		_, err := translator.Translate(rawRecords[i])
-		if err != nil {
-			log.Printf("Warning: failed to translate record %s: %v", rawRecords[i].ParcelID, err)
-			continue
+	fetcherConfigs := map[string]service.SourceConfig{}
+	for name := range fetchers {
+		fetcherConfigs[name] = service.SourceConfig{
+			Concurrency: 5,
 		}
-		parcels = append(parcels, &rawRecords[i])
 	}
 
-	fmt.Printf("Successfully translated %d parcels\n", len(parcels))
-
-	// Step 6: Show sample of first few parcels
-	sampleSize := 5
-	if len(parcels) < sampleSize {
-		sampleSize = len(parcels)
+	enricher, err := service.NewBatchEnricher(fetchers, fetcherConfigs, log.Default())
+	if err != nil {
+		log.Fatalf("Failed to create batch enricher: %v", err)
 	}
 
-	fmt.Printf("\nSample of first %d parcels:\n", sampleSize)
-	for i := 0; i < sampleSize; i++ {
-		fmt.Printf("  Parcel %d: ID=%s, Source=%s, FetchedAt=%s\n",
-			i+1,
-			parcels[i].ParcelID,
-			parcels[i].SourceName,
-			parcels[i].FetchedAt.Format(time.RFC3339),
-		)
+	// Step 3: Stream parcel IDs in batches
+	fmt.Println("Streaming parcel IDs from Union County GIS...")
+	importer := service.NewParcelIDImportService(gisSource, 50)
+
+	var totalIDs int
+	err = importer.Run(ctx, func(ctx context.Context, batchIndex int, parcelIDs []string) error {
+		totalIDs += len(parcelIDs)
+
+		sampleSize := 3
+		if len(parcelIDs) < sampleSize {
+			sampleSize = len(parcelIDs)
+		}
+
+		fmt.Printf("Batch %d: %d parcel IDs", batchIndex, len(parcelIDs))
+		if sampleSize > 0 {
+			fmt.Printf(" (sample: %v)", parcelIDs[:sampleSize])
+		}
+		fmt.Println()
+
+		records, err := enricher.EnrichBatch(ctx, parcelIDs)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Batch %d: enriched %d parcels\n", batchIndex, len(records))
+		return nil
+	})
+	if err != nil {
+		log.Fatalf("Failed to stream parcel IDs: %v", err)
 	}
+
+	fmt.Printf("Total parcel IDs streamed: %d\n", totalIDs)
 
 	// Future: When we add the Merger and have multiple sources:
 	// Step 6: Group parcels by ParcelID
