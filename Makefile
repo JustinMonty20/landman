@@ -23,7 +23,7 @@ clean: ## Remove build artifacts
 	rm -f $(BINARY_UNIX)
 
 run: ## Run the application
-	$(GOBUILD) -o $(BINARY_NAME) -v ./cmd/main.go
+	$(GOBUILD) -o $(BINARY_NAME) -v ./main.go
 	./$(BINARY_NAME)
 
 deps: ## Get dependencies
