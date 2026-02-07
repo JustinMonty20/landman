@@ -1,4 +1,4 @@
-package union
+package httpclient
 
 import (
 	"context"
@@ -31,9 +31,8 @@ func (rlc *RateLimitedClient) Do(ctx context.Context, req *http.Request) (*http.
 // NewHTTPClient creates a production-ready HTTP client with proper timeouts
 // and connection pooling.
 //
-// NOTE: This is currently in the union package, but it's generic enough
-// that other counties will likely use the same configuration.
-// When adding a second county, consider moving to a shared location.
+// NOTE: This is intentionally shared across connectors.
+// If per-county tuning is needed later, wrap this in county-specific constructors.
 func NewHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,

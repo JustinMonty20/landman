@@ -1,4 +1,4 @@
-package union
+package gis
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
+	"github.com/JustinMonty20/landman/internal/connector/shared/httpclient"
 )
 
 func TestNewUnionCountyGISSource(t *testing.T) {
@@ -234,7 +235,7 @@ func TestUnionCountyGISSource_Fetch_ContextCancellation(t *testing.T) {
 	}
 
 	// Replace the http client with the test server's client
-	source.httpClient = NewRateLimitedClient(server.Client(), 10)
+	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 10)
 
 	// Create already-cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -299,7 +300,7 @@ func TestUnionCountyGISSource_FetchBatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-	source.httpClient = NewRateLimitedClient(server.Client(), 100)
+	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 100)
 
 	var batches [][]string
 	ctx := context.Background()

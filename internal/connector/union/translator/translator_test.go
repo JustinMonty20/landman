@@ -1,6 +1,7 @@
-package union
+package translator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/JustinMonty20/landman/internal/connector"
@@ -167,4 +168,8 @@ func TestUnionCountyTranslator_Translate(t *testing.T) {
 func TestUnionCountyTranslator_Interface(t *testing.T) {
 	// Verify UnionCountyTranslator implements connector.Translator
 	var _ connector.Translator = (*UnionCountyTranslator)(nil)
+}
+
+func containsString(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

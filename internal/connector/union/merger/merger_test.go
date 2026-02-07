@@ -1,6 +1,7 @@
-package union
+package merger
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/JustinMonty20/landman/internal/connector"
@@ -121,4 +122,8 @@ func TestUnionCountyMerger_SingleParcelIdentity(t *testing.T) {
 	if result != original {
 		t.Error("expected Merge to return the same parcel instance for single input")
 	}
+}
+
+func containsString(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

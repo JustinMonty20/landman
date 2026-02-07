@@ -1,4 +1,4 @@
-package union
+package spatialist
 
 import (
 	"context"

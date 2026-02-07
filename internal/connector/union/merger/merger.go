@@ -1,4 +1,4 @@
-package union
+package merger
 
 import (
 	"fmt"

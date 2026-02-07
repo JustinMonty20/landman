@@ -1,17 +1,17 @@
-package union
+package spatialist
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
+	"github.com/JustinMonty20/landman/internal/connector/shared/httpclient"
 )
 
 // SpatialistConfig holds configuration for the Spatialist property search.
@@ -24,14 +24,14 @@ type SpatialistConfig struct {
 func DefaultSpatialistConfig() SpatialistConfig {
 	return SpatialistConfig{
 		BaseURL:      "https://property.spatialest.com/nc/union/api/v1/recordcard",
-		RateLimitRPS: 1,
+		RateLimitRPS: 5,
 	}
 }
 
 // UnionCountySpatialist fetches property search data by parcel ID.
 type UnionCountySpatialist struct {
 	baseURL    string
-	httpClient *RateLimitedClient
+	httpClient *httpclient.RateLimitedClient
 }
 
 // NewUnionCountySpatialist creates a Spatialist client.
@@ -55,8 +55,8 @@ func NewUnionCountySpatialist(config SpatialistConfig) (*UnionCountySpatialist, 
 		config.RateLimitRPS = 1
 	}
 
-	httpClient := NewHTTPClient()
-	rlClient := NewRateLimitedClient(httpClient, config.RateLimitRPS)
+	httpClient := httpclient.NewHTTPClient()
+	rlClient := httpclient.NewRateLimitedClient(httpClient, config.RateLimitRPS)
 
 	return &UnionCountySpatialist{
 		baseURL:    config.BaseURL,
@@ -111,12 +111,6 @@ func (s *UnionCountySpatialist) FetchByParcelID(ctx context.Context, parcelID st
 	}
 	if raw == nil {
 		raw = map[string]interface{}{}
-	}
-
-	if pretty, err := json.MarshalIndent(raw, "", "  "); err == nil {
-		log.Printf("[%s] Response for parcel %s:\n%s", s.Name(), parcelID, string(pretty))
-	} else {
-		log.Printf("[%s] Response for parcel %s: <failed to pretty print>", s.Name(), parcelID)
 	}
 
 	return connector.RawRecord{

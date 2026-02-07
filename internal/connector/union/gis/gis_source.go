@@ -1,4 +1,4 @@
-package union
+package gis
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
+	"github.com/JustinMonty20/landman/internal/connector/shared/httpclient"
 	"github.com/tidwall/gjson"
 )
 
@@ -38,7 +39,7 @@ func DefaultGISSourceConfig() GISSourceConfig {
 // - Some counties might use WFS (Web Feature Service) instead of ArcGIS REST
 type UnionCountyGISSource struct {
 	baseURL    string
-	httpClient *RateLimitedClient
+	httpClient *httpclient.RateLimitedClient
 	batchSize  int // Number of records to fetch per request
 }
 
@@ -76,8 +77,8 @@ func NewUnionCountyGISSource(config GISSourceConfig) (*UnionCountyGISSource, err
 	}
 
 	// Create HTTP client infrastructure internally
-	httpClient := NewHTTPClient()
-	rateLimitedClient := NewRateLimitedClient(httpClient, config.RateLimit)
+	httpClient := httpclient.NewHTTPClient()
+	rateLimitedClient := httpclient.NewRateLimitedClient(httpClient, config.RateLimit)
 
 	return &UnionCountyGISSource{
 		baseURL:    config.BaseURL,
