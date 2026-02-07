@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -52,9 +53,18 @@ func main() {
 		log.Fatalf("Failed to create batch enricher: %v", err)
 	}
 
+	spatialistEnricher, err := union.NewSpatialistEnricher(enricher, spatialist.Name(), union.FlattenSpatialistRecord)
+	if err != nil {
+		log.Fatalf("Failed to create spatialist enricher: %v", err)
+	}
+
 	// Step 3: Stream parcel IDs in batches
 	fmt.Println("Streaming parcel IDs from Union County GIS...")
-	importer := service.NewParcelIDImportService(gisSource, 50)
+	importer := service.NewParcelIDImportService(
+		gisSource,
+		50,
+		service.WithParcelRecordFilter(union.IsLikelyVacantGISRecord),
+	)
 
 	var totalIDs int
 	err = importer.Run(ctx, func(ctx context.Context, batchIndex int, parcelIDs []string) error {
@@ -71,9 +81,22 @@ func main() {
 		}
 		fmt.Println()
 
-		records, err := enricher.EnrichBatch(ctx, parcelIDs)
+		records, err := spatialistEnricher.EnrichBatch(ctx, parcelIDs)
 		if err != nil {
 			return err
+		}
+		sampleID := ""
+		if len(parcelIDs) > 0 {
+			sampleID = parcelIDs[0]
+		}
+		if sampleID != "" {
+			if record, ok := records[sampleID]; ok && record != nil {
+				pretty, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshal sample record: %w", err)
+				}
+				fmt.Printf("Batch %d sample enriched record for parcel %s:\n%s\n", batchIndex, sampleID, string(pretty))
+			}
 		}
 		fmt.Printf("Batch %d: enriched %d parcels\n", batchIndex, len(records))
 		return nil
@@ -82,7 +105,7 @@ func main() {
 		log.Fatalf("Failed to stream parcel IDs: %v", err)
 	}
 
-	fmt.Printf("Total parcel IDs streamed: %d\n", totalIDs)
+	fmt.Printf("Total likely-vacant parcel IDs streamed: %d\n", totalIDs)
 
 	// Future: When we add the Merger and have multiple sources:
 	// Step 6: Group parcels by ParcelID

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +130,80 @@ func TestParcelIDImportService_Run_NilHook(t *testing.T) {
 
 	if err := svc.Run(context.Background(), nil); err == nil {
 		t.Fatalf("expected error for nil onBatch")
+	}
+}
+
+func TestParcelIDImportService_Run_Filter_BatchSource(t *testing.T) {
+	src := &fakeBatchSource{
+		batches: [][]connector.RawRecord{
+			{{ParcelID: "VAC-1"}, {ParcelID: "DEV-1"}},
+			{{ParcelID: "VAC-2"}, {ParcelID: "DEV-2"}},
+		},
+	}
+
+	svc := NewParcelIDImportService(
+		src,
+		50,
+		WithParcelRecordFilter(func(record connector.RawRecord) bool {
+			return strings.HasPrefix(record.ParcelID, "VAC-")
+		}),
+	)
+
+	var got [][]string
+	err := svc.Run(context.Background(), func(ctx context.Context, batchIndex int, parcelIDs []string) error {
+		got = append(got, parcelIDs)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 batches, got %d", len(got))
+	}
+
+	if want := []string{"VAC-1"}; !equalStrings(got[0], want) {
+		t.Errorf("batch 1 = %v, want %v", got[0], want)
+	}
+
+	if want := []string{"VAC-2"}; !equalStrings(got[1], want) {
+		t.Errorf("batch 2 = %v, want %v", got[1], want)
+	}
+}
+
+func TestParcelIDImportService_Run_Filter_FallbackFetch(t *testing.T) {
+	src := &fakeSource{
+		records: []connector.RawRecord{
+			{ParcelID: "VAC-1"},
+			{ParcelID: "DEV-1"},
+			{ParcelID: "VAC-2"},
+			{ParcelID: "DEV-2"},
+		},
+	}
+
+	svc := NewParcelIDImportService(
+		src,
+		2,
+		WithParcelRecordFilter(func(record connector.RawRecord) bool {
+			return strings.HasPrefix(record.ParcelID, "VAC-")
+		}),
+	)
+
+	var got [][]string
+	err := svc.Run(context.Background(), func(ctx context.Context, batchIndex int, parcelIDs []string) error {
+		got = append(got, parcelIDs)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 batch, got %d", len(got))
+	}
+
+	if want := []string{"VAC-1", "VAC-2"}; !equalStrings(got[0], want) {
+		t.Errorf("batch = %v, want %v", got[0], want)
 	}
 }
 

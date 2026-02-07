@@ -31,18 +31,25 @@ Each county has its own self-contained package that implements standard interfac
 ### 2. Multi-Source Data Aggregation
 Each county may have 2-5 different data sources (GIS API, Tax Assessor, Deeds Registry, etc.). The system:
 - Fetches from all sources
+- Cleans/normalizes each source payload (flattening, parsing, and removing noise)
 - Translates each to normalized format
 - Merges data intelligently based on source authority
 - Tracks which sources contributed to each parcel
 
-### 3. Change Detection & Historical Tracking
+### 3. Ingestion Pipeline (Per County)
+1. Fetch raw data from each source (GIS, Spatialist, Tax, Deeds, etc.).
+2. Clean and normalize per-source (flatten/parse into typed structures).
+3. Translate per-source into the common domain model.
+4. Merge across sources by parcel ID to produce a single parcel view.
+
+### 4. Change Detection & Historical Tracking
 - Generate SHA-256 hash of key parcel fields
 - Store hash in database
 - On each import (bi-weekly), compare new hash to stored hash
 - Track what changed, when, and by how much
 - Maintain audit trail of significant changes
 
-### 4. Scheduled Imports
+### 5. Scheduled Imports
 - Run imports 2x per week (e.g., Sunday & Wednesday at 2 AM)
 - Each import creates a job record with statistics
 - Track: records processed, new, changed, unchanged, errors
@@ -77,12 +84,25 @@ project-root/
 │   │   ├── registry.go         # Global registry for connectors
 │   │   │
 │   │   ├── union/              # Union County connectors (example)
-│   │   │   ├── config.go
-│   │   │   ├── gis_source.go
-│   │   │   ├── tax_source.go
-│   │   │   ├── translator.go
-│   │   │   ├── merger.go
-│   │   │   └── register.go     # Auto-registers via init()
+│   │   │   ├── exports.go       # Stable API surface for other packages
+│   │   │   ├── register.go
+│   │   │   ├── gis/
+│   │   │   │   ├── gis_source.go
+│   │   │   │   └── gis_source_test.go
+│   │   │   ├── spatialist/
+│   │   │   │   ├── spatialist.go
+│   │   │   │   ├── spatialist_flatten.go
+│   │   │   │   └── spatialist_test.go
+│   │   │   ├── translator/
+│   │   │   │   ├── translator.go
+│   │   │   │   └── translator_test.go
+│   │   │   ├── merger/
+│   │   │   │   ├── merger.go
+│   │   │   │   └── merger_test.go
+│   │   ├── shared/
+│   │   │   └── httpclient/
+│   │   │       ├── http_client.go
+│   │   │       └── http_client_test.go
 │   │   │
 │   │   └── mecklenburg/        # Future county (example structure)
 │   │       ├── config.go
