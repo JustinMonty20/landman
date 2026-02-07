@@ -70,6 +70,12 @@ For feature work:
 4) Run `go test ./...` and report results.
 5) Summarize what changed (files/functions) and any follow-ups.
 
+## Typed Output Requirement
+- When creating transformation/flattening outputs, do not use `map[string]interface{}` for retained fields.
+- Define typed Go structs for all kept fields (slices of structs for arrays).
+- For parsed values, keep the original string under an `og_` prefix (e.g., `FMV_TOTAL` + `og_FMV_TOTAL`).
+- Any field not explicitly kept must be omitted from the output.
+
 ## Safety & scope
 - Do not modify vendored code, generated code, or dependencies unless explicitly requested.
 - Do not run destructive commands.
