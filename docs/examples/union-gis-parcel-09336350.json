@@ -1,0 +1,148 @@
+{
+  "request": {
+    "url": "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query?where=PID%3D%2709336350%27&returnGeometry=true&f=json&outFields=*",
+    "parcel_id": "09336350",
+    "where": "PID='09336350'",
+    "returnGeometry": true,
+    "format": "json",
+    "outFields": "*"
+  },
+  "response_metadata": {
+    "geometryType": "esriGeometryPolygon",
+    "spatialReference": {
+      "wkid": 102100,
+      "latestWkid": 3857
+    }
+  },
+  "date_notes": {
+    "description": "ArcGIS date fields are Unix epoch timestamps in milliseconds.",
+    "s1_SALEDATE": {
+      "raw": 1180051200000,
+      "utc": "2007-05-25T00:00:00Z",
+      "date": "2007-05-25"
+    },
+    "s2_SALEDATE": {
+      "raw": 984700800000,
+      "utc": "2001-03-16T00:00:00Z",
+      "date": "2001-03-16"
+    },
+    "s3_SALEDATE": {
+      "raw": 969408000000,
+      "utc": "2000-09-20T00:00:00Z",
+      "date": "2000-09-20"
+    },
+    "DATE_CRT": {
+      "raw": 1779426000000,
+      "utc": "2026-05-22T05:00:00Z"
+    }
+  },
+  "feature": {
+    "attributes": {
+      "OBJECTID": 174101,
+      "OBJECTID_1": 0,
+      "ACCTNO": "09336350",
+      "SUBCODE": " ",
+      "PID": "09336350",
+      "BASEMENT": "NO",
+      "BLDQUAL_CODE": "Average Minus",
+      "CURR_NAME1": "MONTGOMERY JAMES R JR",
+      "CURR_ADDR2": " ",
+      "CURR_ADDR1": "2915 CRIPPLE CREEK",
+      "CURR_ZIPCODE": "281105223",
+      "CURR_STATE": "NC",
+      "CURR_CITY": "MONROE",
+      "CURR_NAME2": "MONTGOMERY SUSAN M",
+      "DATE_CRT": 1779426000000,
+      "DIST_TWN": "MONROE",
+      "DIST_CODE": "200",
+      "DESC1_DESC": "RESIDENTIAL",
+      "DESC1_CODE": "11",
+      "FMV_IMPRV": 0.0,
+      "FMV_LAND": 0.0,
+      "FMV_TOTAL": 358100.0,
+      "JAN1_OWNERID": 1042595,
+      "JAN1_NAME2": "MONTGOMERY JAMES R JR",
+      "JAN1_NAME1": "MONTGOMERY SUSAN M",
+      "JAN1_CITY": "MONROE",
+      "JAN1_ADDR2": " ",
+      "JAN1_ADDR1": "2915 CRIPPLE CREEK",
+      "JAN1_ZIPCO": "281105223",
+      "JAN1_STATE": "NC",
+      "JAN1_OWNERID2": 1042596,
+      "LAND_CODE": "1-6",
+      "LAND_TYPE": "LOT",
+      "LEGDESC_1": " #15 HAMILTON PLACE PH 3 OPCG FILE1",
+      "LUV_YES_NO": "",
+      "MULSTR": "NO",
+      "MULT_LANDSEQ": "NO",
+      "NBHDNAME": "HAMILTON PLACE                ",
+      "NBHDNUM": "2144300",
+      "NBHNEW": "2144300 HAMILTON PLACE                ",
+      "PHYSSTRADD": "2915 CRIPPLE CREEK CT",
+      "PLAT_BOOK": "",
+      "PLAT_PAGE": "",
+      "SQFT": 2113.0,
+      "STRUCTTYPE": "Site Built Housing",
+      "TAX_DISTRI": "MONROE",
+      "TOTVAL": 358100.0,
+      "TWSHP_CD": "9",
+      "TWSHP_DESC": "MONROE",
+      "VAL_AC": 218023.2558,
+      "VAL_SQFT": 134.0,
+      "YEARBLT": 2000,
+      "property_use": "RES",
+      "mapped_acres": 0.344,
+      "s1_DEED_BOOK": "4566",
+      "s1_DEED_PAGE": "562",
+      "s1_DEEDQUAL_CODEDESC": "",
+      "s1_DEEDTYPE": "WD",
+      "s1_SALE_YEAR": 2007,
+      "s1_SALE_MTH": 5,
+      "s1_SALE_DAY": 25,
+      "s1_SALESAMT": 173000.0,
+      "s1_SALEDATE": 1180051200000,
+      "s2_SALE_MTH": 3,
+      "s2_SALE_DAY": 16,
+      "s2_SALESAMT": 164000.0,
+      "s2_SALEDATE": 984700800000,
+      "s2_DEEDTYPE": "WD",
+      "s2_DEEDQUAL_CODEDESC": "",
+      "s2_DEED_PAGE": "763",
+      "s2_DEED_BOOK": "1521",
+      "s3_DEEDQUAL_CODEDESC": "",
+      "s3_DEED_PAGE": "547",
+      "s3_DEED_BOOK": "1443",
+      "s2_SALE_YEAR": 2001,
+      "s3_SALE_MTH": 9,
+      "s3_SALE_DAY": 20,
+      "s3_SALESAMT": 29000.0,
+      "s3_SALEDATE": 969408000000,
+      "s3_DEEDTYPE": "WD",
+      "s3_SALE_YEAR": 2000,
+      "STRUCTSTYLE": "Built 1980 + (DO NOT USE)",
+      "subdivision": "HAMILTON PLACE",
+      "s1_grantor": "BENNETT DEANA H",
+      "s1_grantor2": null,
+      "s3_grantor2": null,
+      "s3_grantor": "DAN MOSER COMPANY INC",
+      "s2_grantor2": null,
+      "s2_grantor": "MICHAEL ANTHONY BUILDERS INC",
+      "idcol": 318620,
+      "parcel_year": 2026,
+      "gross_acres": 0.344,
+      "SHAPE.STArea()": 2178.28007425,
+      "SHAPE.STLength()": 203.35295878370414
+    },
+    "geometry": {
+      "rings": [
+        [
+          [-8972192.3225, 4170311.650200002],
+          [-8972202.1874, 4170282.2885999978],
+          [-8972269.6375, 4170304.5380000025],
+          [-8972259.8849, 4170333.3291999996],
+          [-8972192.3225, 4170311.650200002]
+        ]
+      ]
+    }
+  }
+}
