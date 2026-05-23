@@ -15,10 +15,10 @@ import (
 // - Mecklenburg County might use "PARCEL_NUMBER"
 // - Wake County might use "REID"
 //
-// Each county's Translator handles these differences and produces normalized Parcel objects.
+// Each county's Translator handles these differences and produces normalized GISParcel objects.
 type Translator interface {
 	// Translate converts a raw record into normalized parcel
-	Translate(raw RawRecord) (*models.Parcel, error)
+	Translate(raw RawRecord) (*models.GISParcel, error)
 
 	// CanTranslate checks if this translator can handle the given source
 	// Example: UnionCountyTranslator returns true for "union_county_gis"

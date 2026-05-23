@@ -28,5 +28,5 @@ type Merger interface {
 	// - parcels[2]: from Deeds (has sale history, legal owner name)
 	//
 	// Output: Single merged parcel with best data from each source
-	Merge(parcels []*models.Parcel) (*models.Parcel, error)
+	Merge(parcels []*models.GISParcel) (*models.GISParcel, error)
 }

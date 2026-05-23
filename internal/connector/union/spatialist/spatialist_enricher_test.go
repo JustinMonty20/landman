@@ -144,3 +144,41 @@ func TestSpatialistEnricher_EnrichBatch_BatchError(t *testing.T) {
 		t.Fatalf("expected results to include P1 despite batch error")
 	}
 }
+
+func TestSpatialistEnricher_EnrichBatch_RecordFilter(t *testing.T) {
+	fake := &fakeBatchEnricher{
+		records: map[string]map[string]connector.RawRecord{
+			"P1": {"spatialist": {RawData: map[string]interface{}{"id": "P1"}}},
+			"P2": {"spatialist": {RawData: map[string]interface{}{"id": "P2"}}},
+		},
+	}
+
+	transform := func(raw map[string]interface{}) (*SpatialistFlatEnvelope, error) {
+		id, _ := raw["id"].(string)
+		return &SpatialistFlatEnvelope{
+			UCRealPropertySearch: &SpatialistFlatRecord{ParcelID: id},
+		}, nil
+	}
+
+	filter := func(raw map[string]interface{}, transformed *SpatialistFlatEnvelope) bool {
+		id, _ := raw["id"].(string)
+		return id != "P2"
+	}
+
+	svc, err := NewSpatialistEnricher(fake, "spatialist", transform, WithRecordFilter(filter))
+	if err != nil {
+		t.Fatalf("NewSpatialistEnricher error: %v", err)
+	}
+
+	results, err := svc.EnrichBatch(context.Background(), []string{"P1", "P2"})
+	if err != nil {
+		t.Fatalf("EnrichBatch error: %v", err)
+	}
+
+	if _, ok := results["P1"]; !ok {
+		t.Fatalf("expected P1 to be kept")
+	}
+	if _, ok := results["P2"]; ok {
+		t.Fatalf("expected P2 to be filtered out")
+	}
+}

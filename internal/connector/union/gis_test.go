@@ -1,4 +1,4 @@
-package gis
+package union
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/shared/httpclient"
 )
 
-func TestNewUnionCountyGISSource(t *testing.T) {
+func TestNewGISSource(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  GISSourceConfig
@@ -91,12 +92,12 @@ func TestNewUnionCountyGISSource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			source, err := NewUnionCountyGISSource(tt.config)
+			source, err := NewGISSource(tt.config)
 
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error but got none")
-				} else if tt.errMsg != "" && !containsString(err.Error(), tt.errMsg) {
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("error %q does not contain %q", err.Error(), tt.errMsg)
 				}
 				return
@@ -110,7 +111,6 @@ func TestNewUnionCountyGISSource(t *testing.T) {
 				t.Fatal("expected non-nil source")
 			}
 
-			// Verify default batch size is applied
 			if tt.config.BatchSize <= 0 && source.batchSize != 50 {
 				t.Errorf("expected default batch size 50, got %d", source.batchSize)
 			}
@@ -139,115 +139,78 @@ func TestDefaultGISSourceConfig(t *testing.T) {
 	}
 }
 
-func TestUnionCountyGISSource_Name(t *testing.T) {
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   "https://example.com/api",
-		RateLimit: 1,
-		BatchSize: 50,
-	})
+func TestGISSource_Name(t *testing.T) {
+	source, err := NewGISSource(GISSourceConfig{BaseURL: "https://example.com/api", RateLimit: 1, BatchSize: 50})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-
 	if got := source.Name(); got != "union_county_gis" {
 		t.Errorf("Name() = %q, want %q", got, "union_county_gis")
 	}
 }
 
-func TestUnionCountyGISSource_County(t *testing.T) {
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   "https://example.com/api",
-		RateLimit: 1,
-		BatchSize: 50,
-	})
+func TestGISSource_County(t *testing.T) {
+	source, err := NewGISSource(GISSourceConfig{BaseURL: "https://example.com/api", RateLimit: 1, BatchSize: 50})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-
 	if got := source.County(); got != "union" {
 		t.Errorf("County() = %q, want %q", got, "union")
 	}
 }
 
-func TestUnionCountyGISSource_SourceType(t *testing.T) {
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   "https://example.com/api",
-		RateLimit: 1,
-		BatchSize: 50,
-	})
+func TestGISSource_SourceType(t *testing.T) {
+	source, err := NewGISSource(GISSourceConfig{BaseURL: "https://example.com/api", RateLimit: 1, BatchSize: 50})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-
 	if got := source.SourceType(); got != "gis" {
 		t.Errorf("SourceType() = %q, want %q", got, "gis")
 	}
 }
 
-func TestUnionCountyGISSource_SupportsIncremental(t *testing.T) {
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   "https://example.com/api",
-		RateLimit: 1,
-		BatchSize: 50,
-	})
+func TestGISSource_SupportsIncremental(t *testing.T) {
+	source, err := NewGISSource(GISSourceConfig{BaseURL: "https://example.com/api", RateLimit: 1, BatchSize: 50})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-
 	if source.SupportsIncremental() {
 		t.Error("SupportsIncremental() should return false")
 	}
 }
 
-func TestUnionCountyGISSource_FetchSince(t *testing.T) {
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   "https://example.com/api",
-		RateLimit: 1,
-		BatchSize: 50,
-	})
+func TestGISSource_FetchSince(t *testing.T) {
+	source, err := NewGISSource(GISSourceConfig{BaseURL: "https://example.com/api", RateLimit: 1, BatchSize: 50})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-
-	ctx := context.Background()
-	_, err = source.FetchSince(ctx, time.Now())
-	if err == nil {
+	if _, err := source.FetchSince(context.Background(), time.Now()); err == nil {
 		t.Error("FetchSince() should return error for unsupported operation")
 	}
 }
 
-func TestUnionCountyGISSource_Fetch_ContextCancellation(t *testing.T) {
-	// Create a mock server that returns a count
+func TestGISSource_Fetch_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"count": 100}`))
 	}))
 	defer server.Close()
 
-	// Create source with test server URL
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   server.URL,
-		RateLimit: 10,
-		BatchSize: 10,
-	})
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL, RateLimit: 10, BatchSize: 10})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-
-	// Replace the http client with the test server's client
 	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 10)
 
-	// Create already-cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = source.Fetch(ctx)
-	if err == nil {
+	if _, err := source.Fetch(ctx); err == nil {
 		t.Error("expected error from cancelled context")
 	}
 }
 
-func TestUnionCountyGISSource_FetchBatches(t *testing.T) {
+func TestGISSource_FetchBatches(t *testing.T) {
 	const total = 5
 
 	type feature struct {
@@ -279,9 +242,8 @@ func TestUnionCountyGISSource_FetchBatches(t *testing.T) {
 
 		features := make([]feature, 0, end-offset)
 		for i := offset; i < end; i++ {
-			pid := fmt.Sprintf("PID-%d", i+1)
 			features = append(features, feature{
-				Attributes: map[string]string{"PID": pid},
+				Attributes: map[string]string{"PID": fmt.Sprintf("PID-%d", i+1)},
 			})
 		}
 
@@ -292,19 +254,14 @@ func TestUnionCountyGISSource_FetchBatches(t *testing.T) {
 	}))
 	defer server.Close()
 
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   server.URL,
-		RateLimit: 100,
-		BatchSize: 2,
-	})
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL, RateLimit: 100, BatchSize: 2})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
 	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 100)
 
 	var batches [][]string
-	ctx := context.Background()
-	err = source.FetchBatches(ctx, func(batch []connector.RawRecord) error {
+	err = source.FetchBatches(context.Background(), func(batch []connector.RawRecord) error {
 		ids := make([]string, 0, len(batch))
 		for _, r := range batch {
 			ids = append(ids, r.ParcelID)
@@ -358,7 +315,6 @@ func TestArcGISParams_ToURLValues(t *testing.T) {
 				ReturnCountOnly: true,
 				Format:          "json",
 			},
-			wantErr: false,
 			checks: map[string]string{
 				"where":           "1=1",
 				"returnCountOnly": "true",
@@ -371,17 +327,11 @@ func TestArcGISParams_ToURLValues(t *testing.T) {
 				Where:  "1=1",
 				Format: "geojson",
 			},
-			wantErr: false,
-			checks: map[string]string{
-				"f": "geojson",
-			},
+			checks: map[string]string{"f": "geojson"},
 		},
 		{
-			name: "invalid format",
-			params: ArcGISParams{
-				Where:  "1=1",
-				Format: "xml",
-			},
+			name:    "invalid format",
+			params:  ArcGISParams{Where: "1=1", Format: "xml"},
 			wantErr: true,
 			errMsg:  "invalid format",
 		},
@@ -393,7 +343,6 @@ func TestArcGISParams_ToURLValues(t *testing.T) {
 				ResultOffset:      100,
 				ResultRecordCount: 50,
 			},
-			wantErr: false,
 			checks: map[string]string{
 				"resultOffset":      "100",
 				"resultRecordCount": "50",
@@ -401,48 +350,22 @@ func TestArcGISParams_ToURLValues(t *testing.T) {
 		},
 		{
 			name: "with geometry",
-			params: ArcGISParams{
-				Where:          "1=1",
-				Format:         "json",
-				ReturnGeometry: true,
-			},
-			wantErr: false,
-			checks: map[string]string{
-				"returnGeometry": "true",
-			},
+			params: ArcGISParams{Where: "1=1", Format: "json", ReturnGeometry: true},
+			checks: map[string]string{"returnGeometry": "true"},
 		},
 		{
 			name: "with outFields",
-			params: ArcGISParams{
-				Where:     "1=1",
-				Format:    "json",
-				OutFields: "PID,OWNER",
-			},
-			wantErr: false,
-			checks: map[string]string{
-				"outFields": "PID,OWNER",
-			},
+			params: ArcGISParams{Where: "1=1", Format: "json", OutFields: "PID,OWNER"},
+			checks: map[string]string{"outFields": "PID,OWNER"},
 		},
 		{
-			name: "empty outFields defaults to *",
-			params: ArcGISParams{
-				Where:     "1=1",
-				Format:    "json",
-				OutFields: "",
-			},
-			wantErr: false,
-			checks: map[string]string{
-				"outFields": "*",
-			},
+			name:   "empty outFields defaults to *",
+			params: ArcGISParams{Where: "1=1", Format: "json", OutFields: ""},
+			checks: map[string]string{"outFields": "*"},
 		},
 		{
-			name: "zero offset not included",
-			params: ArcGISParams{
-				Where:        "1=1",
-				Format:       "json",
-				ResultOffset: 0,
-			},
-			wantErr: false,
+			name:   "zero offset not included",
+			params: ArcGISParams{Where: "1=1", Format: "json", ResultOffset: 0},
 		},
 	}
 
@@ -453,7 +376,7 @@ func TestArcGISParams_ToURLValues(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error but got none")
-				} else if tt.errMsg != "" && !containsString(err.Error(), tt.errMsg) {
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("error %q does not contain %q", err.Error(), tt.errMsg)
 				}
 				return
@@ -479,44 +402,20 @@ func TestValidateURL(t *testing.T) {
 		wantErr bool
 		errMsg  string
 	}{
-		{
-			name:    "valid https URL",
-			url:     "https://example.com/api/query",
-			wantErr: false,
-		},
-		{
-			name:    "valid http URL",
-			url:     "http://example.com/api/query",
-			wantErr: false,
-		},
-		{
-			name:    "missing scheme",
-			url:     "example.com/api",
-			wantErr: true,
-			errMsg:  "must include scheme",
-		},
-		{
-			name:    "missing host",
-			url:     "https:///api/query",
-			wantErr: true,
-			errMsg:  "must include host",
-		},
-		{
-			name:    "invalid scheme",
-			url:     "ftp://example.com/api",
-			wantErr: true,
-			errMsg:  "must include scheme",
-		},
+		{name: "valid https URL", url: "https://example.com/api/query"},
+		{name: "valid http URL", url: "http://example.com/api/query"},
+		{name: "missing scheme", url: "example.com/api", wantErr: true, errMsg: "must include scheme"},
+		{name: "missing host", url: "https:///api/query", wantErr: true, errMsg: "must include host"},
+		{name: "invalid scheme", url: "ftp://example.com/api", wantErr: true, errMsg: "must include scheme"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateURL(tt.url)
-
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error but got none")
-				} else if tt.errMsg != "" && !containsString(err.Error(), tt.errMsg) {
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("error %q does not contain %q", err.Error(), tt.errMsg)
 				}
 			} else if err != nil {
@@ -526,41 +425,21 @@ func TestValidateURL(t *testing.T) {
 	}
 }
 
-func TestUnionCountyGISSource_buildURL(t *testing.T) {
-	source, err := NewUnionCountyGISSource(GISSourceConfig{
-		BaseURL:   "https://example.com/api",
-		RateLimit: 1,
-		BatchSize: 50,
-	})
+func TestGISSource_buildURL(t *testing.T) {
+	source, err := NewGISSource(GISSourceConfig{BaseURL: "https://example.com/api", RateLimit: 1, BatchSize: 50})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
 
-	params := ArcGISParams{
-		Where:  "1=1",
-		Format: "json",
-	}
-
-	url, err := source.buildURL(params)
+	rawURL, err := source.buildURL(ArcGISParams{Where: "1=1", Format: "json"})
 	if err != nil {
 		t.Fatalf("buildURL failed: %v", err)
 	}
 
-	if !containsString(url, "https://example.com/api?") {
-		t.Errorf("URL should start with base URL, got: %s", url)
+	if !strings.Contains(rawURL, "https://example.com/api?") {
+		t.Errorf("URL should start with base URL, got: %s", rawURL)
 	}
-
-	if !containsString(url, "where=1%3D1") {
-		t.Errorf("URL should contain encoded where param, got: %s", url)
+	if !strings.Contains(rawURL, "where=1%3D1") {
+		t.Errorf("URL should contain encoded where param, got: %s", rawURL)
 	}
-}
-
-// containsString checks if substr is in s
-func containsString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

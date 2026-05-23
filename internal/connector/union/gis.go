@@ -1,4 +1,4 @@
-package gis
+package union
 
 import (
 	"context"
@@ -14,52 +14,42 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// GISSourceConfig holds configuration for UnionCountyGISSource
+// GISSourceConfig holds configuration for GISSource.
 type GISSourceConfig struct {
 	BaseURL   string
 	RateLimit int // requests per second
 	BatchSize int // number of records to fetch per request
 }
 
-// DefaultGISSourceConfig returns the default configuration for Union County GIS
+// DefaultGISSourceConfig returns the default configuration for Union County GIS.
 func DefaultGISSourceConfig() GISSourceConfig {
 	return GISSourceConfig{
 		BaseURL:   "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query",
-		RateLimit: 1,  // Conservative: 1 request per second
-		BatchSize: 50, // Fetch 50 parcels per request
+		RateLimit: 1,
+		BatchSize: 50,
 	}
 }
 
-// UnionCountyGISSource fetches parcel data from Union County's ArcGIS REST API
-// This implements the connector.DataSource interface.
-//
-// Other counties would have their own GIS sources:
-// - MecklenburgCountyGISSource might use a different ArcGIS endpoint with different parameters
-// - WakeCountyGISSource might use a completely different API (not ArcGIS)
-// - Some counties might use WFS (Web Feature Service) instead of ArcGIS REST
-type UnionCountyGISSource struct {
+// GISSource fetches parcel data from Union County's ArcGIS REST API.
+type GISSource struct {
 	baseURL    string
 	httpClient *httpclient.RateLimitedClient
-	batchSize  int // Number of records to fetch per request
+	batchSize  int
 }
 
-// ArcGISParams represents Union County's ArcGIS query parameters
-// Other counties might have different parameter structures:
-// - Some might not support pagination the same way
-// - Some might have different format options
-// - Some might require authentication tokens
+// ArcGISParams represents Union County's ArcGIS query parameters.
 type ArcGISParams struct {
 	Where             string
 	ReturnCountOnly   bool
 	ReturnGeometry    bool
-	ResultOffset      int    // pagination mechanism
-	ResultRecordCount int    // batch size
-	Format            string // json or geojson
+	ResultOffset      int
+	ResultRecordCount int
+	Format            string
 	OutFields         string
 }
 
-// NewUnionCountyGISSource creates a new Union County GIS data source
-func NewUnionCountyGISSource(config GISSourceConfig) (*UnionCountyGISSource, error) {
+// NewGISSource creates a new Union County GIS data source.
+func NewGISSource(config GISSourceConfig) (*GISSource, error) {
 	if config.BaseURL == "" {
 		return nil, fmt.Errorf("baseURL cannot be empty")
 	}
@@ -69,53 +59,33 @@ func NewUnionCountyGISSource(config GISSourceConfig) (*UnionCountyGISSource, err
 	}
 
 	if config.BatchSize <= 0 {
-		config.BatchSize = 50 // default batch size
+		config.BatchSize = 50
 	}
 
 	if config.RateLimit <= 0 {
-		config.RateLimit = 1 // default rate limit
+		config.RateLimit = 1
 	}
 
-	// Create HTTP client infrastructure internally
 	httpClient := httpclient.NewHTTPClient()
 	rateLimitedClient := httpclient.NewRateLimitedClient(httpClient, config.RateLimit)
 
-	return &UnionCountyGISSource{
+	return &GISSource{
 		baseURL:    config.BaseURL,
 		httpClient: rateLimitedClient,
 		batchSize:  config.BatchSize,
 	}, nil
 }
 
-// Name returns the unique identifier for this data source
-func (s *UnionCountyGISSource) Name() string {
-	return "union_county_gis"
-}
+func (s *GISSource) Name() string              { return "union_county_gis" }
+func (s *GISSource) County() string            { return "union" }
+func (s *GISSource) SourceType() string        { return "gis" }
+func (s *GISSource) SupportsIncremental() bool { return false }
 
-// County returns which county this source serves
-func (s *UnionCountyGISSource) County() string {
-	return "union"
-}
-
-// SourceType returns the type of data
-func (s *UnionCountyGISSource) SourceType() string {
-	return "gis"
-}
-
-// SupportsIncremental indicates if this source supports fetching only changed records
-// Union County's ArcGIS doesn't support this (most don't), so we return false
-func (s *UnionCountyGISSource) SupportsIncremental() bool {
-	return false
-}
-
-// FetchSince is not supported by Union County GIS
-func (s *UnionCountyGISSource) FetchSince(ctx context.Context, since time.Time) ([]connector.RawRecord, error) {
+func (s *GISSource) FetchSince(ctx context.Context, since time.Time) ([]connector.RawRecord, error) {
 	return nil, fmt.Errorf("union county gis does not support incremental fetching")
 }
 
-// Fetch retrieves all parcel data from Union County GIS
-// This method handles pagination internally and returns all records
-func (s *UnionCountyGISSource) Fetch(ctx context.Context) ([]connector.RawRecord, error) {
+func (s *GISSource) Fetch(ctx context.Context) ([]connector.RawRecord, error) {
 	var allRecords []connector.RawRecord
 	err := s.FetchBatches(ctx, func(batch []connector.RawRecord) error {
 		allRecords = append(allRecords, batch...)
@@ -127,16 +97,13 @@ func (s *UnionCountyGISSource) Fetch(ctx context.Context) ([]connector.RawRecord
 	return allRecords, nil
 }
 
-// FetchBatches retrieves all parcel data from Union County GIS in batches.
-// The provided hook is called once per batch.
-func (s *UnionCountyGISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHook) error {
+func (s *GISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHook) error {
 	if onBatch == nil {
 		return fmt.Errorf("onBatch cannot be nil")
 	}
 
-	// Step 1: Query total count
 	countParams := ArcGISParams{
-		Where:           "1=1", // Get all records
+		Where:           "1=1",
 		ReturnCountOnly: true,
 		Format:          "json",
 	}
@@ -148,12 +115,9 @@ func (s *UnionCountyGISSource) FetchBatches(ctx context.Context, onBatch connect
 
 	log.Printf("[%s] Total parcels to fetch: %d", s.Name(), totalCount)
 
-	// Step 2: Calculate number of batches needed
 	batchCount := (int(totalCount) + s.batchSize - 1) / s.batchSize
-
 	log.Printf("[%s] Batch size: %d, Total batches: %d", s.Name(), s.batchSize, batchCount)
 
-	// Step 3: Fetch all batches
 	fetchedAt := time.Now()
 
 	dataParams := ArcGISParams{
@@ -182,8 +146,6 @@ func (s *UnionCountyGISSource) FetchBatches(ctx context.Context, onBatch connect
 		}
 
 		totalFetched += len(batchRecords)
-
-		// Log batch progress with a sample parcel from this batch
 		log.Printf("[%s] Batch %d/%d complete: fetched %d records (total so far: %d)",
 			s.Name(), i+1, batchCount, len(batchRecords), totalFetched)
 
@@ -192,20 +154,17 @@ func (s *UnionCountyGISSource) FetchBatches(ctx context.Context, onBatch connect
 		}
 	}
 
-	log.Printf("[%s] Fetch complete: %d total records in %v",
-		s.Name(), totalFetched, time.Since(fetchedAt))
-
+	log.Printf("[%s] Fetch complete: %d total records in %v", s.Name(), totalFetched, time.Since(fetchedAt))
 	return nil
 }
 
-// queryTotalParcels queries the total number of parcels
-func (s *UnionCountyGISSource) queryTotalParcels(ctx context.Context, params ArcGISParams) (int64, error) {
-	url, err := s.buildURL(params)
+func (s *GISSource) queryTotalParcels(ctx context.Context, params ArcGISParams) (int64, error) {
+	rawURL, err := s.buildURL(params)
 	if err != nil {
 		return 0, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -222,19 +181,17 @@ func (s *UnionCountyGISSource) queryTotalParcels(ctx context.Context, params Arc
 		return 0, err
 	}
 
-	json := string(body)
-	result := gjson.Get(json, "count")
+	result := gjson.Get(string(body), "count")
 	return result.Int(), nil
 }
 
-// fetchBatch fetches a single batch of parcel data and converts to RawRecords
-func (s *UnionCountyGISSource) fetchBatch(ctx context.Context, params ArcGISParams, fetchedAt time.Time) ([]connector.RawRecord, error) {
-	url, err := s.buildURL(params)
+func (s *GISSource) fetchBatch(ctx context.Context, params ArcGISParams, fetchedAt time.Time) ([]connector.RawRecord, error) {
+	rawURL, err := s.buildURL(params)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -251,17 +208,12 @@ func (s *UnionCountyGISSource) fetchBatch(ctx context.Context, params ArcGISPara
 		return nil, err
 	}
 
-	json := string(body)
-	features := gjson.Get(json, "features").Array()
+	features := gjson.Get(string(body), "features").Array()
 
-	// Convert gjson results to RawRecords
 	records := make([]connector.RawRecord, 0, len(features))
 	for _, feature := range features {
-		// Extract parcel ID (Union County uses "PID" field)
-		// Other counties might use "PARCEL_ID", "REID", etc.
 		parcelID := feature.Get("attributes.PID").String()
 
-		// Convert feature to map for RawData
 		rawData := make(map[string]interface{})
 		feature.ForEach(func(key, value gjson.Result) bool {
 			rawData[key.String()] = value.Value()
@@ -279,8 +231,7 @@ func (s *UnionCountyGISSource) fetchBatch(ctx context.Context, params ArcGISPara
 	return records, nil
 }
 
-// buildURL builds the full URL with query parameters
-func (s *UnionCountyGISSource) buildURL(params ArcGISParams) (string, error) {
+func (s *GISSource) buildURL(params ArcGISParams) (string, error) {
 	queryParams, err := params.ToURLValues()
 	if err != nil {
 		return "", err
@@ -288,35 +239,29 @@ func (s *UnionCountyGISSource) buildURL(params ArcGISParams) (string, error) {
 	return fmt.Sprintf("%s?%s", s.baseURL, queryParams.Encode()), nil
 }
 
-// ToURLValues converts ArcGISParams to url.Values
+// ToURLValues converts ArcGISParams to url.Values.
 func (p ArcGISParams) ToURLValues() (url.Values, error) {
 	qps := url.Values{}
 
 	if p.Where != "" {
 		qps.Add("where", p.Where)
 	}
-
 	if p.ReturnCountOnly {
 		qps.Add("returnCountOnly", "true")
 	}
-
 	if p.ReturnGeometry {
 		qps.Add("returnGeometry", "true")
 	}
-
 	if p.ResultOffset != 0 {
 		qps.Add("resultOffset", fmt.Sprintf("%d", p.ResultOffset))
 	}
-
 	if p.ResultRecordCount != 0 {
 		qps.Add("resultRecordCount", fmt.Sprintf("%d", p.ResultRecordCount))
 	}
-
 	if p.Format != "json" && p.Format != "geojson" {
 		return nil, fmt.Errorf("invalid format. Must be json or geojson")
 	}
 	qps.Add("f", p.Format)
-
 	if p.OutFields == "" {
 		qps.Add("outFields", "*")
 	} else {
@@ -326,20 +271,16 @@ func (p ArcGISParams) ToURLValues() (url.Values, error) {
 	return qps, nil
 }
 
-// validateURL validates the baseURL
 func validateURL(baseURL string) error {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return fmt.Errorf("invalid baseURL! invalid format: %v", err)
 	}
-
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("invalid baseURL! must include scheme (http:// or https://)")
 	}
-
 	if parsed.Host == "" {
 		return fmt.Errorf("invalid baseURL! must include host")
 	}
-
 	return nil
 }

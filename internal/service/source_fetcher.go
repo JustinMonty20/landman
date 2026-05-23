@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -122,7 +123,7 @@ func (b *BatchEnricher) EnrichBatch(ctx context.Context, parcelIDs []string) (ma
 	}
 
 	if len(errs) > 0 {
-		return records, fmt.Errorf("batch enrichment completed with %d errors", len(errs))
+		return records, fmt.Errorf("batch enrichment completed with %d errors: %w", len(errs), errors.Join(errs...))
 	}
 
 	return records, nil

@@ -107,6 +107,7 @@ func extractParcelIDs(records []connector.RawRecord, filter ParcelRecordFilter) 
 
 	ids := make([]string, 0, len(records))
 	seen := make(map[string]struct{}, len(records))
+
 	for _, record := range records {
 		if filter != nil && !filter(record) {
 			continue
