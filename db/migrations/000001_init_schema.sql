@@ -1,3 +1,4 @@
+-- +goose Up
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -124,3 +125,9 @@ CREATE INDEX parcels_shape_gist_idx ON parcels USING GIST (shape);
 
 CREATE INDEX parcel_sales_parcel_id_idx ON parcel_sales (parcel_id);
 CREATE INDEX parcel_sales_sale_date_idx ON parcel_sales (sale_date);
+
+-- +goose Down
+DROP TABLE IF EXISTS parcel_sales;
+DROP TABLE IF EXISTS parcels;
+DROP EXTENSION IF EXISTS pgcrypto;
+DROP EXTENSION IF EXISTS postgis;
