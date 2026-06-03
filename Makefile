@@ -13,8 +13,11 @@ MIGRATIONS_PATH=./db/migrations
 DB_BOOTSTRAP_PATH=./db/bootstrap/create_database.sql
 DOCKER ?= docker
 DB_CONTAINER ?= landman-postgis
+GOOSE_IMAGE ?= golang:1.25-alpine
+GOOSE_VERSION ?= latest
+GOOSE_CMD = $(DOCKER) run --rm --network container:$(DB_CONTAINER) -v "$(CURDIR)/$(MIGRATIONS_PATH):/migrations" -e GOOSE_DRIVER=postgres -e GOOSE_DBSTRING="$(DATABASE_URL)" -e GOCACHE=/tmp/.cache/go-build -e GOMODCACHE=/tmp/pkg/mod -e GOBIN=/tmp/bin -u "$$(id -u):$$(id -g)" $(GOOSE_IMAGE) sh -c 'go install github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION) >/dev/null 2>&1 && /tmp/bin/goose -dir /migrations "$$@"' goose
 
-.PHONY: all build test clean run deps db-create migrate-up migrate-down migrate-create migrate-version check-db-container check-postgres-url check-database-url help
+.PHONY: all build test clean run deps db-create db-drop migrate-up migrate-down migrate-create migrate-version migrate-status check-db-container check-postgres-url check-database-url help
 
 all: test build
 
@@ -61,49 +64,28 @@ check-database-url:
 db-create: check-db-container check-postgres-url ## Create the landman database if it does not exist using docker exec psql
 	$(DOCKER) exec -i $(DB_CONTAINER) psql "$(POSTGRES_URL)" -f /dev/stdin < $(DB_BOOTSTRAP_PATH)
 
-migrate-up: check-db-container check-database-url ## Run pending SQL migrations using docker exec psql
-	$(DOCKER) exec -i $(DB_CONTAINER) psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());"
-	@for file in $(MIGRATIONS_PATH)/*.up.sql; do \
-		[ -e "$$file" ] || continue; \
-		version=$$(basename "$$file" | cut -d_ -f1); \
-		applied=$$($(DOCKER) exec $(DB_CONTAINER) psql "$(DATABASE_URL)" -At -c "SELECT 1 FROM schema_migrations WHERE version = '$$version';"); \
-		if [ "$$applied" = "1" ]; then \
-			echo "Skipping migration $$version; already applied"; \
-		else \
-			echo "Applying migration $$file"; \
-			$(DOCKER) exec -i $(DB_CONTAINER) psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -f /dev/stdin < "$$file"; \
-			$(DOCKER) exec -i $(DB_CONTAINER) psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -c "INSERT INTO schema_migrations (version) VALUES ('$$version');"; \
-		fi; \
-	done
+db-drop: check-db-container check-postgres-url ## Drop the local landman database after terminating active connections
+	$(DOCKER) exec -i $(DB_CONTAINER) psql "$(POSTGRES_URL)" -v ON_ERROR_STOP=1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'landman' AND pid <> pg_backend_pid();" -c "DROP DATABASE IF EXISTS landman;"
 
-migrate-down: check-db-container check-database-url ## Rollback the latest SQL migration using docker exec psql
-	@version=$$($(DOCKER) exec $(DB_CONTAINER) psql "$(DATABASE_URL)" -At -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1;"); \
-	if [ -z "$$version" ]; then \
-		echo "No applied migrations to roll back"; \
-		exit 0; \
-	fi; \
-	file=$$(ls $(MIGRATIONS_PATH)/$$version*_*.down.sql 2>/dev/null | head -n 1); \
-	if [ -z "$$file" ]; then \
-		echo "No down migration found for version $$version"; \
-		exit 1; \
-	fi; \
-	echo "Rolling back migration $$file"; \
-	$(DOCKER) exec -i $(DB_CONTAINER) psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -f /dev/stdin < "$$file"; \
-	$(DOCKER) exec -i $(DB_CONTAINER) psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -c "DELETE FROM schema_migrations WHERE version = '$$version';"
+migrate-up: check-db-container check-database-url ## Run pending SQL migrations with Dockerized goose
+	$(GOOSE_CMD) up
 
-migrate-version: check-db-container check-database-url ## Show applied SQL migration versions using docker exec psql
-	$(DOCKER) exec -i $(DB_CONTAINER) psql "$(DATABASE_URL)" -c "SELECT version, applied_at FROM schema_migrations ORDER BY version;"
+migrate-down: check-db-container check-database-url ## Roll back the latest SQL migration with Dockerized goose
+	$(GOOSE_CMD) down
 
-migrate-create: ## Create a new SQL migration: make migrate-create name=create_users
+migrate-version: check-db-container check-database-url ## Show the current goose migration version
+	$(GOOSE_CMD) version
+
+migrate-status: check-db-container check-database-url ## Show goose migration status
+	$(GOOSE_CMD) status
+
+migrate-create: check-db-container ## Create a new goose SQL migration: make migrate-create name=create_users
 	@if [ -z "$(name)" ]; then \
 		echo "Migration name is required. Example:"; \
 		echo "  make migrate-create name=create_users"; \
 		exit 1; \
 	fi
-	@version=$$(date +%Y%m%d%H%M%S); \
-	touch "$(MIGRATIONS_PATH)/$${version}_$(name).up.sql" "$(MIGRATIONS_PATH)/$${version}_$(name).down.sql"; \
-	echo "Created $(MIGRATIONS_PATH)/$${version}_$(name).up.sql"; \
-	echo "Created $(MIGRATIONS_PATH)/$${version}_$(name).down.sql"
+	$(GOOSE_CMD) create $(name) sql
 
 # Auto-documented help (from https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html)
 help:
