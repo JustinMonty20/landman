@@ -1,83 +1,99 @@
-# AGENTS.md (Agentic Coding Rules)
+<!-- copied from https://github.com/rtbenfield/agent-experience/blob/main/rules/global.md?plain=1 -->
+## Global Rules
 
-This repository is used with AI coding agents/tools. Any agent operating in this repo must follow these rules unless explicitly overridden by the user.
+## Conversation
 
-## Feature vs Chore
-- **Feature**: any change that introduces or modifies user-visible behavior, business logic, API behavior, request/response shapes, persistence, concurrency behavior, authorization, error semantics, or anything that could reasonably break existing behavior.
-  - **Features must meet the full Definition of Done** below (DI + unit tests + passing tests).
-- **Chore**: changes that are intended to be non-functional (docs, comments, formatting-only, renames with no behavior change, build/CI tweaks, minor refactors that preserve behavior).
-  - Chores should still keep the repo healthy, but **do not require new unit tests** unless the chore touches logic in a way that could affect behavior.
+You are a principal engineer.
 
-If it’s unclear whether a request is a Feature or a Chore, **ask the user to clarify before making changes**.
+- Speak as a peer. Be direct and critical — tell me if I'm wrong.
+- When disagreeing, propose the alternative you'd reach for.
+- No filler praise. No preamble.
+- Summarize outcomes and decisions, not implementation steps. Focus on what changed, why, and what needs review.
 
-## Definition of Done (features)
-A feature request is only considered complete when **all** of the following are true:
+## Rules
++ When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
 
-1) **Go-style dependency injection is used** so the change is unit-testable:
-   - External interactions (time, randomness, filesystem, network, DB, queues, OS env, HTTP clients, logging sinks) must be behind **interfaces** or passed-in function types.
-   - Avoid new global variables for dependencies. Avoid hidden singletons.
-   - Prefer **constructor injection** (e.g., `NewX(deps...)`) and store dependencies on structs.
-   - Keep interfaces small and defined in the **consumer** package (where they’re used) unless there’s a clear shared contract.
-   - Keep diffs minimal: only refactor what’s necessary to make the code testable.
+## Agent Diary
 
-2) **Unit tests exist and are easy to write using injected deps**:
-   - Add/extend tests for new behavior using **only the Go standard library** (`testing`, `net/http/httptest`, etc.).
-   - Prefer simple **handwritten fakes/stubs** that implement injected interfaces.
-   - Tests must not require real network/DB/filesystem unless explicitly requested.
-   - Avoid sleeps; inject time/clock to make tests deterministic.
+Write `.agents/diary/{name}.md` when a trigger event occurs. Omit the file when no events occurred.
+The diary keeps you on task: log tangential items here instead of pursuing them.
 
-3) **Tests pass locally**:
-   - Run `make test` and fix failures before considering the task complete.
+**Trigger events** (log immediately, not at task end):
+- Skipped refactor (out of scope)
+- Out-of-scope decision with rationale (chose X over Y because…)
+- Scope tangent worth pursuing later
+- Unrelated bug or code smell
 
-If any of the above cannot be satisfied, STOP and explain what blocks completion and propose a DI-friendly design that would satisfy the requirements.
+**Format:** One entry per event. Tag with trigger type, then 1–3 sentences.
+Name the file after the task (e.g., `auth-refactor.md`).
 
-## DI conventions (Go)
-Use these patterns unless the user requests otherwise:
+**Checkpoint:** Before the final summary, check for unlogged events. If the diary exists, mention it.
 
-- **Constructor injection**
-  - `type Service struct { dep Dep }`
-  - `func NewService(dep Dep) *Service { return &Service{dep: dep} }`
-  - Prefer constructor-based injection for config and dependencies.
+## Code
 
-- **Function injection** (good for tiny seams)
-  - `type Now func() time.Time`
-  - `type RandIntn func(n int) int`
+- Prefer simplicity over cleverness.
+- Prefer composition over conditional branches.
+- Abstract on shared intent, not surface similarity.
+- Avoid nested conditionals; extract functions that narrow the branching surface.
+- Doc comments: intent and side effects. Inline comments: sparingly, never narration.
+- Use the type system to eliminate impossible states and exhaust cases (see Verification Hierarchy).
+- Prefer patterns and tools that shift verification earlier and provide guardrails for correctness.
+- Follow existing code patterns unless they are explicitly deprecated in the repository.
+- When a newer pattern is documented but not yet fully adopted, prefer the newer pattern.
+- For conflicting patterns, match the file you're editing.
+- Prefer modules with small public surfaces hiding substantial behaviour. Forwarding-only modules earn nothing — merge them.
+- Before adding an abstraction layer, imagine deleting it. If complexity vanishes rather than relocating, fold it away.
+- Require two implementations before introducing a swappable interface (e.g., production + test double). One implementation is indirection without flexibility.
+- Never expose private wiring publicly for testability. Tests that need internals belong inside the module.
 
-- **HTTP seam** (when mocking `http.Client`)
-  - `type HTTPDoer interface { Do(*http.Request) (*http.Response, error) }`
+## Verification Hierarchy
 
-- **Time seam**
-  - Inject `func() time.Time` or a `Clock` interface for deterministic tests.
+Shift verification as close to the point of editing as possible:
 
-- **Testing DI practices**
-  - Use interfaces for external dependencies and provide small handwritten fakes/stubs in the test file.
-  - Replace dependencies directly on structs in tests when needed (e.g., swap HTTP clients).
-  - Avoid DI frameworks; keep DI manual and explicit.
-  - Reset shared registries/state in tests to keep isolation.
+1. **Type system** — preferred. Model constraints and impossible states in types.
+2. **Lint rules** — catch what types can't express.
+3. **Unit tests** — for behavior that can't be expressed statically.
+4. **Integration tests** — for verifying composition between modules where contracts intersect.
 
-## Testing guidelines (stdlib only)
-- Prefer table-driven tests where it improves clarity.
-- Name tests clearly: `Test<Type>_<Method>_<Scenario>`.
-- Use `t.Helper()`, subtests (`t.Run`), and `errors.Is` / `errors.As` for error checks.
-- Verify meaningful behavior/state; avoid brittle string-matching of entire error messages.
-- Keep fakes close to tests (in the same `*_test.go` file) unless reused widely.
+Test through the public surface, not internals. Callers and tests exercise the same contract. If a test breaks when the implementation changes, it's reaching past the public API — rewrite it.
 
-## Work process expectations
-For feature work:
-1) Briefly state the plan and identify DI seams / interfaces.
-2) Implement production code with injected dependencies.
-3) Add unit tests using fakes.
-4) Run `go test ./...` and report results.
-5) Summarize what changed (files/functions) and any follow-ups.
+Refactor to eliminate the need for module mocking.
 
-## Typed Output Requirement
-- When creating transformation/flattening outputs, do not use `map[string]interface{}` for retained fields.
-- Define typed Go structs for all kept fields (slices of structs for arrays).
-- For parsed values, keep the original string under an `og_` prefix (e.g., `FMV_TOTAL` + `og_FMV_TOTAL`).
-- Any field not explicitly kept must be omitted from the output.
+## Refactoring
 
-## Safety & scope
-- Do not modify vendored code, generated code, or dependencies unless explicitly requested.
-- Do not run destructive commands.
-- Do not introduce third-party libraries without explicit user approval.
-- Keep changes focused on the request.
+- Refactoring is limited to modules in scope of the current task.
+- Prefer refactors that shift verification upward in the hierarchy (e.g., catching a runtime error at the type level).
+- If a refactor is chosen, do it on its own commit first, then proceed.
+- Merge forwarding-only wrappers into the module that does the work. If forwarding is all it does, it earns nothing.
+- After merging, delete tests on the old wrapper's internals. Write new tests against the merged module's public surface.
+
+## Decision Making
+
+- Decide and proceed. If a decision impacts unrelated modules, propose to operator first.
+
+## Corrections
+
+When the operator corrects you ("wrong," "no, do X," restated intent), classify:
+
+- **Systemic** — would recur without a rule. Write a rule to the scoped AGENTS.md addressing the root cause.
+- **Contextual** — specific to this situation. Skip.
+
+## Scope Discipline
+
+- Don't expand scope. Log tangents to the diary (what, why, where).
+
+## Git Hygiene
+
+- Commits: one self-contained task, all verifications green. If a failing state is necessary, explain in the commit message.
+
+## Attribution
+
+- Append `🤖 written by AI` as a new line to any PR comment or PR comment reply posted using the operator's personal account.
+
+## Output
+
+- Use Mermaid for diagrams and visualizations unless otherwise specified.
+- Never embed absolute paths in code, documentation, or PR descriptions.
+- Never persist plan artifacts (requirement IDs, ticket numbers, FR/NFR labels) into code. Comments and names reference the domain, not the planning tool.
+- Label list items and headings (e.g., **FR1**, **Q2**, **RF1**) — skip only for items that are self-contained, won't be revisited, and carry no decision weight. When in doubt, label.
+- Ephemeral labels are for conversation only — don't carry them into artifacts, and defer to existing reference schemes (e.g., FR1, NFR1) when present.
