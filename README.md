@@ -14,29 +14,32 @@ Migration files live in:
 db/migrations/
 ```
 
-### Prerequisite
+### Start local PostGIS
 
-Start your local PostGIS container, for example with image:
-
-```text
-postgis/postgis:18-3.6-alpine
-```
-
-### Configure local database URLs
-
-The Makefile automatically loads `.env` when present. Start from the example file:
+Start the local PostGIS container with Docker Compose:
 
 ```sh
 cp .env.example .env
+
+docker compose up -d postgis
 ```
 
-Then edit `.env` for your container name and local Postgres credentials:
+This publishes Postgres/PostGIS to `localhost:5432` for Go code running on your machine.
+
+### Configure local database URLs
+
+The Makefile and Docker Compose automatically load `.env` when present. Edit `.env` if you need different local credentials or if port `5432` is already in use:
 
 ```env
 DB_CONTAINER=landman-postgis
-POSTGRES_URL=postgres://user:password@localhost:5432/postgres?sslmode=disable
-DATABASE_URL=postgres://user:password@localhost:5432/landman?sslmode=disable
+POSTGRES_USER=landman
+POSTGRES_PASSWORD=landman
+POSTGRES_PORT=5432
+POSTGRES_URL=postgres://landman:landman@localhost:5432/postgres?sslmode=disable
+DATABASE_URL=postgres://landman:landman@localhost:5432/landman?sslmode=disable
 ```
+
+If you change `POSTGRES_PORT`, update both URLs to use the same host port.
 
 ### Create, drop, or reset the local database
 
