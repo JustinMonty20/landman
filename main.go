@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
+	"os"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/connector/union"
-	"github.com/JustinMonty20/landman/internal/connector/union/spatialist"
 	"github.com/JustinMonty20/landman/internal/service"
+	"github.com/JustinMonty20/landman/internal/storage"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -22,44 +23,30 @@ func main() {
 		log.Fatalf("Failed to create GIS source: %v", err)
 	}
 
-	spatialistClient, err := spatialist.NewUnionCountySpatialist(spatialist.DefaultSpatialistConfig())
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
+	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
-		log.Fatalf("Failed to create Spatialist fetcher: %v", err)
+		log.Fatalf("Failed to create Postgres pool: %v", err)
 	}
+	defer pool.Close()
 
-	fetchers := map[string]connector.SingleParcelFetcher{
-		spatialistClient.Name(): spatialistClient,
-	}
-
-	fetcherConfigs := map[string]service.SourceConfig{}
-	for name := range fetchers {
-		fetcherConfigs[name] = service.SourceConfig{Concurrency: 5}
-	}
-
-	enricher, err := service.NewBatchEnricher(fetchers, fetcherConfigs, log.Default())
+	parcelStore := storage.NewPostgresParcelStore(pool)
+	parcelPersister, err := service.NewParcelBatchPersister(union.NewGISTranslator(), parcelStore, log.Default())
 	if err != nil {
-		log.Fatalf("Failed to create batch enricher: %v", err)
+		log.Fatalf("Failed to create parcel persister: %v", err)
 	}
 
-	spatialistEnricher, err := spatialist.NewSpatialistEnricher(
-		enricher,
-		spatialistClient.Name(),
-		spatialist.FlattenSpatialistRecord,
-		spatialist.WithRecordFilter(spatialist.KeepWhenYearBuiltIsNil),
-	)
-	if err != nil {
-		log.Fatalf("Failed to create spatialist enricher: %v", err)
-	}
-
-	fmt.Println("Streaming parcel IDs from Union County GIS...")
-	importer := service.NewParcelIDImportService(
-		gisSource,
-		50,
-		service.WithParcelRecordFilter(union.IsLikelyVacantGISRecord),
-	)
-
+	fmt.Println("Streaming parcel batches from Union County GIS...")
+	var totalParcels int
 	var totalIDs int
-	err = importer.Run(ctx, func(ctx context.Context, batchIndex int, parcelIDs []string) error {
+	batchIndex := 0
+	err = gisSource.FetchBatches(ctx, func(batch []connector.RawRecord) error {
+		batchIndex++
+		totalParcels += len(batch)
+		_, parcelIDs := eligibleParcelRecords(batch, union.IsLikelyVacantGISRecord)
 		totalIDs += len(parcelIDs)
 
 		sampleSize := min(3, len(parcelIDs))
@@ -70,36 +57,43 @@ func main() {
 		}
 		fmt.Println()
 
-		records, err := spatialistEnricher.EnrichBatch(ctx, parcelIDs)
+		persistResult, err := parcelPersister.PersistRawBatch(ctx, batchIndex, batch)
 		if err != nil {
-			log.Printf("Batch %d spatialist enrichment error: %v", batchIndex, err)
+			return fmt.Errorf("persist batch %d: %w", batchIndex, err)
 		}
+		fmt.Printf("Batch %d: persisted %d/%d normalized GIS parcels (%d errors)\n", batchIndex, persistResult.Inserted, persistResult.Translated, persistResult.Errors)
 
-		nextSourceParcelIDs := sortedParcelIDs(records)
-		fmt.Printf("Batch %d: %d parcels survived spatialist YEARBLT filter\n", batchIndex, len(nextSourceParcelIDs))
-		fmt.Printf("Batch %d next-source parcelIDs: %v\n", batchIndex, nextSourceParcelIDs)
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("Failed to stream parcel IDs: %v", err)
+		log.Fatalf("Failed to stream parcel batches: %v", err)
 	}
 
+	fmt.Printf("Total parcels streamed: %d\n", totalParcels)
 	fmt.Printf("Total likely-vacant parcel IDs streamed: %d\n", totalIDs)
 }
 
-func sortedParcelIDs(records map[string]*spatialist.SpatialistFlatEnvelope) []string {
+func eligibleParcelRecords(records []connector.RawRecord, filter service.ParcelRecordFilter) ([]connector.RawRecord, []string) {
 	if len(records) == 0 {
-		return nil
+		return nil, nil
 	}
 
+	eligible := make([]connector.RawRecord, 0, len(records))
 	ids := make([]string, 0, len(records))
-	for parcelID := range records {
-		if parcelID == "" {
+	seen := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		if filter != nil && !filter(record) {
 			continue
 		}
-		ids = append(ids, parcelID)
+		eligible = append(eligible, record)
+		if record.ParcelID == "" {
+			continue
+		}
+		if _, exists := seen[record.ParcelID]; exists {
+			continue
+		}
+		seen[record.ParcelID] = struct{}{}
+		ids = append(ids, record.ParcelID)
 	}
-
-	sort.Strings(ids)
-	return ids
+	return eligible, ids
 }

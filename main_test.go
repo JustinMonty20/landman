@@ -4,28 +4,26 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/JustinMonty20/landman/internal/connector/union/spatialist"
+	"github.com/JustinMonty20/landman/internal/connector"
 )
 
-func TestSortedParcelIDs(t *testing.T) {
-	t.Run("returns sorted non-empty parcel IDs", func(t *testing.T) {
-		input := map[string]*spatialist.SpatialistFlatEnvelope{
-			"P2": {},
-			"P1": {},
-			"":   {},
-		}
+func TestEligibleParcelRecords(t *testing.T) {
+	records := []connector.RawRecord{
+		{ParcelID: "P1"},
+		{ParcelID: "P2"},
+		{ParcelID: "P1"},
+		{ParcelID: ""},
+	}
 
-		got := sortedParcelIDs(input)
-		want := []string{"P1", "P2"}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("sortedParcelIDs() = %v, want %v", got, want)
-		}
+	eligible, ids := eligibleParcelRecords(records, func(record connector.RawRecord) bool {
+		return record.ParcelID != "P2"
 	})
 
-	t.Run("returns nil on empty input", func(t *testing.T) {
-		got := sortedParcelIDs(nil)
-		if got != nil {
-			t.Fatalf("sortedParcelIDs() = %v, want nil", got)
-		}
-	})
+	if len(eligible) != 3 {
+		t.Fatalf("eligible count = %d, want 3", len(eligible))
+	}
+	wantIDs := []string{"P1"}
+	if !reflect.DeepEqual(ids, wantIDs) {
+		t.Fatalf("ids = %v, want %v", ids, wantIDs)
+	}
 }
