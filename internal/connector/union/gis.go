@@ -2,6 +2,7 @@ package union
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,8 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/shared/httpclient"
 	"github.com/tidwall/gjson"
 )
+
+const defaultGISBatchSize = 400
 
 // GISSourceConfig holds configuration for GISSource.
 type GISSourceConfig struct {
@@ -26,7 +29,7 @@ func DefaultGISSourceConfig() GISSourceConfig {
 	return GISSourceConfig{
 		BaseURL:   "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query",
 		RateLimit: 1,
-		BatchSize: 50,
+		BatchSize: defaultGISBatchSize,
 	}
 }
 
@@ -59,7 +62,7 @@ func NewGISSource(config GISSourceConfig) (*GISSource, error) {
 	}
 
 	if config.BatchSize <= 0 {
-		config.BatchSize = 50
+		config.BatchSize = defaultGISBatchSize
 	}
 
 	if config.RateLimit <= 0 {
@@ -148,6 +151,7 @@ func (s *GISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHoo
 		totalFetched += len(batchRecords)
 		log.Printf("[%s] Batch %d/%d complete: fetched %d records (total so far: %d)",
 			s.Name(), i+1, batchCount, len(batchRecords), totalFetched)
+		logFirstBatchRecord(s.Name(), i+1, batchRecords)
 
 		if err := onBatch(batchRecords); err != nil {
 			return err
@@ -229,6 +233,20 @@ func (s *GISSource) fetchBatch(ctx context.Context, params ArcGISParams, fetched
 	}
 
 	return records, nil
+}
+
+func logFirstBatchRecord(sourceName string, batchNumber int, records []connector.RawRecord) {
+	if len(records) == 0 {
+		return
+	}
+
+	pretty, err := json.MarshalIndent(records[0], "", "  ")
+	if err != nil {
+		log.Printf("[%s] Batch %d first record could not be marshaled: %v", sourceName, batchNumber, err)
+		return
+	}
+
+	log.Printf("[%s] Batch %d first record:\n%s", sourceName, batchNumber, pretty)
 }
 
 func (s *GISSource) buildURL(params ArcGISParams) (string, error) {

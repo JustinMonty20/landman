@@ -111,8 +111,8 @@ func TestNewGISSource(t *testing.T) {
 				t.Fatal("expected non-nil source")
 			}
 
-			if tt.config.BatchSize <= 0 && source.batchSize != 50 {
-				t.Errorf("expected default batch size 50, got %d", source.batchSize)
+			if tt.config.BatchSize <= 0 && source.batchSize != defaultGISBatchSize {
+				t.Errorf("expected default batch size %d, got %d", defaultGISBatchSize, source.batchSize)
 			}
 		})
 	}
@@ -134,8 +134,8 @@ func TestDefaultGISSourceConfig(t *testing.T) {
 		t.Errorf("RateLimit = %d, want 1", config.RateLimit)
 	}
 
-	if config.BatchSize != 50 {
-		t.Errorf("BatchSize = %d, want 50", config.BatchSize)
+	if config.BatchSize != defaultGISBatchSize {
+		t.Errorf("BatchSize = %d, want %d", config.BatchSize, defaultGISBatchSize)
 	}
 }
 
@@ -349,12 +349,12 @@ func TestArcGISParams_ToURLValues(t *testing.T) {
 			},
 		},
 		{
-			name: "with geometry",
+			name:   "with geometry",
 			params: ArcGISParams{Where: "1=1", Format: "json", ReturnGeometry: true},
 			checks: map[string]string{"returnGeometry": "true"},
 		},
 		{
-			name: "with outFields",
+			name:   "with outFields",
 			params: ArcGISParams{Where: "1=1", Format: "json", OutFields: "PID,OWNER"},
 			checks: map[string]string{"outFields": "PID,OWNER"},
 		},
