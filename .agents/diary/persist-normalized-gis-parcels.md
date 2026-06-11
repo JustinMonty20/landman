@@ -1,0 +1,1 @@
+- [Out-of-scope decision] Existing worktree deletions under `plans/` were present outside this implementation. I left them untouched because they are unrelated to parcel persistence.

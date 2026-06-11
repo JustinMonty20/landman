@@ -1,0 +1,1 @@
+- [Scope tangent worth pursuing later] Failed parcel persistence should become a dead-letter path rather than logs only. Capture parcel ID, source, batch, raw payload or normalized payload, error class/message, and retry status so bad records can be inspected and replayed.

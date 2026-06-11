@@ -1,0 +1,1 @@
+- [Out-of-scope decision] The worktree already had unrelated modified/deleted/untracked files outside the Spatialist removal. I left them untouched and only changed Spatialist references, main wiring, tests, and stale docs that named the deleted package.
