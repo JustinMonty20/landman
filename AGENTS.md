@@ -61,6 +61,7 @@ Refactor to eliminate the need for module mocking.
 
 ## Refactoring
 
+- Database migrations are append-only. Never edit an existing migration/schema file to change behavior; add a new migration that alters the existing database state.
 - Refactoring is limited to modules in scope of the current task.
 - Prefer refactors that shift verification upward in the hierarchy (e.g., catching a runtime error at the type level).
 - If a refactor is chosen, do it on its own commit first, then proceed.

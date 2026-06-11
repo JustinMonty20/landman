@@ -37,7 +37,7 @@ Each county may have 2-5 different data sources (GIS API, Tax Assessor, Deeds Re
 - Tracks which sources contributed to each parcel
 
 ### 3. Ingestion Pipeline (Per County)
-1. Fetch raw data from each source (GIS, Spatialist, Tax, Deeds, etc.).
+1. Fetch raw data from each source (GIS, Tax Assessor, Deeds, etc.).
 2. Clean and normalize per-source (flatten/parse into typed structures).
 3. Translate per-source into the common domain model.
 4. Merge across sources by parcel ID to produce a single parcel view.
@@ -89,10 +89,10 @@ project-root/
 │   │   │   ├── gis/
 │   │   │   │   ├── gis_source.go
 │   │   │   │   └── gis_source_test.go
-│   │   │   ├── spatialist/
-│   │   │   │   ├── spatialist.go
-│   │   │   │   ├── spatialist_flatten.go
-│   │   │   │   └── spatialist_test.go
+│   │   │   ├── tax/
+│   │   │   │   ├── tax.go
+│   │   │   │   ├── tax_flatten.go
+│   │   │   │   └── tax_test.go
 │   │   │   ├── translator/
 │   │   │   │   ├── translator.go
 │   │   │   │   └── translator_test.go
