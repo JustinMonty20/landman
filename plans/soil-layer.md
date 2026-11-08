@@ -132,8 +132,9 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 - [ ] Add `SoilQueryURL` to `GISSourceConfig`, set in `DefaultGISSourceConfig` to `https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197/query`. Leave `BaseURL` as the layer 215 query URL. `TestDefaultGISSourceConfig` already locks that parcel URL at `gis_test.go` lines 128 to 131.
 - [ ] Add `FetchSoilPolygons(ctx) ([]UnionSoilPolygon, error)` on `GISSource`. Build the request with the existing `s.httpClient`. Do not call `NewRateLimitedClient` again.
-- [ ] Page with `resultOffset` and `resultRecordCount` 2000. Stop when a page returns fewer than 2000 features. If the count query and the pages disagree, return an error.
-- [ ] Treat HTTP status outside 200 to 299 as an error that includes the status. Treat an ArcGIS `error` object as an error. `queryTotalParcels` does not check status, at `gis.go` lines 173 to 185. Do not copy that.
+- [ ] Page with `resultOffset`, `resultRecordCount` 2000, and `orderByFields=OBJECTID_1`. `ArcGISParams` cannot send `orderByFields`. `gis.go` lines 40 to 49. Add that field, or build the soil query in `soil_fetch.go`. Do not page without the order. The measured pages sent `orderByFields=OBJECTID_1`. Do not use `GISSource.batchSize`. That value is 50 and would turn this pull into hundreds of requests.
+- [ ] Stop when a page returns fewer than 2000 features. If the pages do not add up to the count query, return an error. A body with no numeric `count` is an error. `queryTotalParcels` reads `count` with no existence check, so a bad body becomes 0 and `FetchBatches` returns nil. `gis.go` lines 184 to 185 and 111 to 158. Do not copy that.
+- [ ] Treat HTTP status outside 200 to 299 as an error that includes the status. Treat an ArcGIS `error` object as an error. `queryTotalParcels` does not check status, at `gis.go` lines 173 to 185. Do not copy that. Send `User-Agent` `ParcelDataCollection/0.0.1`, the same header as `fetchBatch` at `gis.go` line 199.
 - [ ] Before each page, if `ctx.Err()` is set, return `ctx.Err()` and do not start the request. Pass that `ctx` into `http.NewRequestWithContext` and into `RateLimitedClient.Do`.
 - [ ] Out fields are `OBJECTID_1,OBJECTID,AREASYMBOL,SPATIALVER,MUSYM,MUKEY,HydrcRatng`. `returnGeometry` is true. `where` is `1=1`. `f` is `json`.
 - [ ] Keep this commit after a separate commit that only adds `SoilQueryURL` and its test, if that URL field lands without the fetch loop. Do not redesign `BaseURL` into a MapServer root in this PR.
@@ -149,13 +150,13 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
 - [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/connector/union/ -count=1` at trunk and at head. Trunk has no `FetchSoilPolygons`. Record that, and gate the new paging tests plus the existing GIS tests still passing. Save `/tmp/swarm-soil-2/worker-1/regression.png`. Pass when trunk's union tests pass and head's paging tests pass.
-- [ ] Lane 2. Serve two pages from httptest, the first with 2000 features and `exceededTransferLimit` true, the second with 1250. Save `/tmp/swarm-soil-2/worker-2/two-pages.png`. Pass when the client requests offset 0 and offset 2000 and returns 3250 polygons.
+- [ ] Lane 2. Serve two pages from httptest, the first with 2000 features and `exceededTransferLimit` true, the second with 1250. Save `/tmp/swarm-soil-2/worker-2/two-pages.png`. Pass when both URLs contain `orderByFields=OBJECTID_1`, the offsets are 0 and 2000, and the client returns 3250 polygons.
 - [ ] Lane 3. Ask the fixture to ignore a client `resultRecordCount` above 2000 and still return 2000. Save `/tmp/swarm-soil-2/worker-3/cap.png`. Pass when the client never sends `resultRecordCount` greater than 2000.
 - [ ] Lane 4. Return HTTP 500 on the first page. Save `/tmp/swarm-soil-2/worker-4/http-500.png`. Pass when the error text contains 500 and the function does not return a polygon slice with a nil error.
 - [ ] Lane 5. Return HTTP 200 and an ArcGIS `error` object. Save `/tmp/swarm-soil-2/worker-5/arcgis-error.png`. Pass when the function returns an error.
 - [ ] Lane 6. Cancel the context after the first page is read and before the second `Do`. Save `/tmp/swarm-soil-2/worker-6/cancel.png`. Pass when the second request is absent from the httptest log and the error is `context.Canceled`.
 - [ ] Lane 7. Count `RateLimitedClient.Do` calls on the source's existing client. Save `/tmp/swarm-soil-2/worker-7/one-limiter.png`. Pass when soil paging and a parcel page both call that same client, and `FetchSoilPolygons` does not construct another limiter.
-- [ ] Lane 8. Count query returns 11250 and the pages return 11249 features. Save `/tmp/swarm-soil-2/worker-8/short-count.png`. Pass when the function returns an error.
+- [ ] Lane 8. Count query returns 11250 and the pages return 11249 features. Also serve a count body with no `count` field. Save `/tmp/swarm-soil-2/worker-8/short-count.png`. Pass when both cases return an error.
 - [ ] Lane 9. Read `DefaultGISSourceConfig`. Save `/tmp/swarm-soil-2/worker-9/urls.png`. Pass when `BaseURL` still ends in `/MapServer/215/query` and `SoilQueryURL` ends in `/MapServer/197/query`.
 - [ ] Lane 10. Call `FetchSoilPolygons` twice against a fixture whose second response has a different `MUKEY` on object 1. Save `/tmp/swarm-soil-2/worker-10/second-fetch.png`. Pass when the second return value replaces the first and does not append to it.
 
@@ -181,7 +182,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Files.**
 
-- [ ] Create `db/migrations/000002_union_soil.sql`.
+- [ ] Create `db/migrations/000002_union_soil.sql` by hand. `make migrate-create` runs `goose create` with no sequential flag (`Makefile` lines 82 to 88), so the name it emits is a timestamp. The only committed migration is `000001_init_schema.sql`. Keep the `000002_` prefix.
 - [ ] Do not edit `db/migrations/000001_init_schema.sql`.
 
 **Build.**
@@ -294,7 +295,7 @@ CREATE INDEX union_parcel_soils_source_parcel_idx ON union_parcel_soils (county_
 - [ ] Add `UnionParcelSoil` in package `union`. Fields are `CountyID`, `SourceName`, `SourceParcelID`, `MapUnitKey`, `MapUnitSymbol`, `AreaSymbol`, `HydricRating`, `SpatialVersion`, `IntersectionAreaSqM`, and `AreaShare`. The key the connector knows is county, source, source parcel id, and `MUKEY`. The UUID lives on the row the insert selects. It is not a field the parser invents.
 - [ ] Add the join statement in Appendix A. Group by `parcels.id` and `map_unit_key`. Sum `ST_Area(ST_Intersection(parcels.shape, union_soil_polygons.shape))`. Divide by `ST_Area(parcels.shape)`. Drop groups whose summed area is 0. Skip parcels whose `shape` is null or whose area is 0.
 - [ ] Call `FetchSoilPolygons` once per import, on the `GISSource` that `main` already builds, before `ParcelIDImportService.Run`. Then stream parcels. The id hook stays `ParcelIDBatchHook` and still receives only id strings.
-- [ ] Collect the ids `IsLikelyVacantGISRecord` kept. After `Run` returns nil, and only if a writer has stored `parcels.shape` for those ids, run the join for that id list inside one transaction. Write the polygon copy into `union_soil_polygons` with `INSERT ... ON CONFLICT (object_id_1) DO UPDATE` in that same transaction, or replace the table from a staging table and commit once. A cancelled context commits nothing.
+- [ ] Collect the ids `IsLikelyVacantGISRecord` kept, and dedupe them across pages. `extractParcelIDs` dedupes only inside one page. `parcel_id_importer.go` lines 109 to 123. After `Run` returns nil, and only if a writer has stored `parcels.shape` for those ids, run the join for that id list inside one transaction. Write the polygon copy into `union_soil_polygons` with `INSERT ... ON CONFLICT (object_id_1) DO UPDATE` in that same transaction, or replace the table from a staging table and commit once. A cancelled context commits nothing.
 - [ ] If `Run` returns an error, do not start the join. If the soil fetch returns an error, return it from `main`'s run path. Do not log it and continue. `main.go` lines 73 to 81 log a spatialist error and return nil from the hook. Do not copy that. Wait to edit `main.go` until the removal plan's Step 2 has deleted that swallow. If Step 2 is not on trunk, soil-4 stops before the `main.go` edit and reports the blocker.
 - [ ] There is no `INSERT INTO parcels` in this repo. soil-4 does not add a parcel writer. If `parcels.shape` is empty for the kept ids, return an error that says the shapes are missing. Do not skip the join and return nil.
 - [ ] A second successful run replaces `union_parcel_soils` for the kept ids and deletes kept-id rows whose map unit no longer overlaps. It does not delete soil rows for parcels that were not in this run's kept set.
@@ -412,7 +413,9 @@ The filter as written, not the comment above it, is what this plan joins.
 
 The decision this number has to support is bulk load versus one spatial query per kept parcel. A kept set smaller than six parcels would make per-parcel queries cheaper in HTTP calls. Anything larger favors the bulk load. The noise floor is zero here. Both counts are exact server counts, not timers.
 
-**Measured.** Bulk pages are `ceil(11250 / 2000)` which is 6, plus one count query, which is 7 HTTP calls. The server refused to return 5,000 rows in one call.
+**Measured.** Bulk pages are `ceil(11250 / 2000)` which is 6, plus one count query, which is 7 HTTP calls. The server refused to return 5,000 rows in one call. Those page checks sent `orderByFields=OBJECTID_1`. Offset 10000 then returned the last 1,250 rows.
+
+**Read.** `ArcGISParams` has no `orderByFields` field. `gis.go` lines 40 to 49. `FetchBatches` advances `resultOffset` by `i * batchSize` even when a page is short. `gis.go` line 141. A soil pull that reuses that loop without an order can skip polygons. The soil client orders on `OBJECTID_1`, pages 2000 rows, and returns an error when the pages do not add up to the count.
 
 **Measured.** The Go rate limit is 1 request per second, burst 1. `NewRateLimitedClient` at `internal/connector/shared/httpclient/http_client.go` lines 63 to 70. `DefaultGISSourceConfig` passes 1. `Do` waits on `ctx`. Lines 24 to 28. `NewGISSource` stores that client on the source. `gis.go` lines 69 to 75. It is not exported.
 
