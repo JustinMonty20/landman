@@ -289,11 +289,11 @@ func TestGISTranslator_TranslateGeometry(t *testing.T) {
 		t.Fatalf("Translate returned error: %v", err)
 	}
 
-	if parcel.Geometry.SRID != unionGISSourceSRID {
-		t.Errorf("Geometry.SRID = %d, want %d", parcel.Geometry.SRID, unionGISSourceSRID)
+	if parcel.Geometry.SRID != 3857 {
+		t.Errorf("Geometry.SRID = %d, want 3857", parcel.Geometry.SRID)
 	}
-	if parcel.Geometry.SourceSRID == nil || *parcel.Geometry.SourceSRID != unionGISSourceSRID {
-		t.Fatalf("Geometry.SourceSRID = %v, want %d", parcel.Geometry.SourceSRID, unionGISSourceSRID)
+	if parcel.Geometry.SourceSRID == nil || *parcel.Geometry.SourceSRID != 3857 {
+		t.Fatalf("Geometry.SourceSRID = %v, want 3857", parcel.Geometry.SourceSRID)
 	}
 	assertFloat(t, parcel.Geometry.SourceArea, 123.45, "Geometry.SourceArea")
 	assertFloat(t, parcel.Geometry.SourceLength, 67.89, "Geometry.SourceLength")
@@ -301,8 +301,8 @@ func TestGISTranslator_TranslateGeometry(t *testing.T) {
 		t.Fatal("Geometry.Shape is nil")
 	}
 	shape := *parcel.Geometry.Shape
-	if shape.SRID() != unionGISSourceSRID {
-		t.Errorf("shape.SRID = %d, want %d", shape.SRID(), unionGISSourceSRID)
+	if shape.SRID() != 3857 {
+		t.Errorf("shape.SRID = %d, want 3857", shape.SRID())
 	}
 	if got := shape.FlatCoords(); len(got) != 8 || got[0] != 0 || got[2] != 1 || got[5] != 1 {
 		t.Fatalf("shape.FlatCoords() = %v, want parsed ring coordinates", got)
