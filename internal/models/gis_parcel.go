@@ -1,14 +1,15 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/twpayne/go-geom"
 )
 
 // GISParcel is the county-agnostic, normalized parcel shape persisted by the
-// storage layer. County/source-specific fields that do not resolve cleanly into
-// these concepts belong in SourceExtras as typed JSONB payloads.
+// storage layer. Fields that do not resolve into these concepts belong in
+// SourceExtras as JSON. The writing package chooses the key.
 type GISParcel struct {
 	Identity  ParcelIdentity  `json:"identity"`
 	Owner     ParcelOwner     `json:"owner"`
@@ -21,7 +22,7 @@ type GISParcel struct {
 	Sales     []ParcelSale    `json:"sales,omitempty"`
 	Geometry  GISGeometry     `json:"geometry"`
 
-	SourceExtras ParcelSourceExtras `db:"source_extras" json:"source_extras,omitempty"`
+	SourceExtras json.RawMessage `db:"source_extras" json:"source_extras,omitempty"`
 
 	changelog
 }
@@ -109,33 +110,7 @@ type GISGeometry struct {
 	SourceLength *float64 `db:"source_length" json:"source_length,omitempty"`
 }
 
-// ParcelSourceExtras stores typed county/source-specific leftovers as JSONB.
-// Add a new pointer field here when a county has fields that should be retained
-// but do not belong in the shared normalized model.
-type ParcelSourceExtras struct {
-	Union *UnionParcelExtras `json:"union,omitempty"`
-}
-
-// UnionParcelExtras contains retained Union County GIS fields that are not part
-// of the shared normalized parcel concepts.
-type UnionParcelExtras struct {
-	OBJECTID     *int64     `json:"OBJECTID,omitempty"`
-	OBJECTID_1   *int64     `json:"OBJECTID_1,omitempty"`
-	SUBCODE      *string    `json:"SUBCODE,omitempty"`
-	DIST_TWN     *string    `json:"DIST_TWN,omitempty"`
-	DIST_CODE    *string    `json:"DIST_CODE,omitempty"`
-	TAX_DISTRI   *string    `json:"TAX_DISTRI,omitempty"`
-	TWSHP_CD     *string    `json:"TWSHP_CD,omitempty"`
-	TWSHP_DESC   *string    `json:"TWSHP_DESC,omitempty"`
-	DESC1_DESC   *string    `json:"DESC1_DESC,omitempty"`
-	DESC1_CODE   *string    `json:"DESC1_CODE,omitempty"`
-	LUV_YES_NO   *string    `json:"LUV_YES_NO,omitempty"`
-	MULSTR       *string    `json:"MULSTR,omitempty"`
-	MULT_LANDSEQ *string    `json:"MULT_LANDSEQ,omitempty"`
-	NBHDNAME     *string    `json:"NBHDNAME,omitempty"`
-	NBHDNUM      *string    `json:"NBHDNUM,omitempty"`
-	NBHNEW       *string    `json:"NBHNEW,omitempty"`
-	IDCOL        *int64     `json:"idcol,omitempty"`
-	DATE_CRT     *time.Time `json:"DATE_CRT,omitempty"`
-	OG_DATE_CRT  *int64     `json:"og_DATE_CRT,omitempty"`
-}
+// ParcelSourceExtras is the JSON object stored in source_extras.
+// A writing package marshals its own key into this payload.
+// The shared model stores it as json.RawMessage.
+type ParcelSourceExtras = json.RawMessage

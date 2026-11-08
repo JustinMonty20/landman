@@ -53,6 +53,30 @@ func (t *GISTranslator) Translate(raw connector.RawRecord) (*models.GISParcel, e
 	dateCRT, ogDateCRT := arcGISDate(attrs, "DATE_CRT")
 	shape := geometryShape(raw.RawData)
 	sourceSRID := unionGISSourceSRID
+	sourceExtras, err := marshalSourceExtras(UnionParcelExtras{
+		OBJECTID:     intPtr(attrs, "OBJECTID"),
+		OBJECTID_1:   intPtr(attrs, "OBJECTID_1"),
+		SUBCODE:      strPtr(attrs, "SUBCODE"),
+		DIST_TWN:     strPtr(attrs, "DIST_TWN"),
+		DIST_CODE:    strPtr(attrs, "DIST_CODE"),
+		TAX_DISTRI:   strPtr(attrs, "TAX_DISTRI"),
+		TWSHP_CD:     strPtr(attrs, "TWSHP_CD"),
+		TWSHP_DESC:   strPtr(attrs, "TWSHP_DESC"),
+		DESC1_DESC:   strPtr(attrs, "DESC1_DESC"),
+		DESC1_CODE:   strPtr(attrs, "DESC1_CODE"),
+		LUV_YES_NO:   strPtr(attrs, "LUV_YES_NO"),
+		MULSTR:       strPtr(attrs, "MULSTR"),
+		MULT_LANDSEQ: strPtr(attrs, "MULT_LANDSEQ"),
+		NBHDNAME:     strPtr(attrs, "NBHDNAME"),
+		NBHDNUM:      strPtr(attrs, "NBHDNUM"),
+		NBHNEW:       strPtr(attrs, "NBHNEW"),
+		IDCOL:        intPtr(attrs, "idcol"),
+		DATE_CRT:     dateCRT,
+		OG_DATE_CRT:  ogDateCRT,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	parcel := &models.GISParcel{
 		Identity: models.ParcelIdentity{
@@ -121,29 +145,7 @@ func (t *GISTranslator) Translate(raw connector.RawRecord) (*models.GISParcel, e
 			SourceArea:   floatPtr(attrs, "SHAPE.STArea()"),
 			SourceLength: floatPtr(attrs, "SHAPE.STLength()"),
 		},
-		SourceExtras: models.ParcelSourceExtras{
-			Union: &models.UnionParcelExtras{
-				OBJECTID:     intPtr(attrs, "OBJECTID"),
-				OBJECTID_1:   intPtr(attrs, "OBJECTID_1"),
-				SUBCODE:      strPtr(attrs, "SUBCODE"),
-				DIST_TWN:     strPtr(attrs, "DIST_TWN"),
-				DIST_CODE:    strPtr(attrs, "DIST_CODE"),
-				TAX_DISTRI:   strPtr(attrs, "TAX_DISTRI"),
-				TWSHP_CD:     strPtr(attrs, "TWSHP_CD"),
-				TWSHP_DESC:   strPtr(attrs, "TWSHP_DESC"),
-				DESC1_DESC:   strPtr(attrs, "DESC1_DESC"),
-				DESC1_CODE:   strPtr(attrs, "DESC1_CODE"),
-				LUV_YES_NO:   strPtr(attrs, "LUV_YES_NO"),
-				MULSTR:       strPtr(attrs, "MULSTR"),
-				MULT_LANDSEQ: strPtr(attrs, "MULT_LANDSEQ"),
-				NBHDNAME:     strPtr(attrs, "NBHDNAME"),
-				NBHDNUM:      strPtr(attrs, "NBHDNUM"),
-				NBHNEW:       strPtr(attrs, "NBHNEW"),
-				IDCOL:        intPtr(attrs, "idcol"),
-				DATE_CRT:     dateCRT,
-				OG_DATE_CRT:  ogDateCRT,
-			},
-		},
+		SourceExtras: sourceExtras,
 	}
 
 	return parcel, nil
