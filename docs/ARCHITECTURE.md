@@ -89,10 +89,6 @@ project-root/
 │   │   │   ├── gis/
 │   │   │   │   ├── gis_source.go
 │   │   │   │   └── gis_source_test.go
-│   │   │   ├── spatialist/
-│   │   │   │   ├── spatialist.go
-│   │   │   │   ├── spatialist_flatten.go
-│   │   │   │   └── spatialist_test.go
 │   │   │   ├── translator/
 │   │   │   │   ├── translator.go
 │   │   │   │   └── translator_test.go
