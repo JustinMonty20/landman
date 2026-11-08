@@ -22,7 +22,7 @@ GOOSE_CMD = $(DOCKER) run --rm --network container:$(DB_CONTAINER) -v "$(CURDIR)
 all: test build
 
 build: ## Build the binary
-	$(GOBUILD) -o $(BINARY_NAME) -v ./cmd/main.go
+	$(GOBUILD) -o $(BINARY_NAME) -v ./main.go
 
 test: ## Run tests
 	$(GOTEST) -v -race ./...
