@@ -41,8 +41,8 @@ type ParcelOwner struct {
 	CurrentName2 *string `db:"current_name_2" json:"current_name_2,omitempty"`
 	TaxName1     *string `db:"tax_name_1" json:"tax_name_1,omitempty"`
 	TaxName2     *string `db:"tax_name_2" json:"tax_name_2,omitempty"`
-	TaxOwnerID1  *int64  `db:"tax_owner_id_1" json:"tax_owner_id_1,omitempty"`
-	TaxOwnerID2  *int64  `db:"tax_owner_id_2" json:"tax_owner_id_2,omitempty"`
+	TaxOwnerID1  *string `db:"tax_owner_id_1" json:"tax_owner_id_1,omitempty"`
+	TaxOwnerID2  *string `db:"tax_owner_id_2" json:"tax_owner_id_2,omitempty"`
 }
 
 type ParcelAddress struct {
@@ -92,9 +92,6 @@ type ParcelSale struct {
 	Sequence    int        `db:"sequence" json:"sequence"`
 	SaleDate    *time.Time `db:"sale_date" json:"sale_date,omitempty"`
 	OGSaleDate  *int64     `db:"og_sale_date" json:"og_sale_date,omitempty"`
-	SaleYear    *int64     `db:"sale_year" json:"sale_year,omitempty"`
-	SaleMonth   *int64     `db:"sale_month" json:"sale_month,omitempty"`
-	SaleDay     *int64     `db:"sale_day" json:"sale_day,omitempty"`
 	Amount      *float64   `db:"amount" json:"amount,omitempty"`
 	DeedBook    *string    `db:"deed_book" json:"deed_book,omitempty"`
 	DeedPage    *string    `db:"deed_page" json:"deed_page,omitempty"`

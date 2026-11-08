@@ -163,8 +163,8 @@ func TestGISTranslator_TranslatePopulatesAllGISParcelSections(t *testing.T) {
 	assertString(t, parcel.Owner.CurrentName2, "Current Two", "Owner.CurrentName2")
 	assertString(t, parcel.Owner.TaxName1, "Tax One", "Owner.TaxName1")
 	assertString(t, parcel.Owner.TaxName2, "Tax Two", "Owner.TaxName2")
-	assertInt(t, parcel.Owner.TaxOwnerID1, 101, "Owner.TaxOwnerID1")
-	assertInt(t, parcel.Owner.TaxOwnerID2, 202, "Owner.TaxOwnerID2")
+	assertString(t, parcel.Owner.TaxOwnerID1, "101", "Owner.TaxOwnerID1")
+	assertString(t, parcel.Owner.TaxOwnerID2, "202", "Owner.TaxOwnerID2")
 
 	assertString(t, parcel.Mailing.Line1, "123 Mail St", "Mailing.Line1")
 	assertString(t, parcel.Mailing.Line2, "Suite 4", "Mailing.Line2")
@@ -232,9 +232,6 @@ func TestGISTranslator_TranslateSalesAndDates(t *testing.T) {
 	if len(parcel.Sales) != 3 {
 		t.Fatalf("len(Sales) = %d, want 3", len(parcel.Sales))
 	}
-	assertInt(t, parcel.Sales[0].SaleYear, 2020, "Sales[0].SaleYear")
-	assertInt(t, parcel.Sales[0].SaleMonth, 5, "Sales[0].SaleMonth")
-	assertInt(t, parcel.Sales[0].SaleDay, 15, "Sales[0].SaleDay")
 	assertFloat(t, parcel.Sales[0].Amount, 123456, "Sales[0].Amount")
 	assertString(t, parcel.Sales[0].DeedBook, "DB1", "Sales[0].DeedBook")
 	assertString(t, parcel.Sales[0].DeedPage, "DP1", "Sales[0].DeedPage")

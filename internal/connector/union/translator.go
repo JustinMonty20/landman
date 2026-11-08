@@ -69,8 +69,8 @@ func (t *GISTranslator) Translate(raw connector.RawRecord) (*models.GISParcel, e
 			CurrentName2: strPtr(attrs, "CURR_NAME2"),
 			TaxName1:     strPtr(attrs, "JAN1_NAME1"),
 			TaxName2:     strPtr(attrs, "JAN1_NAME2"),
-			TaxOwnerID1:  intPtr(attrs, "JAN1_OWNERID"),
-			TaxOwnerID2:  intPtr(attrs, "JAN1_OWNERID2"),
+			TaxOwnerID1:  strPtr(attrs, "JAN1_OWNERID"),
+			TaxOwnerID2:  strPtr(attrs, "JAN1_OWNERID2"),
 		},
 		Mailing: models.ParcelAddress{
 			Line1:      strPtr(attrs, "CURR_ADDR1"),
@@ -380,9 +380,6 @@ func buildSales(attrs map[string]interface{}) []models.ParcelSale {
 			Sequence:    i + 1,
 			SaleDate:    saleDate,
 			OGSaleDate:  ogSaleDate,
-			SaleYear:    intPtr(attrs, prefix+"_SALE_YEAR"),
-			SaleMonth:   intPtr(attrs, prefix+"_SALE_MTH"),
-			SaleDay:     intPtr(attrs, prefix+"_SALE_DAY"),
 			Amount:      floatPtr(attrs, prefix+"_SALESAMT"),
 			DeedBook:    strPtr(attrs, prefix+"_DEED_BOOK"),
 			DeedPage:    strPtr(attrs, prefix+"_DEED_PAGE"),
@@ -399,5 +396,5 @@ func buildSales(attrs map[string]interface{}) []models.ParcelSale {
 }
 
 func saleHasData(sale models.ParcelSale) bool {
-	return sale.SaleDate != nil || sale.OGSaleDate != nil || sale.SaleYear != nil || sale.SaleMonth != nil || sale.SaleDay != nil || sale.Amount != nil || sale.DeedBook != nil || sale.DeedPage != nil || sale.DeedType != nil || sale.DeedQuality != nil || sale.Grantor != nil || sale.Grantor2 != nil
+	return sale.SaleDate != nil || sale.OGSaleDate != nil || sale.Amount != nil || sale.DeedBook != nil || sale.DeedPage != nil || sale.DeedType != nil || sale.DeedQuality != nil || sale.Grantor != nil || sale.Grantor2 != nil
 }
