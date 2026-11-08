@@ -300,6 +300,93 @@ func TestGISSource_FetchBatches(t *testing.T) {
 	}
 }
 
+func TestGISSource_FetchBatches_NonSuccessStatus(t *testing.T) {
+	t.Run("count request", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"count":0}`)
+		}))
+		defer server.Close()
+
+		source := newTestGISSource(t, server)
+		err := source.FetchBatches(context.Background(), func(batch []connector.RawRecord) error {
+			t.Fatal("hook should not run")
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "500") {
+			t.Fatalf("FetchBatches error = %v, want status 500", err)
+		}
+	})
+
+	t.Run("feature request", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Query().Get("returnCountOnly") == "true" {
+				fmt.Fprint(w, `{"count":1}`)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"features":[{"attributes":{"PID":"P1"}}]}`)
+		}))
+		defer server.Close()
+
+		source := newTestGISSource(t, server)
+		err := source.FetchBatches(context.Background(), func(batch []connector.RawRecord) error {
+			t.Fatal("hook should not run")
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "500") {
+			t.Fatalf("FetchBatches error = %v, want status 500", err)
+		}
+	})
+}
+
+func TestGISSource_FetchBatches_MissingCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"error":{"code":400,"message":"Unable to complete operation.","details":[]}}`)
+	}))
+	defer server.Close()
+
+	source := newTestGISSource(t, server)
+	err := source.FetchBatches(context.Background(), func(batch []connector.RawRecord) error {
+		t.Fatal("hook should not run")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "count") {
+		t.Fatalf("FetchBatches error = %v, want missing count", err)
+	}
+}
+
+func TestGISSource_FetchBatches_ZeroCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"count":0}`)
+	}))
+	defer server.Close()
+
+	source := newTestGISSource(t, server)
+	err := source.FetchBatches(context.Background(), func(batch []connector.RawRecord) error {
+		t.Fatal("hook should not run for an empty layer")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("FetchBatches error = %v, want nil for count 0", err)
+	}
+}
+
+func newTestGISSource(t *testing.T, server *httptest.Server) *GISSource {
+	t.Helper()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL, RateLimit: 100, BatchSize: 50})
+	if err != nil {
+		t.Fatalf("failed to create source: %v", err)
+	}
+	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 100)
+	return source
+}
+
 func TestArcGISParams_ToURLValues(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -349,12 +436,12 @@ func TestArcGISParams_ToURLValues(t *testing.T) {
 			},
 		},
 		{
-			name: "with geometry",
+			name:   "with geometry",
 			params: ArcGISParams{Where: "1=1", Format: "json", ReturnGeometry: true},
 			checks: map[string]string{"returnGeometry": "true"},
 		},
 		{
-			name: "with outFields",
+			name:   "with outFields",
 			params: ArcGISParams{Where: "1=1", Format: "json", OutFields: "PID,OWNER"},
 			checks: map[string]string{"outFields": "PID,OWNER"},
 		},
