@@ -86,6 +86,19 @@ When the operator corrects you ("wrong," "no, do X," restated intent), classify:
 
 - Commits: one self-contained task, all verifications green. If a failing state is necessary, explain in the commit message.
 
+## Branch and PR naming
+
+A QA agent is handed the PR title. It parses that title, opens the matching plan, and evaluates the branch against the plan. The title is the handoff key, so the title, the head branch, and any plan file have to agree.
+
+**Titles and branches:**
+- Plan work uses title `[plan:<slug>] <short summary>` and branch `plan/<slug>`. `<slug>` is the filename of `plans/<slug>.md`, and that file must exist on the PR head.
+- Work with no plan uses `[fix:<slug>] <short summary>` or `[chore:<slug>] <short summary>`, and branch `fix/<slug>` or `chore/<slug>`.
+- A slug is lowercase kebab-case. It starts and ends with a letter or digit, and hyphens only separate those segments (`soil-layer`, `pr-naming-convention`).
+
+**PR body:** Use `.github/pull_request_template.md`. Plan links `plans/<slug>.md`, or N/A for fix and chore work. Changes maps each change to the part of the plan it implements. Verification lists the commands run and their results, for example `make test`. Out of scope / deferred records what this PR leaves for later. Agent diary links `.agents/diary/...` when a diary exists for the task.
+
+**Enforcement:** `.github/workflows/pr-naming.yml` runs the `PR naming` job on `pull_request` `opened`, `edited`, `synchronize`, and `reopened`. The job fails when the title does not match, when the head branch is not `<type>/<slug>` from that title, or when a `plan:` title has no `plans/<slug>.md` on the PR head. The failure names what is wrong and the expected title, branch, or plan file. Keep `PR naming` as a required status check on `main`.
+
 ## Attribution
 
 - Append `🤖 written by AI` as a new line to any PR comment or PR comment reply posted using the operator's personal account.

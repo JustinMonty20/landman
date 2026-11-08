@@ -1,0 +1,29 @@
+name: PR naming
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-naming:
+    name: PR naming
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The merge commit still contains a plan file that the head deleted.
+      # QA reads the head, so the file check has to use that tree.
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Check PR title, branch, and plan file
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_REF: ${{ github.head_ref }}
+          ROOT: ${{ github.workspace }}
+        run: bash .github/scripts/check-pr-naming.sh
