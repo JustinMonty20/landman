@@ -1,10 +1,10 @@
 # Tax data ingest
 
-You want the amount a likely-vacant owner owes, from the two public county files, about twice a year. The devnetwedge site is out. Its robots file disallows the parcel and tax pages. This is a fetch of two files and a parse, not a scraper.
+You want the amount a likely-vacant owner owes, from the two public county files. The devnetwedge site is out. Its robots file disallows the parcel and tax pages. This is a fetch of two files and a parse, not a scraper. This plan has no calendar.
 
-The delinquent list and the billing zip are the sources. Real-estate rows are kept. Railroad rows are dropped. Personal property stays an open question. The run does not insert parcels.
+The delinquent list and the billing zip are the sources. Real-estate rows are kept. Railroad rows and personal-property rows are dropped. The run does not insert parcels. vacant-1 stores the likely-vacant ids.
 
-Run tax-1 and tax-2 first. Run tax-3 and tax-4 after those and after county-1. Run tax-5 after tax-3, tax-4, and persist-1.
+Run tax-1 first. Run vacant-1 after persist-1 and county-1. Run tax-2 after vacant-1. Run tax-3 and tax-4 after tax-1, tax-2, and county-1. Run tax-5 after tax-3, tax-4, and vacant-1.
 
 ## How to read this
 
@@ -35,11 +35,13 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Spawn owners
 
 - [ ] Spawn one owner per PR with the full lifecycle the execution playbook names.
-- [ ] Follow this dependency graph. Start dependent work only after its parent is on trunk. Do not stack these PRs. tax-3, tax-4, and tax-5 each need more than one parent.
-  - [ ] tax-1 and tax-2 are independent and first. Both branch from trunk.
-  - [ ] tax-3 and tax-4 start after tax-1, tax-2, and county-1 are on trunk. They do not edit the same files. county-1 is [PR 12](https://github.com/JustinMonty20/landman/pull/12), `plans/county-id-package.md`. It is not a PR of this program.
-  - [ ] tax-5 after tax-3, tax-4, and persist-1 are on trunk. persist-1 is in `plans/soil-layer.md`. Do not edit that file.
-- [ ] Hold the file boundaries. tax-1 touches only `internal/taxsource/`. tax-2 touches only the new migration. tax-3 touches only `internal/connector/union/delinquent.go`, `internal/connector/union/delinquent_test.go`, `internal/connector/union/testdata/tax/delinquent.csv`, `internal/taxstore/delinquent.go`, and `internal/taxstore/delinquent_test.go`. tax-4 touches only `internal/connector/union/billing.go`, `internal/connector/union/billing_test.go`, `internal/connector/union/testdata/tax/billing.csv`, `internal/taxstore/bills.go`, and `internal/taxstore/bills_test.go`. tax-5 touches only `main.go`.
+- [ ] Follow this dependency graph. Start dependent work only after its parent is on trunk. Do not stack these PRs. vacant-1, tax-3, tax-4, and tax-5 each need more than one parent.
+  - [ ] tax-1 is first and branches from trunk.
+  - [ ] vacant-1 after persist-1 and county-1 are on trunk. persist-1 is in `plans/soil-layer.md`. Do not edit that file. county-1 is [PR 12](https://github.com/JustinMonty20/landman/pull/12), `plans/county-id-package.md`. It is not a PR of this program.
+  - [ ] tax-2 after vacant-1.
+  - [ ] tax-3 and tax-4 start after tax-1, tax-2, and county-1 are on trunk. They do not edit the same files.
+  - [ ] tax-5 after tax-3, tax-4, and vacant-1 are on trunk.
+- [ ] Hold the file boundaries. tax-1 touches only `internal/taxsource/`. vacant-1 touches only `db/migrations/000003_likely_vacant.sql`, `internal/vacancystore/vacancy.go`, `internal/vacancystore/vacancy_test.go`, and `main.go`. tax-2 touches only the tax migration. tax-3 touches only `internal/connector/union/delinquent.go`, `internal/connector/union/delinquent_test.go`, `internal/connector/union/testdata/tax/delinquent.csv`, `internal/taxstore/delinquent.go`, and `internal/taxstore/delinquent_test.go`. tax-4 touches only `internal/connector/union/billing.go`, `internal/connector/union/billing_test.go`, `internal/connector/union/testdata/tax/billing.csv`, `internal/taxstore/bills.go`, and `internal/taxstore/bills_test.go`. tax-5 touches only `main.go`.
 - [ ] Hold the review gate. No PR in this program changes an interaction. None wait for screenshots in chat before the operator decides to land them.
 - [ ] Do not add a PR that requests `unionnc.devnetwedge.com`. Do not add a worker pool, a raw HTML table, or a per-parcel scrape contract.
 
@@ -122,21 +124,78 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
-- [ ] The owner does not merge. The operator lands tax-1. It does not wait on tax-2.
+- [ ] The owner does not merge. The operator lands tax-1. It does not wait on vacant-1.
 
-## Add the tax tables (tax-2)
+## Record likely-vacant parcel ids (vacant-1)
 
-**Depends on.** None.
+**Depends on.** persist-1 and county-1.
 
 **Files.**
 
-- [ ] Create the next free migration. The name to use while `000003` is absent is `db/migrations/000003_tax_files.sql`. Do not edit `000001_init_schema.sql` or `000002_parcels_storage_srid.sql`. If `000003` exists on trunk at the start of this PR, pick the next integer prefix and record it.
+- [ ] Create `db/migrations/000003_likely_vacant.sql` when `000003` is absent. If that prefix exists at the start of this PR, use the next integer and record it.
+- [ ] Create `internal/vacancystore/vacancy.go`.
+- [ ] Create `internal/vacancystore/vacancy_test.go`.
+- [ ] Edit `main.go`.
+
+**Build.**
+
+- [ ] Add `likely_vacant_parcels` with `county_id TEXT NOT NULL` and `parcel_id TEXT NOT NULL`. Primary key `(county_id, parcel_id)`. Check `county_id IN ('union')`. Do not add a boolean column. A row means the id was kept. Do not add a foreign key. Do not add a column to `parcels`.
+- [ ] Add `Record(ctx, county county.ID, parcelIDs []string) error`. It upserts each id. A second call with the same ids leaves the same rows. It does not insert into `parcels`. It does not delete ids that are absent from this call.
+- [ ] In `main`, after persist-1 has saved the kept parcel, call `Record` with `county.Union` and those parcel ids. The existing GIS hook already applied `IsLikelyVacantGISRecord`. Do not call that filter again here. Do not download a tax file here.
+- [ ] Goose `Up` creates the table. Goose `Down` drops it.
+
+**You see.**
+
+- [ ] After `make migrate-up`, a kept parcel id from the filtered hook is one row in `likely_vacant_parcels`, and `parcels` gained no row from this package.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Table-driven tests cover a first record, a second record of the same id, an invalid county, and a canceled context that writes nothing. Run `go test -race ./internal/vacancystore/ -count=1`.
+- [ ] Run `go vet ./internal/vacancystore/` and `staticcheck ./internal/vacancystore/`. Both print no findings.
+- [ ] Run `go test -race -cover ./internal/vacancystore/ -count=1`. Fail if coverage is below 90.0 percent. That floor is a chosen gate for a new package.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/service/ -count=1` at trunk and at head. Trunk has no `likely_vacant_parcels`. Record that. Save `/tmp/swarm-vacant-1/worker-1/regression.png`. Pass when trunk's service tests pass and head's `Record` tests pass.
+- [ ] Lane 2. `Record` parcel `09336350` for county `union`. Save `/tmp/swarm-vacant-1/worker-2/insert.png`. Pass when one row exists.
+- [ ] Lane 3. `Record` the same id again. Save `/tmp/swarm-vacant-1/worker-3/upsert.png`. Pass when the count is still 1.
+- [ ] Lane 4. `Record` a second id. Save `/tmp/swarm-vacant-1/worker-4/two-ids.png`. Pass when both rows exist.
+- [ ] Lane 5. `Record` county `wake`. Save `/tmp/swarm-vacant-1/worker-5/bad-county.png`. Pass when the call returns an error and the table is unchanged.
+- [ ] Lane 6. Cancel the context before `Record`. Save `/tmp/swarm-vacant-1/worker-6/cancel.png`. Pass when no row is committed.
+- [ ] Lane 7. Count `parcels` before and after `Record`. Save `/tmp/swarm-vacant-1/worker-7/no-parcel.png`. Pass when the count is unchanged.
+- [ ] Lane 8. Show the `main.go` call. Save `/tmp/swarm-vacant-1/worker-8/hook.png`. Pass when `Record` is after the persist-1 save and the tax file URLs are absent.
+- [ ] Lane 9. Run goose down, then up. Save `/tmp/swarm-vacant-1/worker-9/down-up.png`. Pass when the table is gone after down and present after up.
+- [ ] Lane 10. `rg -n "IsLikelyVacantGISRecord" internal/vacancystore main.go`. Save `/tmp/swarm-vacant-1/worker-10/no-second-filter.png`. Pass when `vacancystore` does not call the filter. `main.go` may still pass the filter to the GIS importer, which is the existing hook.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Wall time of one `Record` of one parcel id, and the row count after a second call. Trunk has no writer. The end state is one row.
+- [ ] Probe. At trunk, record that `likely_vacant_parcels` does not exist. At head, time one `Record`, then a second `Record` of the same id.
+- [ ] Baseline. Record trunk as no table and no elapsed time.
+- [ ] Rule. Fail if one head `Record` takes 5 seconds or longer, or if the second call leaves a count other than 1. Do not report a ratio against trunk.
+
+**Review gate.** None. vacant-1 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
+- [ ] The owner does not merge. The operator lands vacant-1 after persist-1 and county-1.
+
+## Add the tax tables (tax-2)
+
+**Depends on.** vacant-1.
+
+**Files.**
+
+- [ ] Create the next free migration after vacant-1. The name to use when `000003_likely_vacant.sql` is already on trunk is `db/migrations/000004_tax_files.sql`. Do not edit `000001_init_schema.sql`, `000002_parcels_storage_srid.sql`, or the likely-vacant migration. If `000004` exists at the start of this PR, pick the next integer prefix and record it.
 
 **Build.**
 
 - [ ] Add `tax_delinquent_balances` with `county_id TEXT NOT NULL`, `parcel_id TEXT NOT NULL`, `tax_year INTEGER NOT NULL`, `balance_due NUMERIC(12,2) NOT NULL`, `primary_source TEXT NOT NULL`, `source_url TEXT NOT NULL`, `file_sha256 BYTEA NOT NULL`, and `fetched_at TIMESTAMPTZ NOT NULL`. Primary key `(county_id, parcel_id, tax_year)`. Check `county_id IN ('union')`. Check `balance_due >= 0`.
 - [ ] Add `tax_bills` with `county_id TEXT NOT NULL`, `parcel_id TEXT NOT NULL`, `tax_year INTEGER NOT NULL`, `total_taxes NUMERIC(12,2) NOT NULL`, `property_address TEXT NOT NULL`, `taxpayer_name TEXT NOT NULL`, `mailing_line TEXT NOT NULL`, `mailing_city TEXT NOT NULL`, `mailing_state TEXT NOT NULL`, `mailing_postal_code TEXT NOT NULL`, `source_url TEXT NOT NULL`, `file_sha256 BYTEA NOT NULL`, and `fetched_at TIMESTAMPTZ NOT NULL`. Primary key `(county_id, parcel_id, tax_year)`. The same county check. Check `total_taxes >= 0`.
-- [ ] Add view `tax_owed`. It joins `tax_delinquent_balances` to `parcels` on `county_id` and `parcel_id = source_parcel_id`, keeps rows with `balance_due > 0`, and sums `balance_due` per parcel. Do not add a column to `parcels`. Do not add `GEOMETRY`. Do not add a foreign key. A tax row may exist before the parcel row.
+- [ ] Add view `tax_owed`. It joins `tax_delinquent_balances` to `likely_vacant_parcels` on `county_id` and `parcel_id`, keeps rows with `balance_due > 0`, and sums `balance_due` per parcel. Do not join `parcels` for this filter. Do not add a column to `parcels`. Do not add `GEOMETRY`. Do not add a foreign key. A tax row may exist before the likely-vacant row.
 - [ ] `NUMERIC(12,2)` is the money type. The source amounts are dollars and cents. Numeric is exact. 12 digits covers the measured maximum of 36800.63 with room. Do not store money as `float`.
 - [ ] Goose `Up` creates both tables and the view. Goose `Down` drops the view and then the tables.
 
@@ -146,7 +205,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `rg -n "parcel_pages|source_extras|GEOMETRY" db/migrations/000003_tax_files.sql` prints nothing. `rg -n "tax_owed" db/migrations/000003_tax_files.sql` matches the view. Adjust the filename if the prefix changed.
+- [ ] `rg -n "parcel_pages|source_extras|GEOMETRY" db/migrations/000004_tax_files.sql` prints nothing. `rg -n "tax_owed" db/migrations/000004_tax_files.sql` matches the view. Adjust the filename if the prefix changed.
 - [ ] Run `go test -race ./... -count=1` with no database. It still passes. Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
@@ -157,8 +216,8 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 4. Insert county `wake`. Save `/tmp/swarm-tax-2/worker-4/bad-county.png`. Pass when the county check rejects the row.
 - [ ] Lane 5. Insert a negative balance. Save `/tmp/swarm-tax-2/worker-5/negative.png`. Pass when the check rejects the row.
 - [ ] Lane 6. Insert one bill row for the same parcel and year. Save `/tmp/swarm-tax-2/worker-6/insert-bill.png`. Pass when `total_taxes` and `mailing_line` are stored.
-- [ ] Lane 7. Insert a `parcels` row with `source_parcel_id` `09336350` and select `tax_owed`. Save `/tmp/swarm-tax-2/worker-7/owed-join.png`. Pass when the view shows that parcel and the summed balance.
-- [ ] Lane 8. Select `tax_owed` with no matching parcel row. Save `/tmp/swarm-tax-2/worker-8/owed-empty.png`. Pass when the view returns no row for a delinquent key that is absent from `parcels`.
+- [ ] Lane 7. Insert a `likely_vacant_parcels` row for `09336350` and a delinquent balance of 10.00, then select `tax_owed`. Save `/tmp/swarm-tax-2/worker-7/owed-join.png`. Pass when the view shows that parcel and the summed balance.
+- [ ] Lane 8. Insert a delinquent row with no `likely_vacant_parcels` row. Save `/tmp/swarm-tax-2/worker-8/owed-empty.png`. Pass when the view returns no row for that parcel.
 - [ ] Lane 9. Run goose down, then up. Save `/tmp/swarm-tax-2/worker-9/down-up.png`. Pass when the tables are gone after down and present after up.
 - [ ] Lane 10. Count `parcels` before and after a delinquent insert. Save `/tmp/swarm-tax-2/worker-10/no-parcel-insert.png`. Pass when the `parcels` count is unchanged.
 
@@ -176,7 +235,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
-- [ ] The owner does not merge. The operator lands tax-2. It does not wait on tax-1.
+- [ ] The owner does not merge. The operator lands tax-2 after vacant-1. It does not wait on tax-1.
 
 ## Ingest the delinquent list (tax-3)
 
@@ -195,7 +254,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `DelinquentRow` with `County county.ID`, `ParcelID`, `Year`, `Balance`, and `PrimarySource`. Add `DelinquentList` with `Read` so that `var _ taxsource.Source[DelinquentRow] = (*DelinquentList)(nil)` compiles in `delinquent.go`.
 - [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4792`. Do not send the `t` query parameter. Appendix A measured that this URL returns the CSV. If the first record's names do not include `Property Key`, `Year`, `Primary Source`, and `Balance Due`, return an error and yield nothing. Do not guess another document id. Do not fetch the foreclosure HTML for a new link in this PR.
 - [ ] Parse with `encoding/csv`. Read columns by those names. Ignore extra empty columns. Trim the key and uppercase it. Do not remove an internal space and do not drop a suffix. `07105038A` stays `07105038A`. `02176011 60` stays `02176011 60`.
-- [ ] Yield a row only when `Primary Source` is `RE`. Drop `RR`. Skip `PP` and count the skip. Parse `Balance Due` by removing `$` and commas. Store dollars and cents. A balance that does not parse is an error. The county on every yielded row is `county.Union`.
+- [ ] Yield a row only when `Primary Source` is `RE`. Drop `RR`. Drop `PP`. Personal property is business equipment and vehicles taxed apart from the land. `SaveDelinquent` returns the saved count and the skipped PP count. Parse `Balance Due` by removing `$` and commas. Store dollars and cents. A balance that does not parse is an error. The county on every yielded row is `county.Union`.
 - [ ] `SaveDelinquent` upserts on `(county_id, parcel_id, tax_year)` and replaces `balance_due`, `primary_source`, `source_url`, `file_sha256`, and `fetched_at`. `file_sha256` is the SHA-256 of the file bytes. Do not insert into `parcels`. A second `Read` of the same bytes yields the same keys and balances.
 - [ ] The golden file is a few RE rows, one PP row, and one RR row copied from the measured file, including one 8-digit key, one 9-character key, and one 11-character key. `-update` rewrites it and is off by default.
 
@@ -221,7 +280,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 7. From that same saved body, count RE, PP, and RR. Save `/tmp/swarm-tax-3/worker-7/live-counts.png`. Pass when RE is 926, PP is 5013, and RR is 3, or record the new counts and stop if the header names changed.
 - [ ] Lane 8. Sum RE `Balance Due` from that body. Save `/tmp/swarm-tax-3/worker-8/live-sum.png`. Pass when the sum is 232755.26, or record the new sum next to the header check from lane 7.
 - [ ] Lane 9. Cancel `Read` before the request. Save `/tmp/swarm-tax-3/worker-9/cancel.png`. Pass when the error matches `context.Canceled` and no row is yielded.
-- [ ] Lane 10. Run `tax_owed` after saving one RE row and inserting a matching `parcels` row in the test database. Save `/tmp/swarm-tax-3/worker-10/owed.png`. Pass when the view returns that parcel. A parcel id with no `parcels` row stays out of the view.
+- [ ] Lane 10. Run `tax_owed` after saving one RE row and inserting that id in `likely_vacant_parcels`. Save `/tmp/swarm-tax-3/worker-10/owed.png`. Pass when the view returns that parcel. A parcel id with no likely-vacant row stays out of the view. The skipped PP count for the golden file is 1.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -256,7 +315,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `BillRow` with `County county.ID`, `ParcelID`, `Year`, `TotalTaxes`, `PropertyAddress`, and the mailing fields on `tax_bills`. Add `BillingFile` with `Read` so that `var _ taxsource.Source[BillRow] = (*BillingFile)(nil)` compiles.
 - [ ] Resolve the URL from the Parcels table on `https://www.unioncountync.gov/government/departments-f-p/gis-mapping/downloadable-gis-data`. Use the link whose label is `Billing Data`. Do not hardcode the numeric timestamp in the path. If that label is missing, return an error.
 - [ ] `Get` the zip with a limit of 256 MiB. That cap is chosen. Appendix A says this session did not obtain a clean zip length, and the operator measured an uncompressed CSV of about 124 MB on 2026-11-08. Write the body to a temp file. Open it with `archive/zip`. A zip directory is at the end of the file, so do not parse the CSV from the socket. Stream the `WKBILA-2026-07-22-1222.csv` entry with `encoding/csv`. Fail if the uncompressed entry exceeds 256 MiB. Delete the temp file when `Read` returns.
-- [ ] Require `property_key`, `source`, `year`, `TOTAL TAXES AND CHARGES`, `PROPERTY ADDRESS`, `Taxpayer Name 1`, and `Taypayer Address 1`. The address header is spelled `Taypayer` in the operator's column list. Match that spelling. A missing required name fails the parse and yields nothing. Yield `source` `RE` only. Skip `PP`. There is no paid column and no balance column. Do not invent one. `TotalTaxes` is the billed amount.
+- [ ] Require `property_key`, `source`, `year`, `TOTAL TAXES AND CHARGES`, `PROPERTY ADDRESS`, `Taxpayer Name 1`, and `Taypayer Address 1`. The address header is spelled `Taypayer` in the operator's column list. Match that spelling. A missing required name fails the parse and yields nothing. Yield `source` `RE` only. Drop `PP` for the same reason as tax-3. `SaveBill` returns the saved count and the skipped PP count. There is no paid column and no balance column. Do not invent one. `TotalTaxes` is the billed amount.
 - [ ] Use the same key rule as tax-3. The county is `county.Union`. `SaveBill` upserts on `(county_id, parcel_id, tax_year)`. The golden file is a few RE rows and one PP row, including parcel `09336350` if a row is copied from a real file. `-update` is off by default.
 - [ ] Do not download the zip in `go test` unless the test points at a local file. The live sample is one lane.
 
@@ -302,7 +361,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 ## Wire the tax run (tax-5)
 
-**Depends on.** tax-3, tax-4, and persist-1.
+**Depends on.** tax-3, tax-4, and vacant-1.
 
 **Files.**
 
@@ -310,9 +369,9 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Build.**
 
-- [ ] Add a default-off switch. When it is off, `main` does what it does on trunk after persist-1. It does not download either county file.
-- [ ] When the switch is on, call `DelinquentList.Read` and `SaveDelinquent`, then `BillingFile.Read` and `SaveBill`. One file at a time. No worker pool. A canceled context stops the second file. An error from either file is returned. Do not log it and return nil.
-- [ ] Do not insert parcels. Do not call the vacant filter inside the tax parse. `tax_owed` is the join to `parcels`. persist-1 is what writes the parcel rows the view can see. There is no `likely_vacant` column. Appendix A records that.
+- [ ] Add a default-off switch. When it is off, `main` does what it does on trunk after persist-1 and vacant-1. It does not download either county file. Do not add a calendar or a cron entry. A later change can read the cadence from config. That hook is not this PR.
+- [ ] When the switch is on, call `DelinquentList.Read` and `SaveDelinquent`, then `BillingFile.Read` and `SaveBill`. One file at a time. No worker pool. A canceled context stops the second file. An error from either file is returned. Do not log it and return nil. Print the saved count and the skipped PP count from each save.
+- [ ] Do not insert parcels. Do not call the vacant filter inside the tax parse. `tax_owed` joins `likely_vacant_parcels`, which vacant-1 fills. Do not write that table from this PR.
 - [ ] Do not import `internal/taxsource` from `main` if `main` only calls the union and taxstore functions. Do not add `func init`.
 
 **You see.**
@@ -330,7 +389,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/service/ ./internal/connector/union/ -count=1` at trunk and at head. Save `/tmp/swarm-tax-5/worker-1/regression.png`. Pass when both pass. Trunk's `main` has no tax switch. Record that.
 - [ ] Lane 2. Run the default path's unit test. Save `/tmp/swarm-tax-5/worker-2/switch-off.png`. Pass when no county file URL is requested.
 - [ ] Lane 3. Run the switch-on path against local files. Save `/tmp/swarm-tax-5/worker-3/switch-on.png`. Pass when one delinquent row and one bill row are stored.
-- [ ] Lane 4. Select `tax_owed` after that run and a matching `parcels` row. Save `/tmp/swarm-tax-5/worker-4/owed.png`. Pass when the parcel id is the local fixture id and the balance is greater than 0.
+- [ ] Lane 4. Select `tax_owed` after that run and a matching `likely_vacant_parcels` row. Save `/tmp/swarm-tax-5/worker-4/owed.png`. Pass when the parcel id is the local fixture id and the balance is greater than 0. The printed summary includes the skipped PP count.
 - [ ] Lane 5. Repeat the switch-on run. Save `/tmp/swarm-tax-5/worker-5/second-run.png`. Pass when the counts stay 1 and 1.
 - [ ] Lane 6. Cancel during the first file. Save `/tmp/swarm-tax-5/worker-6/cancel.png`. Pass when the second file is not read.
 - [ ] Lane 7. Count `parcels` around the run. Save `/tmp/swarm-tax-5/worker-7/no-insert.png`. Pass when the tax run did not insert a parcel.
@@ -398,16 +457,15 @@ func Get(ctx context.Context, rawURL string, limit int64, timeout time.Duration)
 
 Open questions.
 
-1. How often should the run execute? The operator said maybe twice a year. This plan does not pick a calendar.
-2. Where is the likely-vacant set stored? The predicate is a Go function. There is no column. `tax_owed` joins `parcels`. persist-1 is not on trunk. Whether that table will hold only the filtered ids is still the soil plan's question.
-3. Should personal-property rows be stored? This plan skips them and counts the skip. It does not decide to keep them.
-4. What should happen when a required column is renamed? This plan fails the file and yields nothing. An alias list is not defined.
+1. What should happen when a required column is renamed? This plan fails the file and yields nothing. An alias list is not defined.
 
 ## Appendix B. Alternatives rejected
 
 `Read(ctx) ([]T, error)` loses. The billing CSV is about 124 MB and 138,405 rows on the operator's count. A slice holds every row before the first upsert. A cancel mid-file has already paid for the whole parse. The callback yields one row at a time.
 
 A public fetch plus a public parse loses. The caller would open the body and then parse it. A zip has to be on disk before `archive/zip` can read the directory at the end. Hiding that inside `Read` keeps one call. The CSV parser stays a function over an `io.Reader` so the golden file and the fuzz target do not open a socket. That function is not the interface.
+
+A boolean column on `parcels` loses. persist-1 owns parcel inserts. Adding a column to that row gives two plans one record. The tax run would also have to update `parcels` to keep the flag true. `likely_vacant_parcels` is a separate set. A row means the filtered hook kept that id. vacant-1 writes it. The tax run only reads it through `tax_owed`.
 
 `iter.Seq2` loses as the interface return. A parse error in the middle of a range has no `error` result on the method. A `yield func(T) error` returns that error from `Read`. Go 1.25 could express an iterator. This plan does not.
 
@@ -429,7 +487,7 @@ The GIS download page says the data is presented as is and that the user holds t
 
 `control-cli` is not in this repo. Live lanes drive `go test`, `curl`, and `psql`, and they save a text render at the `.png` path. This repo has no `pstack/` tree. `git show origin/main:pstack/...` fails until those files exist on trunk.
 
-`tax_owed` is empty until persist-1 writes parcel rows. The tax tables do not insert those rows. A delinquent key that is not a GIS PID stays out of the view and stays in `tax_delinquent_balances`.
+`tax_owed` is empty until vacant-1 has recorded ids. The tax tables do not insert parcels and do not write `likely_vacant_parcels`. A delinquent key that is not in that table stays out of the view and stays in `tax_delinquent_balances`.
 
 county-1 stacks on this docs branch today. Implementation PRs wait until county-1 is on trunk. They do not import `internal/soil` for the county id.
 
@@ -451,12 +509,22 @@ tax-3 and tax-4 get `pstack/skills/how/SKILL.md` before the parser is split from
 
 ## Appendix E. Decisions recorded
 
-The operator said the devnetwedge tax site is out, and said he does not want a records request if the two public files are enough. He asked whether this is still web scraping or a data fetching step. The answer he accepted is a fetch-and-parse step, for now. The run is periodic. He said maybe twice a year. It targets likely-vacant parcels, not every parcel.
+The operator said the devnetwedge tax site is out, and said he does not want a records request if the two public files are enough. He asked whether this is still web scraping or a data fetching step. The answer he accepted is a fetch-and-parse step, for now.
 
-This plan replaces the scraper plan. The old path stays as a pointer so links in the soil plan still resolve. The work is tax-1 through tax-5.
+On the open questions he said, "Don't worry about the schedule yet because we are still building that should just be configurable somewhere down the line. Probably should store likely-vacant somewhere. don't think we care about the personal property not sure where that is coming from and idk about renamed columns just yet."
+
+The schedule is not in this plan. tax-5 keeps the default-off switch. A later config hook can choose the cadence. That hook is not a PR here.
+
+Likely-vacant is stored in `likely_vacant_parcels`, keyed by county id and parcel id. vacant-1 owns that table and the writer. It depends on persist-1 and county-1. It records ids the filtered hook already kept, after persist-1 has saved the parcel. It does not insert parcels. `tax_owed` joins that table.
+
+Personal property is business equipment and vehicles taxed apart from the land. Both files drop those rows. The save result counts how many were skipped.
+
+A renamed required column still fails the file. What to do instead stays open.
+
+This plan replaces the scraper plan. The old path stays as a pointer so links in the soil plan still resolve. The work is tax-1, vacant-1, tax-2, tax-3, tax-4, and tax-5.
 
 `county.ID` comes from county-1 in `internal/county`. This plan does not declare the type and does not edit `plans/soil-layer.md`.
 
-Real-estate rows are stored. Railroad rows are dropped. Personal property is skipped until open question 3 is answered. Money is `NUMERIC(12,2)`. The file hash and `fetched_at` sit on each row so a rerun upserts in place. The write does not insert parcels. `tax_owed` is the join that limits the priority list to parcel ids already stored.
+Real-estate rows are stored. Railroad rows are dropped. Money is `NUMERIC(12,2)`. The file hash and `fetched_at` sit on each row so a rerun upserts in place. The tax write does not insert parcels.
 
 The stable delinquent URL is `showdocument?id=4792` with no `t` parameter. The billing link is read from the GIS download page so a changed timestamp does not stick in code.
