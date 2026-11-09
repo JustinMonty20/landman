@@ -1,197 +1,511 @@
-# Parcel scraper
+# Parcel scraper plan
 
-Source: [Go architecture audit, revised](https://cursor.com/canvas/store-11be7bad-acc0-4616-92d5-8d428c775323/99b2a528-396b-4acf-9126-69a9bf84bab3).
+You want one shared scraper contract for every website, and a Union scraper that implements it. The contract package imports no county package. Union's scraper lives in `internal/connector/union`, and `main` constructs it. There is no registry and no `init`.
 
-Some parcel facts have to come from a site other than the county GIS service. This plan is that scraper. It replaces [todo/webscraper_enrichment.md](../todo/webscraper_enrichment.md), which pointed at `connector.SingleParcelFetcher` and `SpatialistEnricher`. Those types are removed by [plans/spatialist-removal-and-critical-fixes.md](spatialist-removal-and-critical-fixes.md).
+Scraped bytes go in their own table. The scraper does not insert into `parcels` and does not write `source_extras`. The website is unknown, so the contract and a fixture-backed fake ship before any live host.
 
-The site, the URL pattern, the field list, and any auth or cookie requirement are still unknown. The old todo listed them as open questions, and this plan does not answer them. The package layout, the interface, the place in the GIS run, rate limiting, storage, and error behavior are decided below so the unknown site can land without bringing the Spatialist ports back.
+Run scrape-2 and scrape-3 first. Run scrape-1 after soil-1 is on trunk. Run scrape-4 after scrape-1, scrape-3, and persist-1. Run scrape-5 after scrape-2 and scrape-4.
 
-`internal/service` does not import `union` today. Keep it that way. The scraper is county-specific until a second county uses the same site.
+## How to read this
 
-## Where it lives
+One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
 
-Put the HTTP client, the config struct, the parser, and the typed record in `internal/connector/union/scrape`. That is a Union source, next to the Union GIS code, the same way Spatialist was a child package of `union` before its removal. A second county with a different site gets `internal/connector/<county>/scrape`. It does not add files to package `union`, and it does not implement a port in `internal/connector`.
+The program runs `pstack/skills/poteto-mode/playbooks/autopilot-stack.md`. The operator lands scrape-2, scrape-3, scrape-1, scrape-4, and scrape-5. This plan stops at merge-ready. Nobody merges from the checklist.
 
-`internal/connector/union/exports.go` is not in the tree. The old todo said to wire the scraper through that file. Do not create it for this feature. `main` calls the Union constructor directly today. `main.go` lines 20 to 23.
+Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-The typed record stays in package `scrape`. Retained fields are named on that struct once the field list is known. Do not keep the retained output as `map[string]interface{}`. `connector.RawRecord.RawData` is already that map for GIS input (`internal/connector/datasource.go` lines 8 to 15). The scraper output is a different, typed value.
+## Program checklist
 
-## The interface
+### Arm the program
 
-Define one small interface in package `union`, which is the package that calls the scraper after GIS ids exist. The HTTP client in package `scrape` is not required to name the interface. Its method set matches.
+- [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go.
+- [ ] Read these from trunk at program start. Re-read them at every tick.
+  - [ ] `git show origin/main:pstack/skills/poteto-mode/playbooks/autopilot-stack.md`
+  - [ ] `git show origin/main:pstack/skills/swarm/SKILL.md`
+  - [ ] `git show origin/main:pstack/skills/poteto-mode/playbooks/opening-a-pr.md`
+  - [ ] `git show origin/main:pstack/skills/control-cli/SKILL.md`
+  - [ ] `git show origin/main:plans/scraper-enrichment.md`
+  - [ ] `git show origin/main:plans/soil-layer.md`
+  - [ ] `git show origin/main:plans/spatialist-removal-and-critical-fixes.md`
+- [ ] If a `git show` of `pstack/` or `control-cli` fails, read the installed skill with the same name and record the miss. Appendix C is that gap. Do not skip the live lanes.
+- [ ] On the operator's go, arm the audit tick as `/loop 1h` with the tick prompt below. Never leave the cadence to memory.
+- [ ] Use this tick prompt, verbatim. "Re-read the execution playbook from trunk. Audit the operation against it and fix drift in this tick. Probe every active lane and judge progress by side effects only. Stand down a stuck lane and dispatch its replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported, such as a PR opened, a code-ready head, a round launched or closed, a verdict, a merge, a stuck agent and the action taken, a blocker added or cleared, or a decision only the operator can make. Name every such change and nothing else. Do not repeat a table, the merged list, or an unchanged blocker. If the audit found none, end the turn with no reply text. Either way, log this tick's row in your decision trail. The row names the items reported, or none."
+- [ ] On the operator's hold or stand-down, send every owner a zero-writes order at once.
+
+### Spawn owners
+
+- [ ] Spawn one owner per PR with the full lifecycle the execution playbook names.
+- [ ] Follow this dependency graph. Start dependent work only after its parent is on trunk. Do not stack these PRs. scrape-4 and scrape-5 each need more than one parent, and a stack has one parent.
+  - [ ] scrape-2 and scrape-3 are independent and first. Both branch from trunk.
+  - [ ] scrape-1 after soil-1 from `plans/soil-layer.md` is on trunk. soil-1 is not a PR of this program.
+  - [ ] scrape-4 after scrape-1, scrape-3, and persist-1 are on trunk. persist-1 is in `plans/soil-layer.md`.
+  - [ ] scrape-5 after scrape-2 and scrape-4 are on trunk.
+- [ ] Hold the file boundaries. scrape-2 touches only `internal/connector/shared/httpclient/`. scrape-3 touches only the new migration file. scrape-1 touches only `internal/scrape/`. scrape-4 touches only `internal/scrapestore/`. scrape-5 touches only `internal/connector/union/web.go`, `internal/connector/union/web_test.go`, `internal/connector/union/testdata/scrape/`, `main.go`, and the `init` sample in `docs/ARCHITECTURE.md`.
+- [ ] Hold the review gate. No PR in this program changes an interaction. None wait for screenshots in chat before the operator decides to land them.
+
+### PR mechanics, for every PR
+
+- [ ] Resolve the forge once. Default to `gh`. If `command -v origin` succeeds and Origin can resolve the repository, use `origin pr` for every PR operation. Record any fallback to `gh`. Never require `gt`.
+- [ ] Open the PR ready, never draft, per **Opening a PR**. Use the run's built-in PR tool when it has one, else `origin pr create --status open --base <base-branch>` or `gh pr create --base <base-branch>` according to the resolved forge. A stack child targets its parent branch. These PRs are not stacked, so every base is trunk.
+- [ ] Run `gofmt`, `go vet ./...`, and `staticcheck ./...` once before the PR-facing push. Push with hooks on. This repo has no `staticcheck` Make target. Install `staticcheck` and fail the push on any finding.
+- [ ] Run `/deslop` before each commit and `/no-comments` before review. If `deslop` is not installed, apply the unslop skill to the diff and record the miss.
+- [ ] Triage every Bugbot and security-reviewer comment per `pstack/skills/poteto-mode/references/bugbot-triage.md`.
+- [ ] Rebase onto current trunk before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, on a CI failure that comes from a change on trunk, or when a known concurrent change to the same files lands.
+
+### Verdict and merge, for every PR
+
+- [ ] A full swarm runs once, at the code-ready head. Another full swarm runs only for new behavior, a redesign, or a large new diff. A rebase, a merge-conflict resolution, or a minor fix gets a single verifier at the new head, and a wording-only change gets none. Run each full swarm per `pstack/skills/swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. Two or more audit lanes, each with its own focus, that read the diff and the receipts and distrust the PR body. The root audits the receipts in the merge-ready report before the verdict.
+- [ ] Judge every finding by the execution playbook's blocking rule. The verdict is clean when none blocks. A failure on trunk behavior in a lane marked `Regression lane against trunk.` is recorded against trunk and does not block the PR. A new head gets a fresh verdict, except for results that stay valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Stop when the PR is verified and green at its current head, then hand it to the operator. Do not merge. A restack that leaves `git patch-id` unchanged keeps the verdict. After the handoff, nobody pushes without the operator's go.
+
+### Boot recipe, for every live lane
+
+Each live lane runs on its own cloud VM at the PR head. This repo has no browser UI for the scraper. Drive `go test`, `curl`, and `psql`. There is no `control-cli` skill in the repo. Appendix C records that gap. The commands in the lane are the drive.
+
+- [ ] `git fetch origin <head-branch> && git checkout <head SHA>`.
+- [ ] For scrape-1, scrape-2, and scrape-5, run the `go test -race` command in the lane. For scrape-3 and scrape-4, start Postgres and PostGIS the way `make migrate-up` does, apply migrations, and wait until `psql` accepts a query.
+- [ ] Deliver input only through those commands. Read-only diagnostics are the test output, the `curl` body, and the `psql` rows.
+- [ ] Save every screenshot to `/tmp/swarm-<pr-id>/worker-<n>/<slug>.png` and return the paths with the report. A lane with no display saves a text render of the command output at that path.
+
+## Add per-scraper retry on the shared HTTP client (scrape-2)
+
+**Depends on.** None.
+
+**Files.**
+
+- [ ] Edit `internal/connector/shared/httpclient/http_client.go`.
+- [ ] Edit `internal/connector/shared/httpclient/http_client_test.go`.
+
+**Build.**
+
+- [ ] Add `Retry` and `DoRetry`. Leave `RateLimitedClient.Do` as a single wait plus `Client.Do`. GIS keeps calling `Do`. A scraper calls `DoRetry` on its own `RateLimitedClient`.
+- [ ] `Retry.Attempts` of 0 or less becomes 3. Values above 5 become 5. `Retry.UserAgent` empty becomes `ParcelDataCollection/0.0.1`. `Retry.MaxBody` of 0 or less becomes 8 MiB. That cap is a chosen ceiling. Appendix A says no page size was measured.
+- [ ] On 404 or 410, return `ErrNotFound` inside `*StatusError` and do not retry. On 401 or 403, return `ErrForbidden` and do not retry. On 408, 429, or 500 through 599, return `ErrTransient` and retry until the attempts are spent. Join a network error with `ErrTransient` while the context is still active.
+- [ ] On 429, if `Retry-After` is a delay or an HTTP date, wait that long when it is longer than the limiter wait. Otherwise the limiter is the gap. A canceled context during the wait returns `ctx.Err()` and does not match `ErrTransient`.
+- [ ] Read at most `MaxBody` plus one byte. A larger body is an error, is not `ErrTransient`, and is not retried. Set `User-Agent` only when the request left it empty.
+- [ ] Do not add a registry, a robots fetch, or a county import. Do not read the environment.
+
+**You see.**
+
+- [ ] `go test -race ./internal/connector/shared/httpclient/ -count=1 -run 'TestDoRetry|TestRateLimitedClient'` prints `PASS`.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Add table-driven `t.Run` cases for 200, 404, 401, 403, 410, 429 with `Retry-After`, 500 then 200, three 500s, a canceled context, a redirect that stays on the test server, an empty `User-Agent`, a preset `User-Agent`, and a body over the cap. Run `go test -race ./internal/connector/shared/httpclient/ -count=1`.
+- [ ] Run `go vet ./internal/connector/shared/httpclient/` and `staticcheck ./internal/connector/shared/httpclient/`. Both print no findings.
+- [ ] Run `go test -race -cover ./internal/connector/shared/httpclient/ -count=1`. Fail if the coverage line is below 100.0 percent. Trunk measured 100.0 percent. Appendix A.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/connector/shared/httpclient/ -count=1 -run TestRateLimitedClient_Do_RateLimiting` at trunk and at head. Save `/tmp/swarm-scrape-2/worker-1/regression.png`. Pass when both runs pass and the head test still requires at least 900ms for three requests at 2 per second.
+- [ ] Lane 2. Return 200 with body `ok`. Save `/tmp/swarm-scrape-2/worker-2/status-200.png`. Pass when `DoRetry` returns those bytes and the handler ran once.
+- [ ] Lane 3. Return 404. Save `/tmp/swarm-scrape-2/worker-3/status-404.png`. Pass when `errors.Is` matches `ErrNotFound`, `errors.As` yields status 404, and the handler ran once.
+- [ ] Lane 4. Return 403. Save `/tmp/swarm-scrape-2/worker-4/status-403.png`. Pass when `errors.Is` matches `ErrForbidden` and the handler ran once.
+- [ ] Lane 5. Return 429 with `Retry-After: 1`, then 200. Save `/tmp/swarm-scrape-2/worker-5/retry-after.png`. Pass when the body is the 200 body, the handler ran twice, and the gap is at least the header delay.
+- [ ] Lane 6. Return 500, then 200, with `Attempts` 3. Save `/tmp/swarm-scrape-2/worker-6/retry-500.png`. Pass when the body is the 200 body and the handler ran twice.
+- [ ] Lane 7. Cancel the context before `DoRetry`. Save `/tmp/swarm-scrape-2/worker-7/cancel.png`. Pass when the error matches `context.Canceled`, does not match `ErrTransient`, and the handler ran zero times.
+- [ ] Lane 8. Answer the first request with a redirect to a second path on the same `httptest` server. Save `/tmp/swarm-scrape-2/worker-8/redirect.png`. Pass when the body is the second path's body.
+- [ ] Lane 9. Send a request with an empty `User-Agent`. Save `/tmp/swarm-scrape-2/worker-9/user-agent.png`. Pass when the handler sees `ParcelDataCollection/0.0.1`.
+- [ ] Lane 10. Return a body one byte over `MaxBody`. Save `/tmp/swarm-scrape-2/worker-10/oversize.png`. Pass when the error does not match `ErrTransient` and the handler ran once.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Wall time of one local 200 through `DoRetry`, and wall time of the existing three-request rate test. Trunk has `Do` and has no `DoRetry`. The end state is a 200 body from `DoRetry` plus a rate test that still waits.
+- [ ] Probe. At trunk, run `go test -race ./internal/connector/shared/httpclient/ -count=1 -run TestRateLimitedClient_Do_RateLimiting`. At head, run that test, then a one-request `DoRetry` against `httptest`, then the rate test again.
+- [ ] Baseline. Record the trunk rate-test duration first. Record trunk `DoRetry` as absent.
+- [ ] Rule. Fail if the head rate test finishes in under 900ms, or if one local 200 through `DoRetry` takes 1 second or longer. Do not report a ratio of `DoRetry` against trunk `Do`. The 1 second budget is the hang gate from Appendix A.
+
+**Review gate.** None. scrape-2 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
+- [ ] The owner does not merge. The operator lands scrape-2. It does not wait on scrape-3.
+
+## Add the parcel page table (scrape-3)
+
+**Depends on.** None.
+
+**Files.**
+
+- [ ] Create the next free migration. The name to use while `000003` is absent is `db/migrations/000003_parcel_page.sql`. Do not edit `000001_init_schema.sql` or `000002_parcels_storage_srid.sql`. If `000003` exists on trunk at the start of this PR, pick the next integer prefix and record it.
+
+**Build.**
+
+- [ ] Add `parcel_pages` with `county_id TEXT NOT NULL`, `parcel_id TEXT NOT NULL`, `source_name TEXT NOT NULL`, `fetched_at TIMESTAMPTZ NOT NULL`, `raw BYTEA NOT NULL`, and `raw_sha256 BYTEA NOT NULL`.
+- [ ] Primary key `(county_id, parcel_id, source_name)`. Add `CHECK (county_id IN ('union'))`. Do not add a PostgreSQL enum. Do not add `GEOMETRY`. Do not add a foreign key to `parcels`.
+- [ ] `parcel_id` is the caller's parcel id string, the same string the GIS hook passes. It is not `parcels.id`.
+- [ ] Goose `Up` creates the table. Goose `Down` drops it. Do not write a Go inserter in this PR.
+
+**You see.**
+
+- [ ] After `make migrate-up`, `psql` lists `parcel_pages` and `\d parcel_pages` shows the primary key and the county check.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] `rg -n "GEOMETRY|source_extras" db/migrations/000003_parcel_page.sql` prints nothing. `rg -n "parcel_pages_county_check" db/migrations/000003_parcel_page.sql` matches the check. Adjust the filename if the prefix changed.
+- [ ] Run `go test -race ./... -count=1` with no database. It still passes. Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. At trunk and at head, run `psql` with `\dt parcel_pages`. Save `/tmp/swarm-scrape-3/worker-1/regression.png`. Pass when trunk has no `parcel_pages` and head lists the table.
+- [ ] Lane 2. Insert one row for county `union`, parcel `100`, source `union_county_scrape`. Save `/tmp/swarm-scrape-3/worker-2/insert.png`. Pass when the select returns that parcel id and a non-null `raw`.
+- [ ] Lane 3. Upsert the same key with a new `raw` and `fetched_at`. Save `/tmp/swarm-scrape-3/worker-3/upsert.png`. Pass when the table still has one row and `raw` matches the second write.
+- [ ] Lane 4. Insert county `wake`. Save `/tmp/swarm-scrape-3/worker-4/bad-county.png`. Pass when the county check rejects the row.
+- [ ] Lane 5. Select `column_name` from `information_schema.columns` for `parcel_pages`. Save `/tmp/swarm-scrape-3/worker-5/columns.png`. Pass when `raw` and `raw_sha256` exist and `shape` does not.
+- [ ] Lane 6. Select `source_extras` from `parcels` if that table has rows, and show the migration text. Save `/tmp/swarm-scrape-3/worker-6/extras.png`. Pass when the new file does not mention `source_extras` and `parcels` gained no column.
+- [ ] Lane 7. Run goose down for this migration, then up again. Save `/tmp/swarm-scrape-3/worker-7/down-up.png`. Pass when the table is gone after down and present after up.
+- [ ] Lane 8. Insert a row whose `raw_sha256` is not 32 bytes. Save `/tmp/swarm-scrape-3/worker-8/hash-length.png`. Pass when the insert is accepted by SQL. The length check belongs to the Go writer in scrape-4, not to this table.
+- [ ] Lane 9. Insert two sources for the same parcel id. Save `/tmp/swarm-scrape-3/worker-9/two-sources.png`. Pass when both rows remain.
+- [ ] Lane 10. Count rows in `parcels` before and after the parcel_pages insert. Save `/tmp/swarm-scrape-3/worker-10/no-parcel-insert.png`. Pass when the `parcels` count is unchanged.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Wall time of one upsert into `parcel_pages`, and the row count after a second upsert of the same key. Trunk has no table. The end state is one row.
+- [ ] Probe. At trunk, record that `\dt parcel_pages` fails. At head, time one upsert, then a second upsert, with `psql`.
+- [ ] Baseline. Record trunk as no table and no elapsed time.
+- [ ] Rule. Fail if the head upsert takes 5 seconds or longer, or if the second upsert leaves a count other than 1. Do not report a ratio against trunk.
+
+**Review gate.** None. scrape-3 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
+- [ ] The owner does not merge. The operator lands scrape-3. It does not wait on scrape-2.
+
+## Add the scrape contract and the fixture client (scrape-1)
+
+**Depends on.** soil-1.
+
+**Files.**
+
+- [ ] Create `internal/scrape/client.go`.
+- [ ] Create `internal/scrape/errors.go`.
+- [ ] Create `internal/scrape/robots.go`.
+- [ ] Create `internal/scrape/fixture.go`.
+- [ ] Create `internal/scrape/conform.go`.
+- [ ] Create `internal/scrape/client_test.go`.
+- [ ] Create `internal/scrape/robots_test.go`.
+- [ ] Create `internal/scrape/fixture_test.go`.
+- [ ] Create `internal/scrape/testdata/fixture-page.bin`.
+- [ ] Create `internal/scrape/testdata/fixture-page.golden`.
+- [ ] Create `internal/scrape/testdata/robots.txt`.
+
+**Build.**
+
+- [ ] Add `Request`, `Result`, and `Client` in package `scrape`. `Request` holds `soil.CountyID` and `ParcelID`. `Result` holds `County`, `ParcelID`, `Source`, `FetchedAt`, `Raw`, and `Sum`. Use `soil.CountyID` from soil-1. Do not declare another county type.
+- [ ] Add `ErrNotFound`, `ErrForbidden`, `ErrTransient`, and `ErrParse`. Add `StatusError` with `Unwrap`. Package `scrape` imports `internal/soil` and the standard library only.
+- [ ] Add `RobotsAllow(body []byte, path, userAgent string) (bool, error)`. A disallow returns false. Do not fetch a URL inside this function.
+- [ ] Add `Fixture` with `Scrape`. It copies `Raw`, sets `Sum` to SHA-256 of that copy, returns `ErrNotFound` for an unknown parcel id, and returns `ErrParse` for the bad fixture id. A canceled context returns `ctx.Err()` before a lookup.
+- [ ] Add `Conform(t *testing.T, client Client, county soil.CountyID, source, knownID, missingID, badID string)`. Every later scraper calls it. The helper asserts the known id, the missing id, the bad id, an empty parcel id, cancellation, and a second call with the same `Sum`.
+- [ ] Add `var _ Client = (*Fixture)(nil)` in `client.go`.
+- [ ] Do not import `internal/connector/union`, `internal/service`, or `internal/models`. Do not add a registry.
+
+**You see.**
+
+- [ ] `go test -race ./internal/scrape/ -count=1 -run 'TestConformFixture|TestRobotsAllow'` prints `PASS` and names the known fixture id.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Table-driven tests with `t.Run` cover the known page, a missing id, a bad page, an empty parcel id, and a canceled context. The golden test compares the known `Sum` and `Raw` to `testdata/fixture-page.golden`. `-update` rewrites that file and is off by default. Run `go test -race ./internal/scrape/ -count=1`.
+- [ ] Run `go test -race ./internal/scrape/ -fuzz=FuzzRobotsAllow -fuzztime=10s` and `go test -race ./internal/scrape/ -fuzz=FuzzFixtureParse -fuzztime=10s`. Both exit 0.
+- [ ] Run `go vet ./internal/scrape/` and `staticcheck ./internal/scrape/`. Both print no findings.
+- [ ] Run `go test -race -cover ./internal/scrape/ -count=1`. Fail if coverage is below 90.0 percent. That floor is a chosen gate for a new package. Appendix A.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/connector/union/ ./internal/connector/shared/httpclient/ ./internal/service/ -count=1` at trunk and at head. Trunk has no `internal/scrape`. Record that, and also run `go test -race ./internal/scrape/ -count=1` at head. Save `/tmp/swarm-scrape-1/worker-1/regression.png`. Pass when trunk's existing packages pass and head's scrape tests pass.
+- [ ] Lane 2. Run `Conform` on `Fixture` for the known id. Save `/tmp/swarm-scrape-1/worker-2/conform-known.png`. Pass when `County` is `union`, `Source` is `fixture`, and `Sum` matches the golden file.
+- [ ] Lane 3. Scrape the missing id. Save `/tmp/swarm-scrape-1/worker-3/not-found.png`. Pass when the error matches `ErrNotFound` and `Raw` is empty.
+- [ ] Lane 4. Scrape the bad id. Save `/tmp/swarm-scrape-1/worker-4/parse.png`. Pass when the error matches `ErrParse` and does not match `ErrTransient`.
+- [ ] Lane 5. Cancel the context, then scrape the known id. Save `/tmp/swarm-scrape-1/worker-5/cancel.png`. Pass when the error matches `context.Canceled` and does not match `ErrTransient`.
+- [ ] Lane 6. Scrape an empty `ParcelID`. Save `/tmp/swarm-scrape-1/worker-6/empty-id.png`. Pass when the error is non-nil and the golden bytes were not returned.
+- [ ] Lane 7. Compare `Raw` to `testdata/fixture-page.bin`. Save `/tmp/swarm-scrape-1/worker-7/golden.png`. Pass when the bytes match and a second call returns the same `Sum`.
+- [ ] Lane 8. Mutate the caller's buffer after `Scrape` returns. Save `/tmp/swarm-scrape-1/worker-8/copy.png`. Pass when `Result.Raw` is unchanged.
+- [ ] Lane 9. Parse `testdata/robots.txt` with `RobotsAllow` for an allowed path and a disallowed path. Save `/tmp/swarm-scrape-1/worker-9/robots.png`. Pass when the allowed path is true, the disallowed path is false, and the function opened no socket.
+- [ ] Lane 10. Parse the Go files in `internal/scrape` and list imports. Save `/tmp/swarm-scrape-1/worker-10/imports.png`. Pass when the only module import is `internal/soil`.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Wall time of one `Fixture.Scrape` of the known id, and the `Sum` it returns. Trunk has no fixture. The end state is a `Result` whose `Sum` matches the golden file.
+- [ ] Probe. At trunk, record that `./internal/scrape` does not exist. At head, time 20 calls of `Fixture.Scrape` in a test and print the average.
+- [ ] Baseline. Record trunk as no package and no elapsed time. The scratch probe in Appendix A is not this binary.
+- [ ] Rule. Fail if the average of 20 head calls is 1 second or longer, or if `Sum` differs from the golden file. Do not report a ratio against trunk.
+
+**Review gate.** None. scrape-1 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged. soil-1 is already on that trunk.
+- [ ] The owner does not merge. The operator lands scrape-1 after soil-1.
+
+## Upsert a scraped page (scrape-4)
+
+**Depends on.** scrape-1, scrape-3, and persist-1.
+
+**Files.**
+
+- [ ] Create `internal/scrapestore/pages.go`.
+- [ ] Create `internal/scrapestore/pages_test.go`.
+
+**Build.**
+
+- [ ] Add `Save(ctx context.Context, db, page scrape.Result) error`. On conflict of `(county_id, parcel_id, source_name)`, update `raw`, `raw_sha256`, and `fetched_at`.
+- [ ] Reject a `Sum` that is not the SHA-256 of `Raw`. Reject a county that fails `Valid`. Do not insert into `parcels`. Do not write `source_extras`. Do not read the environment. The constructor takes the connection, the same way persist-1 takes a connection string.
+- [ ] One statement does the upsert. A second `Save` of the same key leaves one row. A canceled context writes nothing.
+
+**You see.**
+
+- [ ] A fixture `Result` becomes one `parcel_pages` row, and a second `Save` with a new `Raw` updates that row.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Table-driven tests cover a first insert, a second upsert, a mismatched `Sum`, an invalid county, and a canceled context. Run `go test -race ./internal/scrapestore/ -count=1` against the test database.
+- [ ] Run `go vet ./internal/scrapestore/` and `staticcheck ./internal/scrapestore/`. Both print no findings.
+- [ ] Run `go test -race -cover ./internal/scrapestore/ -count=1`. Fail if coverage is below 90.0 percent. That floor is a chosen gate for a new package. Appendix A.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/service/ -count=1` at trunk and at head. Trunk has no `internal/scrapestore`. Record that, and run the new package tests at head. Save `/tmp/swarm-scrape-4/worker-1/regression.png`. Pass when trunk's service tests pass and head's `Save` tests pass.
+- [ ] Lane 2. `Save` one fixture page. Save `/tmp/swarm-scrape-4/worker-2/insert.png`. Pass when `parcel_id` is the fixture id and `raw_sha256` equals `Sum`.
+- [ ] Lane 3. `Save` the same key with different `Raw`. Save `/tmp/swarm-scrape-4/worker-3/upsert.png`. Pass when the count is 1 and `raw` matches the second save.
+- [ ] Lane 4. `Save` a `Result` whose `Sum` does not match `Raw`. Save `/tmp/swarm-scrape-4/worker-4/bad-sum.png`. Pass when `Save` returns an error and the table gains no row.
+- [ ] Lane 5. `Save` county `nope` if `Valid` rejects it. Save `/tmp/swarm-scrape-4/worker-5/bad-county.png`. Pass when `Save` returns an error. If soil-1's `Valid` accepts only `union`, this is that rejection.
+- [ ] Lane 6. Count `parcels` before and after `Save`. Save `/tmp/swarm-scrape-4/worker-6/no-parcel.png`. Pass when the count is unchanged.
+- [ ] Lane 7. Select `source_extras` for a persisted parcel. Save `/tmp/swarm-scrape-4/worker-7/extras.png`. Pass when `Save` did not change it.
+- [ ] Lane 8. Cancel the context before `Save`. Save `/tmp/swarm-scrape-4/worker-8/cancel.png`. Pass when no row is committed.
+- [ ] Lane 9. Call `Save` twice with the same bytes. Save `/tmp/swarm-scrape-4/worker-9/same-bytes.png`. Pass when one row remains and `fetched_at` moved to the second call.
+- [ ] Lane 10. Open a transaction, `Save` one good page, then force the next statement to fail if the test can, or call `Save` with a bad sum after a good one in the same function. Save `/tmp/swarm-scrape-4/worker-10/two-calls.png`. Pass when a failed second `Save` does not remove the first committed row, and the first row is still one row.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Wall time of one `Save` of the fixture page, and the row count after a second `Save`. Trunk has no writer. The end state is one `parcel_pages` row.
+- [ ] Probe. At trunk, record that `internal/scrapestore` does not exist. At head, time one `Save`, then a second `Save`.
+- [ ] Baseline. Record trunk as no writer and no elapsed time.
+- [ ] Rule. Fail if one head `Save` takes 5 seconds or longer, or if the second `Save` leaves a count other than 1. Do not report a ratio against trunk.
+
+**Review gate.** None. scrape-4 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
+- [ ] The owner does not merge. The operator lands scrape-4 after scrape-1, scrape-3, and persist-1.
+
+## Wire the Union site scraper (scrape-5)
+
+**Depends on.** scrape-2 and scrape-4.
+
+**Files.**
+
+- [ ] Create `internal/connector/union/web.go`.
+- [ ] Create `internal/connector/union/web_test.go`.
+- [ ] Create `internal/connector/union/testdata/scrape/fixture-page.bin`.
+- [ ] Edit `main.go`.
+- [ ] Edit the `init` sample in `docs/ARCHITECTURE.md`.
+
+**Build.**
+
+- [ ] Add `WebSource`, `NewWebSource`, and `DefaultWebSourceConfig` in package `union`. `DefaultWebSourceConfig` leaves `BaseURL` empty and sets `Enabled` false. `Scrape(ctx, req scrape.Request) (scrape.Result, error)` implements `scrape.Client`.
+- [ ] Add `var _ scrape.Client = (*WebSource)(nil)` in `web.go`.
+- [ ] When `Enabled` is false, `Scrape` is not called from `main`. When `BaseURL` is empty, `Scrape` serves the fixture bytes for the known id, returns `ErrNotFound` for any other id, and does not dial. When `BaseURL` is set, build the request, call `httpclient.DoRetry` on a limiter owned by this `WebSource`, then `parse`. `parse` returns `ErrParse` for every body until a page schema exists. `parcelURL` returns `ErrNotConfigured` until the pattern exists, and it does not use the GIS host.
+- [ ] `main` builds `NewWebSource` only when `Enabled` is true. The default path still prints GIS ids and returns the importer error. Do not log a scrape error and return nil. Do not add `func init`. Do not add a registry. Delete the `init` sample in `docs/ARCHITECTURE.md`.
+- [ ] `web_test.go` calls `scrape.Conform` on a fixture `WebSource`. Do not import `internal/service` from a new file. `service` still does not import `union`.
+
+**You see.**
+
+- [ ] With the default config, `go test -race ./internal/connector/union/ -count=1 -run TestWebSource` prints `PASS`, and a run of `main` still prints parcel ids and does not open a scrape socket.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Table-driven tests cover the known fixture id, an unknown id, an empty parcel id, a canceled context, an empty `BaseURL` against an `httptest` server with zero hits, and `NewWebSource` with `Enabled` false. Run `go test -race ./internal/connector/union/ -count=1`.
+- [ ] Run `go vet ./internal/connector/union/` and `staticcheck ./internal/connector/union/`. Both print no findings.
+- [ ] Run `go test -race -cover ./internal/connector/union/ -count=1`. Fail if coverage is below 76.8 percent. Trunk measured 76.8 percent. Appendix A.
+- [ ] `rg -n "func init\\(" --glob '*.go'` prints nothing. `rg -n "func init\\(" docs/ARCHITECTURE.md` prints nothing. `rg -n "SingleParcelFetcher|BatchEnricher" --glob '*.go'` prints nothing.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/connector/union/ -count=1` at trunk and at head. Trunk has no `WebSource`. Record that, and gate the new tests plus a green union package at head. Save `/tmp/swarm-scrape-5/worker-1/regression.png`. Pass when trunk's union tests pass and head's `TestWebSource` passes.
+- [ ] Lane 2. Run `Conform` on the fixture `WebSource`. Save `/tmp/swarm-scrape-5/worker-2/conform.png`. Pass when the known id returns `Source` `union_county_scrape` and the missing id matches `ErrNotFound`.
+- [ ] Lane 3. Point `BaseURL` at `httptest` while `parcelURL` still returns `ErrNotConfigured`. Save `/tmp/swarm-scrape-5/worker-3/no-dial.png`. Pass when the handler count is 0 and the error matches `ErrNotConfigured`.
+- [ ] Lane 4. Cancel the context before `Scrape`. Save `/tmp/swarm-scrape-5/worker-4/cancel.png`. Pass when the error matches `context.Canceled`.
+- [ ] Lane 5. Build `main` with the default config and run it only if the GIS host is reachable. If it is not, run the unit test that the default config has `Enabled` false. Save `/tmp/swarm-scrape-5/worker-5/main-default.png`. Pass when the test or the process shows `Enabled` false and no scrape request.
+- [ ] Lane 6. Search Go files for `func init(`. Save `/tmp/swarm-scrape-5/worker-6/no-init.png`. Pass when the search prints nothing.
+- [ ] Lane 7. Compare the fixture `Raw` to `testdata/scrape/fixture-page.bin`. Save `/tmp/swarm-scrape-5/worker-7/golden.png`. Pass when the bytes match.
+- [ ] Lane 8. Call `Scrape` twice on the known id. Save `/tmp/swarm-scrape-5/worker-8/twice.png`. Pass when both `Sum` values match.
+- [ ] Lane 9. Show that `WebSource` does not implement `connector.DataSource`, with the type assert in `web_test.go`. Save `/tmp/swarm-scrape-5/worker-9/not-datasource.png`. Pass when the assert is false.
+- [ ] Lane 10. Run `go test -race ./internal/service/ -count=1`. Save `/tmp/swarm-scrape-5/worker-10/service.png`. Pass when the service tests pass and `internal/service` still does not import `union`.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Wall time of one fixture `WebSource.Scrape`, and the union package test duration at trunk and at head. Trunk has no `WebSource`. The end state is a fixture `Result` with the golden `Sum`.
+- [ ] Probe. At trunk, time `go test -race ./internal/connector/union/ -count=1`. At head, time that command, then time 20 fixture `Scrape` calls.
+- [ ] Baseline. Record the trunk union test duration first. Record trunk `WebSource` as absent.
+- [ ] Rule. Fail if the average of 20 head fixture calls is 1 second or longer. Do not fail the PR because the head package test is slower than trunk. The package test gained cases. The 1 second gate is only the fixture call.
+
+**Review gate.** None. scrape-5 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
+- [ ] The owner does not merge. The operator lands scrape-5 after scrape-2 and scrape-4.
+
+## Close the program
+
+- [ ] Every box above is checked with its evidence.
+- [ ] Reply to the operator with the report the execution playbook names. List each PR with its verdict. Do not claim a merge.
+
+## Appendix A. Prototype evidence
+
+**Measured.** Scratch module `/tmp/scrape-shapes`, commit `23bd1c5aef6a8ddc0c72c421b090f85552d09c46`, compiler `go1.22.2`. The repo's `go.mod` says `go 1.25.0`. A `[]Client` of two fake sites passed `go test -count=1`. A pure parser that copies its input passed. `Scraper[int]` and `Scraper[string]` each compiled alone. `[]Scraper[any]{intSite{}, stringSite{}}` failed. The compiler said `intSite` does not implement `Scraper[any]` because `Scrape` returns `int`, not `any`.
+
+**Measured.** The same scratch module timed 20 local `httptest` fetches and 20 parses. Fetch average was 116.371 microseconds. Parse average was 125 nanoseconds. That is loopback on a 12 byte body, with no limiter and no reported spread. It is not a remote site budget. The 1 second fail rule in the perf boxes is about 8000 times that fetch average, so it catches a hang. It is not a tuning target.
+
+**Measured.** On this tree, `go test -race -cover` printed `httpclient` 100.0 percent, `union` 76.8 percent, and `service` 84.3 percent. `internal/models` has no tests. `make test` is `go test -v -race ./...` at `Makefile` lines 27 to 28. There is no coverage floor, fuzz target, `testdata` directory, or `staticcheck` target in the repo.
+
+**Read.** `RateLimitedClient.Do` waits, then calls `Client.Do`, at `internal/connector/shared/httpclient/http_client.go` lines 24 to 29. It does not retry. `NewRateLimitedClient` turns 0 into 1 and passes a negative rate through, lines 63 to 71. GIS sets `User-Agent` to `ParcelDataCollection/0.0.1` at `internal/connector/union/gis.go` line 219 and clamps a non-positive rate at lines 65 to 67. The only production `https` host in Go is the layer 215 query at `gis.go` line 27. No scraper website is named. Do not use that GIS host as the scraper target.
+
+**Read.** `type CountyID` is not in Go on this branch. soil-1 in `plans/soil-layer.md` adds it in `internal/soil/county.go`, with `CountyUnion` equal to `union` and `Valid`. That plan's check constraint is on the soil tables, not on `parcels.county_id`. `parcels.county_id` is `TEXT NOT NULL` with no check, at `db/migrations/000001_init_schema.sql` line 8. The unique parcel key is line 73. `source_extras` is line 68. Nothing in Go inserts `parcels`. `000002_parcels_storage_srid.sql` already exists, so this program must not create `000002_soil.sql` or another `000002` file.
+
+**Read.** Removal plan Steps 1, 2, and 5 are already on `main`. `main.go` is the GIS id stream. There is no `func init(` in Go. `service` does not import `union`. Only `main` imports `internal/connector/union`.
+
+The chosen signatures are the contract. They are not a second copy of `soil.CountyID`.
 
 ```go
-type parcelScraper interface {
-    Scrape(ctx context.Context, parcelID string) (scrape.Record, error)
+package scrape
+
+type Request struct {
+	County   soil.CountyID
+	ParcelID string
+}
+
+type Result struct {
+	County    soil.CountyID
+	ParcelID  string
+	Source    string
+	FetchedAt time.Time
+	Raw       []byte
+	Sum       [32]byte
+}
+
+type Client interface {
+	Scrape(ctx context.Context, req Request) (Result, error)
 }
 ```
 
-Export a function on package `union`, for example `EnrichParcelIDs`, that accepts this interface. Tests in package `union` pass a fake. That fake is the second implementation. The interface stays unexported. `main` passes `*scrape.Client` into the exported function.
+```go
+package httpclient
 
-Do not add `SingleParcelFetcher` back to `internal/connector`. Do not add `BatchEnricher` back to `internal/service`. The audit's reason still holds: one global per-parcel port, with its only implementation deleted, is a dead port. `spatialist.RawBatchEnricher` lived beside `SpatialistEnricher` (`spatialist_enricher.go` lines 11 to 14). Copy that placement. Do not copy `SpatialistEnricher`.
+type Retry struct {
+	Attempts  int
+	UserAgent string
+	MaxBody   int
+}
 
-If the unknown site turns out to be a paged bulk feed rather than a per-parcel lookup, stop. Implement `connector.BatchFetchSource` (`internal/connector/batch.go` lines 9 to 14) on that client and let `ParcelIDImportService` stream it. Delete `parcelScraper` in that same change. A paged feed does not need a per-parcel interface.
+func DoRetry(ctx context.Context, c *RateLimitedClient, req *http.Request, policy Retry) ([]byte, error)
+```
 
-## How it runs next to the GIS importer
+```go
+package union
 
-`ParcelIDImportService` already streams parcel ids from a `BatchFetchSource` and calls `ParcelIDBatchHook`. `internal/service/parcel_id_importer.go` lines 10 to 12 and 63 to 71. Union GIS implements that port. `main` passes `union.IsLikelyVacantGISRecord` as the filter. `main.go` lines 55 to 59.
+func (s *WebSource) Scrape(ctx context.Context, req scrape.Request) (scrape.Result, error)
 
-After the Spatialist removal, the hook only prints ids. The scraper runs inside that hook, on the ids the filter kept, by calling `union.EnrichParcelIDs`. The GIS fetch stays the source of ids. The scraper does not page the GIS service and does not replace `GISSource`.
+var _ scrape.Client = (*WebSource)(nil)
+```
 
-`NewParcelIDImportService`'s `batchSize` is ignored when the source implements `FetchBatches`. `parcel_id_importer.go` lines 63 to 72 versus 83 to 100. Union's page size is `GISSourceConfig.BatchSize`, default 50. `gis.go` lines 25 to 30 and 61 to 63. The hook therefore sees GIS pages, not the integer passed to the importer. Scrape those ids. Do not add a second chunking layer.
+Open questions that no run in this repo can settle.
 
-Call the scraper one id at a time. Check `ctx.Err()` before each id. A worker pool is a later change, and only after this sequential path is tested. The deleted `BatchEnricher` is the example of a pool that drops cancellation. `internal/service/source_fetcher.go` lines 78 to 81.
+1. Which website, URL pattern, and auth does the Union scraper use? The tree does not name one.
+2. Which fields stay on a later typed page? `Result.Raw` is the re-parse payload until that list exists.
+3. Is the read one GET per parcel, a search, or a paged dump? A paged dump replaces `WebSource.Scrape` with `connector.BatchFetchSource` in that same change.
+4. Should one not-found skip that parcel and continue the batch? This plan returns the error and stops.
+5. If soil-1 names `Valid` something else, match soil-1. Do not keep a second method.
+6. `main` times out after 10 minutes. A 1 request per second walk of every kept id can outlive that timeout once a URL exists. The timeout for a real scrape run is still open.
+7. The 8 MiB body cap is a chosen ceiling. No page was measured. Change it when a real response has a size.
 
-## Rate limiting
+## Appendix B. Alternatives rejected
 
-Build the scraper's HTTP client with `httpclient.NewHTTPClient` and `httpclient.NewRateLimitedClient`. `internal/connector/shared/httpclient/http_client.go` lines 36 to 53 and 63 to 71. `Do` waits on the limiter with `ctx` and returns that error. Lines 24 to 28.
+The two arena sketches and the three required shapes were compared. The cross-judge did not run. Appendix C says why. The base is the concrete HTTP helper and the Union type in package `union`. The shared `Client` interface is grafted on because the operator required it and the scratch compile showed a slice of one result type works.
 
-Give the scraper its own `RateLimitedClient`. `NewGISSource` builds a separate one for GIS. `gis.go` lines 69 to 70. The two sources do not share a limiter. `main` passes the scraper's requests-per-second in the scrape config. The scrape package does not call `os.Getenv`. No Go file calls `os.Getenv` today.
+**(a) loses as the whole design, and its one method stays.** A shared `Scrape(ctx, Request) (Result, error)` is what `main` calls. The candidates rejected an exported interface because one production client does not earn a port, and because a `Raw` field leaks bytes. The operator asked for the interface now, and for raw bytes or a hash so a later parse can run again. `Result.Raw` is that payload. It is not an `http.Response`. The fixture client and `WebSource` are two implementations, so the interface is not a port with a single deleted body. Per laziness protocol, the interface has one method. Per subtract before you add, the registry stays out.
 
-`NewRateLimitedClient` substitutes 1 when the rate is 0, and it passes a negative rate through. `http_client.go` lines 63 to 67. `NewGISSource` clamps `<= 0` to 1 before the call. `gis.go` lines 65 to 67. The scrape constructor does the same clamp, in the scrape package, before `NewRateLimitedClient`.
+**(b) loses as the caller's API.** A public `Fetcher` plus a public `Parser` makes `main` fetch and then parse. The pure parser stays, unexported, so golden files and fuzz hit a function over bytes. `DoRetry` hides status, retry, `Retry-After`, and the body cap. Per boundary discipline, status is classified at the HTTP edge and `parse` does not see `*http.Response`.
 
-The rate value itself waits on the open question of what the site allows. Default it to 1 request per second in the config constructor, matching the GIS default, and override it from `main` when the limit is known.
+**(c) loses.** `Scraper[T any]` compiles for one `T` and does not compile for a slice of two result types. The probe output is in Appendix A. A second site with a different `T` cannot sit in one list. `Result` is one type, so a second site implements `Client` without a type parameter. Per type system discipline, the county id is `soil.CountyID`, not a second string type and not a type parameter.
 
-## Where scraped fields are stored
+**A child package `internal/connector/union/scrape` loses.** That package name collides with `internal/scrape` once both are imported. The child that imports parent `union` cannot be imported back by the parent. `WebSource` stays in package `union`, which is the directory the operator named.
 
-County GIS leftovers stay in `parcels.source_extras`. That column is `JSONB NOT NULL DEFAULT '{}'`. `db/migrations/000001_init_schema.sql` line 68. After Step 5 of the removal plan, the Go value is a `json.RawMessage` filled by the county translator, not a struct field per county.
+**A registry or `init` loses.** One site does not need a plugin list. `main` calls `NewWebSource`. The audit and the operator agree on that point. The audit's "interface beside the consumer" is why the old plan put `parcelScraper` in package `union`. The operator overrode the package. The consumer is `main`, which cannot hold the interface, so the interface lives in `internal/scrape` and `main` does not import it. `main` imports `union`.
 
-Scraped fields do not go in that column, and they do not go on `UnionParcelExtras`. They are a different source. The parcels unique key is `(county_id, source_name, source_parcel_id)` (migration line 73), which would allow a second `parcels` row. Do not use a second `parcels` row for the scraper. `shape` is `GEOMETRY(Geometry, 3857)` (line 62). A scrape has no geometry in this design, and a second parcel row would still invite someone to hide the scrape JSON in that row's `source_extras`.
+**Retries inside `RateLimitedClient.Do` lose.** GIS would start retrying. `DoRetry` is the scraper path. Each `WebSource` builds its own limiter. Per separate before serializing shared state, the GIS limiter and the scrape limiter are different values.
 
-Add a new Goose migration. Do not edit `000001` for this table. The table is:
+**Putting the interface in package `connector` loses.** `union` already imports `connector`. A `connector` type that named a Union record would cycle. `Client` does not name a Union type.
 
-- `county_id TEXT NOT NULL`
-- `source_name TEXT NOT NULL`, the scraper's own name, distinct from `"union_county_gis"` (`gis.go` line 79)
-- `source_parcel_id TEXT NOT NULL`
-- `fetched_at TIMESTAMPTZ NOT NULL`
-- `document JSONB NOT NULL`, the JSON form of `scrape.Record`
-- unique `(county_id, source_name, source_parcel_id)`
+## Appendix C. Risks
 
-No `shape` column. The storage SRID rule does not apply to this table.
+`control-cli` is not in this repo. Live lanes drive `go test`, `curl`, and `psql`, and they save a text render at the `.png` path. A lane that cannot draw still returns that file.
 
-`parcel_sales` references `parcels(id)` and has no county column (migration lines 94 to 97). Do not hang scraped documents off `parcel_sales`.
+This repo has no `pstack/` tree. `git show origin/main:pstack/...` fails until those files exist on trunk. The owner reads the installed poteto-mode skill and records that fallback. `deslop` was not installed in the planning session. The owner runs it when it is installed.
 
-Promoting a scraped value into a shared `parcels` column, such as `year_built`, is a merger change. `ParcelMerger.Merge` returns `parcels[0]` whenever more than one parcel is present. `internal/connector/union/merger.go` lines 23 to 31. The comment above that function describes an authority order the code does not implement. Do not write scraped values onto the GIS row to get around the stub. Leave promotion for a later change that replaces the "first parcel wins" test in `merger_test.go` with literal field expectations.
+Claude seats for the arena cross-judge and for interrogate were rejected for weekly usage. The judge was skipped. One attack run may still land after this file. If it proves a break, edit this plan before execution starts.
 
-There is no repository in this module yet. The migration can land before the writer. The `httptest` work does not need a database.
+soil-3 still says to create `db/migrations/000002_soil.sql`. That number is already `000002_parcels_storage_srid.sql`. scrape-3 must not take `000002`. If soil-3 lands first and takes `000003`, scrape-3 takes the next integer.
 
-## Errors and cancellation
+`WebSource` has a fixture branch and a later HTTP branch in one method. Delete the fixture branch in the same change that sets a real `BaseURL`. Leaving both is two ways to scrape.
 
-Copy the status check Spatialist had, not the hook that swallowed it.
+`parcel_pages.parcel_id` does not reference `parcels.id`. A direct `Save` can store a page for a parcel row that does not exist. The hook calls `Save` only after persist-1 has stored the kept parcel. The order is the guard. There is no foreign key.
 
-- Status outside 200 to 299 is an error that includes the status code. `spatialist.go` lines 97 to 98 did this. `queryTotalParcels` does not. `gis.go` lines 173 to 185. The scraper follows the Spatialist check.
-- Invalid JSON is an error wrapped with `%w`.
-- `EnrichParcelIDs` returns the first scrape error to the hook. The hook returns that error. `Run` returns it (`parcel_id_importer.go` lines 65 to 71). Do not log the error and return nil. That is `main.go` lines 74 to 81, and Step 2 of the removal plan deletes it.
-- Before each parcel id, if `ctx.Err()` is set, return `ctx.Err()` and do not start the request. Pass that same `ctx` into `http.NewRequestWithContext` and into `RateLimitedClient.Do`.
-- A cancelled batch is a single error. Do not also append a "missing record" error per id. `SpatialistEnricher` did that at `spatialist_enricher.go` lines 74 to 87.
-- One failed parcel fails the hook call. The import stops. A later change can record a per-parcel failure and continue, and that change has to say so in the hook's contract. This plan does not.
+The default `main` path does not call `Scrape`. A later edit that sets `Enabled` true with an empty `BaseURL` would return `ErrNotFound` for real GIS ids and stop the import. Keep `Enabled` false until `parcelURL` is real.
 
-## Tests and fixtures
+`httpclient` tests that pass `server.Client()` do not exercise `NewHTTPClient` timeouts. scrape-2's `DoRetry` tests must use a client that honors the test server's close, or a cancel will look like a retry.
 
-Tests sit in `internal/connector/union/scrape`, next to the client. Use `httptest`. Cover constructor rejection of an empty URL, HTTP 500, a 200 body that is not the expected document, a successful parse into `scrape.Record`, and a cancelled `ctx` that does not issue the request.
+Package `scrape` imports `internal/soil`. soil-1 must be on trunk first. If soil-1's method is not `Valid() bool`, scrape-1 matches the method soil-1 shipped.
 
-Put fixtures in `internal/connector/union/scrape/testdata/`. `docs/examples/union-gis-parcel-09336350.json` is a GIS example, and no test loads it. Do not point the scraper tests at it.
+The 10 minute timeout in `main` is a risk once scraping is enabled. It is open question 6.
 
-Package `union` tests use a handwritten fake `parcelScraper` for `EnrichParcelIDs`: success, a returned error, and a cancelled context. They do not start an HTTP server.
+## Appendix D. Links and reading list
 
-`go test ./...` stays hermetic. No Docker and no database. The migration is checked by reading the SQL file until a Go package opens Postgres.
+Read before editing.
 
-## Prerequisites
+- `main.go` lines 13 to 47.
+- `internal/connector/shared/httpclient/http_client.go` lines 18 to 72.
+- `internal/connector/shared/httpclient/http_client_test.go` lines 131 to 192.
+- `internal/connector/union/gis.go` lines 25 to 30, 65 to 70, and 213 to 242.
+- `internal/connector/datasource.go` lines 8 to 15 and 28 to 49.
+- `internal/connector/batch.go` lines 6 to 14.
+- `internal/service/parcel_id_importer.go` lines 10 to 12 and 63 to 71.
+- `internal/models/gis_parcel.go` lines 13 to 31.
+- `db/migrations/000001_init_schema.sql` lines 5 to 73.
+- `db/migrations/000002_parcels_storage_srid.sql`.
+- `plans/soil-layer.md` soil-1, soil-3, and persist-1.
+- `plans/spatialist-removal-and-critical-fixes.md` line 5.
+- Effective Go and Go Code Review Comments. Small interfaces, accept interfaces and return structs, define the interface at the consumer, `context.Context` first, wrap with `%w`, and check sentinels with `errors.Is`.
 
-Do these before the scraper package exists. The steps and the pass/fail checks are in [plans/spatialist-removal-and-critical-fixes.md](spatialist-removal-and-critical-fixes.md).
+scrape-1 and scrape-5 get `pstack/skills/how/SKILL.md` before the import list is edited, because the question is which package owns `Client`. scrape-2 gets `pstack/skills/interrogate/SKILL.md` on the retry loop before the code-ready swarm, because a wrapped `context.Canceled` that also matches `ErrTransient` is the break to look for. The execution trail follows `pstack/skills/show-me-your-work/SKILL.md`.
 
-**Prerequisite. Spatialist removal (that plan, Steps 1 and 2).** `SingleParcelFetcher`, `BatchEnricher`, and the Spatialist package are gone. `rg -n "spatialist|SingleParcelFetcher|BatchEnricher" --glob '*.go'` prints nothing. `go test -race ./...` and `make build` exit 0. Starting the scraper before this recreates the port the old todo asked for.
+Principles applied while choosing the shape. Exhaust the design space, by compiling three shapes and reading two arena sketches. Laziness protocol and subtract before you add, by refusing a registry. Foundational thinking, by fixing `Request` and `Result` before the retry loop. Type system discipline, by using `soil.CountyID` and sentinels. Boundary discipline, by parsing bytes in a pure function. Model the domain, by one `Result` for an unknown page. Make operations idempotent, by the upsert key. Sequence verifiable units, by five PRs with separate files. Test behavior not implementation, by `Conform` on `Client`. Explain the number, by separating the loopback probe from the 1 second hang gate. Redesign from first principles, by not keeping `parcelScraper` in package `union`. Separate before serializing shared state, by one limiter per scraper. Encode lessons in structure, by the compile-time assertion and the import test. Guard the context window, by reading the tree through explorers. Never block on the human, by picking the interface the operator already required.
 
-**Prerequisite. Union extras leave `internal/models` (that plan, Step 5).** `ParcelSourceExtras` becomes `json.RawMessage`. `rg -n "UnionParcelExtras|UnionGISParcel" internal/models` prints nothing. The scraper then has nowhere convenient to hang a `Scrape` pointer on the shared model. County GIS leftovers and scraped documents stay in different stores.
+## Appendix E. Decisions recorded
 
-**Prerequisite before any insert into `parcels.shape`. Storage SRID rule (that plan, Step 6).** Storage SRID stays 3857. Writers transform into it. `source_srid` is the native code. The comment migration exists, and `translator_test.go` expects the literal `3857`. This is not a blocker for `go test` of package `scrape`, because the scrape table has no geometry. It is a blocker for persisting `GISParcel.Geometry`.
+The operator required a generic interface in a shared package, neutral to county and site, and a site scraper per website. Union is the first. It lives in `internal/connector/union`. `main` wires it. There is no `init` registry. That decision overrides the previous plan, which put `parcelScraper` in package `union`.
 
-The GIS HTTP status check and the sale/owner type alignment are High findings in the removal plan (Steps 3 and 4). They are not blockers for the scrape package. Land them before a GIS writer exists. The scraper does not read `TaxOwnerID1` or `ParcelSale`.
+The operator required solid tests. Each implementation PR has unit, live, and perf boxes. The patterns are table-driven tests, `httptest`, golden files with `-update`, `Conform`, fuzz, `-race`, a compile-time assertion, `go vet`, `staticcheck`, and a coverage floor per package.
 
-## Land alongside: explicit county list in `main`
+`CountyID` stays soil-1's type. This plan does not redefine it. [The soil plan PR](https://github.com/JustinMonty20/landman/pull/7) is merged. The Go type is not on `main`.
 
-This is not a blocker for the scrape package tests. Land it in the same change that wires `EnrichParcelIDs` into `main`. A one-element slice does not, by itself, make a second county cheaper. The extras move does. The slice is how the scraper and the GIS source stay visible in one function.
+Scraped data goes in `parcel_pages`, keyed by county id, parcel id, and source name, with `fetched_at`, `raw`, and `raw_sha256`. It does not go in `parcels.source_extras`. persist-1 writes parcels first. The scraper never inserts parcels. `Save` is an upsert.
 
-`main` currently calls `union.NewGISSource` directly. `main.go` lines 20 to 23. There is no `func init()` under `internal/`. `docs/ARCHITECTURE.md` still says to add `register.go` with `init()` and a blank import. Lines 441 to 444 and the sample at lines 476 to 492.
+No registry until a second site exists. The fixture client is the test double, not a plugin.
 
-1. Add a function in `main` that returns a slice of county runs. Each element carries the county id, the `connector.DataSource`, and, once this feature is wired, the scrape client. Union is the only element.
-2. `main` loops over that slice for the GIS run and the scrape hook. The Union constructor is inside the function, not in `init()`.
-3. Replace the "When Adding a New County" steps and the `init()` sample in `docs/ARCHITECTURE.md` (lines 436 to 444 and 473 to 493) with the slice. A new county adds a constructor call in that function. It does not add `register.go`.
-4. Keep config structs in the county or scrape package. `main` passes them in. `DefaultGISSourceConfig` already returns a struct by value. `gis.go` lines 24 to 30.
+The website stays unknown. scrape-1 ships the interface and the fixture. scrape-5's default does not dial.
 
-Check:
-
-- `rg -n "func init\\(" --glob '*.go' internal` prints nothing.
-- `rg -n "func init\\(" docs/ARCHITECTURE.md` prints nothing.
-- `main.go` contains the slice function and names `union.NewGISSource` inside it.
-- `go test -race ./...` exits 0 with no database running.
-
-Skip the slice only while the scraper is still an unwired package under test. Add it when `main` starts calling `EnrichParcelIDs`.
-
-## Open questions
-
-These block the parser and the real URL. They do not block the interface, the `httptest` seams, or the migration shape.
-
-- Which site, and is the fetch a per-parcel lookup, a search, or a paginated listing? A paginated listing uses `BatchFetchSource` instead of `parcelScraper`, as specified above.
-- Which fields are retained on `scrape.Record`?
-- Does the site need auth, cookies, or anything beyond the shared HTTP client?
-
-## Steps
-
-### Step 1. Scrape package and the Union interface
-
-Prerequisite: removal plan Steps 1, 2, and 5 are green.
-
-1. Add `internal/connector/union/scrape` with a config struct (base URL, requests per second), `New` that rejects an empty URL and clamps a non-positive rate to 1, and `Scrape(ctx, parcelID)`.
-2. Build the client from `httpclient.NewHTTPClient` and `NewRateLimitedClient`. Use `http.NewRequestWithContext`. Return an error on status outside 200 to 299.
-3. Parse into `scrape.Record`. Until the field list is known, `Record` can hold the smallest set the first fixture needs, and the open question stays open. Do not store the retained fields as a map.
-4. Add `parcelScraper` and `EnrichParcelIDs` in package `union`. Sequential calls. Return `ctx.Err()` before the next id. Return the scrape error unchanged to the caller.
-5. Tests and `testdata/` as specified above. Do not wire `main` yet.
-
-Check:
-
-- `go test -race ./internal/connector/union/...` exits 0.
-- `rg -n "SingleParcelFetcher|BatchEnricher" --glob '*.go'` prints nothing.
-- `rg -n "type parcelScraper" --glob '*.go'` matches a file in `internal/connector/union` and does not match `internal/connector/single_fetcher.go`.
-- Package `scrape` does not import `internal/service`. Package `service` does not import `internal/connector/union`.
-
-### Step 2. Wire the hook from the county list
-
-Prerequisite: Step 1. Land the county-list section in this same change.
-
-1. Construct the scrape client in the county slice in `main`, next to `union.NewGISSource`.
-2. From the GIS batch hook, call `union.EnrichParcelIDs` with the hook's `ctx` and the parcel ids. Return its error.
-3. Print a count only after a nil error.
-
-Check:
-
-- `go test -race ./...` exits 0.
-- Cancelling the hook context is covered by the `EnrichParcelIDs` test from Step 1.
-- `rg -n "func init\\(" --glob '*.go' internal docs/ARCHITECTURE.md` prints nothing.
-
-### Step 3. Migration for the scrape table
-
-Prerequisite: Step 1. Can land in parallel with Step 2. The writer can wait.
-
-1. Add a new file under `db/migrations` with the columns and unique key in "Where scraped fields are stored". Up and down. No geometry column. No edit to `parcels.source_extras`.
-2. Do not add a Go writer in this step unless Step 2 is already done and the field list is known. A writer that inserts the JSON of `scrape.Record` belongs with the known fields.
-
-Check:
-
-- `rg -n "source_extras" db/migrations` still matches the `parcels` column in `000001_init_schema.sql` and does not match the new scrape table as its document column. The new table's JSON column is `document`.
-- `rg -n "GEOMETRY" db/migrations` does not match the new file.
-- `go test -race ./...` exits 0 with no database running.
-
-### Step 4. Do not merge scraped fields into the GIS row yet
-
-This step is a hold, not a code change. `ParcelMerger` returns the first parcel. `merger.go` lines 30 to 31. Scraped JSON stays in the scrape table.
-
-Revisit only when a named scraped field must occupy a shared `parcels` column. That change replaces the first-wins behavior and its test, and it still does not write the scrape document into `source_extras`.
-
-Check, for as long as this hold stands:
-
-- `rg -n "source_extras" internal/connector/union/scrape` prints nothing.
-
-## Done
-
-Steps 1 through 3 are green, Step 4's hold is still true, and the three prerequisites in the removal plan are green. `go test -race ./...`, `go build ./...`, and `make build` exit 0. Default `go test` does not require Postgres.
+The cross-judge was skipped after Claude weekly usage rejected `claude-opus-5-5-xhigh` and `claude-sonnet-5-5-high`. Both arena sketches were written by Grok. The pick is recorded in Appendix B.
