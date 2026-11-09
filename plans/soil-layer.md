@@ -6,7 +6,7 @@ Union County is the first adapter. It reads MapServer layer 197. A polygon is no
 
 Stored map geometry stays `GEOMETRY(Geometry, 3857)`. Overlap acres are computed in EPSG:2264. Soil never inserts a parcel. The PRs are filter-1, soil-1, persist-1, soil-2, soil-3, and soil-4. The operator lands each one.
 
-The county ingest uses one HTTP client at one request per second. It sends the vacant filter on the parcel query, pages 2000 rows, and writes each page in that loop. The overlap insert is one SQL statement.
+The county ingest uses one HTTP client at one request per second. It downloads every layer 215 parcel, pages 2000 rows, and writes each page in that loop. `likely_vacant` is a column on the parcel. The overlap insert is one SQL statement over every stored shape.
 
 ## How to read this
 
@@ -44,6 +44,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 flowchart LR
   filter1[filter-1] --> persist1[persist-1]
   soil1[soil-1] --> soil3[soil-3]
+  persist1 --> soil3
   soil1 --> soil2[soil-2]
   persist1 --> soil2
   persist1 --> soil4[soil-4]
@@ -52,11 +53,11 @@ flowchart LR
 ```
 
   - [ ] filter-1 and soil-1 are independent and first. Both branch from `main`. county-1 is already on trunk, so soil-1 does not wait. If `internal/county` is missing at program start, stop soil-1 and wait for county-1. Do not declare a second county type in this program.
-  - [ ] persist-1 after filter-1. It is the PR that pages vacant parcels at 2000 rows.
-  - [ ] soil-3 after soil-1. It does not edit `gis.go`.
+  - [ ] persist-1 after filter-1. It pages every layer 215 parcel at 2000 rows and adds `likely_vacant`.
+  - [ ] soil-3 after soil-1 and persist-1. persist-1 adds a migration, and soil-3 takes the next prefix after that file. soil-3 does not edit `gis.go`.
   - [ ] soil-2 after soil-1 and persist-1. persist-1 and soil-2 both edit `gis.go` and `gis_test.go`, so soil-2 waits. Soil pages use the client persist-1 already rate limits.
   - [ ] soil-4 after persist-1, soil-2, and soil-3.
-- [ ] Hold the file boundaries. filter-1 touches only `internal/connector/union/vacant_filter.go` and `internal/connector/union/vacant_filter_test.go`. soil-1 touches only `internal/soil/polygon.go`, `internal/soil/mapunit.go`, `internal/soil/overlap.go`, `internal/connector/union/soil_translate.go`, `internal/connector/union/soil_translate_test.go`, and `internal/connector/union/testdata/soil/`. persist-1 touches only `internal/service/parcel_id_importer.go`, `internal/service/parcel_id_importer_test.go`, `internal/parcelstore/parcels.go`, `internal/parcelstore/parcels_test.go`, `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, and `main.go`. If uuid-2 already created other files in `internal/parcelstore/`, persist-1 does not edit them. soil-2 touches only `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, `internal/connector/union/soil_fetch.go`, and `internal/connector/union/testdata/soil/layer197-page.json`. soil-3 touches only the one new `db/migrations/<prefix>_soil.sql` file named in its Files box. soil-4 touches only `internal/soil/join.go`, `internal/soil/join_test.go`, `internal/soil/names.go`, `internal/soil/names_test.go`, and `main.go`. No PR adds a join worker pool.
+- [ ] Hold the file boundaries. filter-1 touches only `internal/connector/union/vacant_filter.go` and `internal/connector/union/vacant_filter_test.go`. soil-1 touches only `internal/soil/polygon.go`, `internal/soil/mapunit.go`, `internal/soil/overlap.go`, `internal/connector/union/soil_translate.go`, `internal/connector/union/soil_translate_test.go`, and `internal/connector/union/testdata/soil/`. persist-1 touches only `internal/service/parcel_id_importer.go`, `internal/service/parcel_id_importer_test.go`, `internal/parcelstore/parcels.go`, `internal/parcelstore/parcels_test.go`, `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, `main.go`, and the one new `db/migrations/<prefix>_parcels_likely_vacant.sql` file named in its Files box. If uuid-2 already created other files in `internal/parcelstore/`, persist-1 does not edit them. soil-2 touches only `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, `internal/connector/union/soil_fetch.go`, and `internal/connector/union/testdata/soil/layer197-page.json`. soil-3 touches only the one new `db/migrations/<prefix>_soil.sql` file named in its Files box. soil-4 touches only `internal/soil/join.go`, `internal/soil/join_test.go`, `internal/soil/names.go`, `internal/soil/names_test.go`, and `main.go`. No PR adds a join worker pool.
 - [ ] Hold the review gate. No PR in this program changes an interaction. None wait for screenshots in chat before the operator decides to land them.
 
 ### PR mechanics, for every PR
@@ -66,7 +67,7 @@ flowchart LR
 - [ ] Run the repo's lint and typecheck once before the PR-facing push. Push with hooks on.
 - [ ] Run `/deslop` before each commit and `/no-comments` before review.
 - [ ] Triage every Bugbot and security-reviewer comment per `pstack/skills/poteto-mode/references/bugbot-triage.md`.
-- [ ] Rebase onto current trunk before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, on a CI failure that comes from a change on trunk, or when a known concurrent change to the same files lands. persist-1 rebases onto filter-1. soil-3 rebases onto soil-1. soil-2 rebases onto soil-1 and persist-1. soil-4 rebases onto persist-1, soil-2, and soil-3 after those parents are stacked.
+- [ ] Rebase onto current trunk before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, on a CI failure that comes from a change on trunk, or when a known concurrent change to the same files lands. persist-1 rebases onto filter-1. soil-3 rebases onto soil-1 and persist-1. soil-2 rebases onto soil-1 and persist-1. soil-4 rebases onto persist-1, soil-2, and soil-3 after those parents are stacked.
 
 ### Verdict and merge, for every PR
 
@@ -94,7 +95,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 
 **Build.**
 
-- [ ] Keep a parcel when `YEARBLT` or `SQFT` is numeric 0. Appendix A measured that set at 25,884 layer 215 features.
+- [ ] Return true when `YEARBLT` or `SQFT` is numeric 0. Appendix A measured that set at 25,884 layer 215 features. persist-1 stores that boolean on every parcel. This function does not remove rows from the layer 215 download.
 - [ ] Delete the `FMV_IMPRV` currency-string clause and the `RURAL ACREAGE TRACT` clause. Neither matches a live row. Do not add numeric `FMV_IMPRV = 0`. Do not add unconditional `LAND_TYPE = 'RURAL ACRES'`. Appendix A records why both would mark houses vacant.
 - [ ] Add table rows for numeric `FMV_IMPRV` 0 with `YEARBLT` 2025, for `RURAL ACRES` with `YEARBLT` 1997 and `SQFT` greater than 0, and for `RURAL ACRES` with `YEARBLT` 0. The first two are false. The third is true because the year is 0.
 
@@ -121,7 +122,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Wall time of the vacant filter test at trunk and at head. Trunk already has the test. The end state is the same live kept count of parcels with numeric year or sqft 0.
+- [ ] Metric. Wall time of the vacant filter test at trunk and at head. Trunk already has the test. The end state is the same live count of parcels with numeric year or sqft 0. That count is the flag, not the download.
 - [ ] Probe. `go test -race ./internal/connector/union/ -count=1 -run TestIsLikelyVacantGISRecord` at trunk, then head, then trunk.
 - [ ] Baseline. Record the trunk duration first.
 - [ ] Rule. Fail if the head test takes 30 seconds or longer. Do not report a ratio against trunk. The live kept count is not a test timer.
@@ -193,7 +194,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 - [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
 - [ ] The owner does not merge. The operator lands soil-1 beside filter-1. Neither waits on the other.
 
-## Persist kept parcel shapes (persist-1)
+## Persist every parcel shape (persist-1)
 
 **Depends on.** filter-1.
 
@@ -206,29 +207,32 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 - [ ] Create `internal/parcelstore/parcels.go` when the file is absent. Edit it when uuid-2 has already created it.
 - [ ] Create `internal/parcelstore/parcels_test.go` when the file is absent. Edit it when it already exists.
 - [ ] Edit `main.go`.
+- [ ] Create `db/migrations/<prefix>_parcels_likely_vacant.sql`. List `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. On main at `d4654f6` the highest prefix is `000003`. Do not assume `000004` is free. uuid-1 plans `db/migrations/000004_parcel_sales_uuid_id.sql`. If that file exists, use the next integer. Do not edit `000001`, `000002`, `000003`, or uuid-1's file.
 - [ ] Do not edit `internal/parcelstore/sales.go` or any other uuid-2 file. Do not write `parcel_sales` from this PR. Do not add `SoilQueryURL` or `FetchSoilPolygons`. soil-2 adds those after this PR.
 
 **Build.**
 
 - [ ] Add an optional kept-record hook on `ParcelIDImportService`. Call it with the filtered `[]connector.RawRecord`, geometry included, before `extractParcelIDs` drops `RawData`. `internal/service` does not import `union` or `parcelstore`.
-- [ ] Send the parcel query as `where=YEARBLT = 0 OR SQFT = 0`, `orderByFields=OBJECTID`, and `resultRecordCount=2000`. `FetchBatches` currently hardcodes `where=1=1` and `ResultRecordCount: s.batchSize`. `gis.go` lines 123 to 129. `ArcGISParams` has no order field. `gis.go` lines 40 to 49. Add `orderByFields` and let the import pass the where and the page size. `DefaultGISSourceConfig.BatchSize` stays 50 so the existing default test still locks it. The import must not pass 50. `maxRecordCount` on layer 215 is 2000, and the OID field is `OBJECTID`. Appendix A.
-- [ ] Keep `IsLikelyVacantGISRecord` as a guard on each returned record. A row the server should not have sent, such as `YEARBLT` 1998, is not staged. Do not treat a null as numeric zero. Appendix A measured 1,961 rows where both fields are null, and those rows are outside the server count of 25,884. Two rows have null `YEARBLT` and `SQFT` 0. They stay, because `SQFT` is 0, and the Go guard keeps them too.
+- [ ] Send the parcel query as `where=1=1`, `orderByFields=OBJECTID`, and `resultRecordCount=2000`. Do not put `YEARBLT = 0 OR SQFT = 0` in the fetch `where`. `FetchBatches` already uses `where=1=1` and `ResultRecordCount: s.batchSize`. `gis.go` lines 123 to 129. `ArcGISParams` has no order field. `gis.go` lines 40 to 49. Add `orderByFields` and pass page size 2000 from the import. `DefaultGISSourceConfig.BatchSize` stays 50 so the existing default test still locks it. The import must not pass 50. `maxRecordCount` on layer 215 is 2000, and the OID field is `OBJECTID`. Appendix A. The layer count is 118,202, so the import is 60 feature pages plus one count query.
+- [ ] Call `IsLikelyVacantGISRecord` on every returned record and store the boolean in `likely_vacant`. A false result is still stored. Do not treat a null as numeric zero. Appendix A measured 1,961 rows where both fields are null. Those rows are stored with `likely_vacant` false. Two rows have null `YEARBLT` and `SQFT` 0. They are stored with `likely_vacant` true, because `SQFT` is 0. Tax and later views filter on the column. This plan does not change which parcels those views select.
+- [ ] Add `parcels.likely_vacant BOOLEAN NOT NULL DEFAULT false` and `CREATE INDEX parcels_likely_vacant_idx ON parcels (county_id, likely_vacant)`. `Down` drops the index and the column. It does not drop `parcels`. The default covers rows that already exist before the import sets the flag.
 - [ ] After the pages, if the number of features does not equal the count query, return an error. A body with no numeric `count` is already an error. `gis.go` lines 172 to 175. The page loop today returns nil even when the totals differ. `gis.go` lines 132 to 158. Change that. Stop early when a page is shorter than 2000, then still check the sum.
 - [ ] Write each page inside the existing page loop. `FetchBatches` calls `onBatch`, and only then requests the next page. `gis.go` lines 148 to 154. Keep that order. `onBatch` inserts that page's part rows before it returns. Do not collect every page in memory and write once at the end. Do not start the next request before `onBatch` returns. Do not add a prefetch goroutine or a pipeline type.
-- [ ] Put the part rows in a `TEMP` table on the import connection. Columns are `source_parcel_id` and `shape`. No migration. After the last page, `ST_Multi(ST_Union(shape))` grouped by `source_parcel_id` upserts `parcels`. The part inserts and that union share one transaction. A cancel rolls it back. Parts of one PID that arrive on different pages meet in the temp table. 109 kept PIDs have more than one feature.
-- [ ] Add `parcelstore.SaveParcel` for the final upsert. Insert the parcel and omit `id`. On conflict on `(county_id, source_name, source_parcel_id)`, update the mapped columns, including `shape`, and do not set `id`. Return the stored `parcels.id`. Do not delete a parcel that this run did not see. A second run replaces `shape` with this run's union and keeps `parcels.id`.
-- [ ] Return an error when a kept record has no rings. Do not insert a null `shape`. If the union fails, return that error and commit nothing.
-- [ ] `main` builds one `GISSource`, leaves `RateLimit` at 1, and passes the vacant where and page size 2000. Do not call `NewRateLimitedClient` a second time. Do not raise the limiter. `main` still cancels after 10 minutes. Appendix A shows the new HTTP budget fits in that cancel, so this PR does not change the deadline.
+- [ ] Put the part rows in a `TEMP` table on the import connection. Columns are `source_parcel_id`, `shape`, and `likely_vacant`. After the last page, `ST_Multi(ST_Union(shape))` grouped by `source_parcel_id` upserts `parcels`. `likely_vacant` for that row is true when any part was true. The part inserts and that union share one transaction. A cancel rolls it back. Parts of one PID that arrive on different pages meet in the temp table. Appendix A counts the PIDs that are more than one feature.
+- [ ] Add `parcelstore.SaveParcel` for the final upsert. Insert the parcel and omit `id`. On conflict on `(county_id, source_name, source_parcel_id)`, update the mapped columns, including `shape` and `likely_vacant`, and do not set `id`. Return the stored `parcels.id`. Do not delete a parcel that this run did not see. A second run replaces `shape` and `likely_vacant` with this run's values and keeps `parcels.id`.
+- [ ] Return an error when a record has a PID and no rings. Do not insert a null `shape`. If the union fails, return that error and commit nothing.
+- [ ] When `PID` is null, do not insert a row and do not fail the page. Appendix A measured 1,961 such features. Each also has null `YEARBLT`, `SQFT`, `LAND_TYPE`, and `mapped_acres`. `source_parcel_id` cannot be null under the natural key. The other rows on that page are still stored. `likely_vacant` is not why these rows are skipped. The numeric-zero rule is false for them because both fields are null.
+- [ ] `main` builds one `GISSource`, leaves `RateLimit` at 1, and passes page size 2000 with `where=1=1`. Do not call `NewRateLimitedClient` a second time. Do not raise the limiter. `main` still cancels after 10 minutes. Appendix A shows the request floor fits in that cancel, so this PR does not change the deadline.
 - [ ] Return a save error from the hook. Do not log it and return nil. Do not write `soil_polygon_parcels`, `soil_polygons`, or `soil_map_units` from this PR.
 - [ ] The constructor takes a connection string argument. The package does not read the environment. There is no other plan file for the shape writer. uuid-2 may already own sale rows in the same package. This section is the parcel-shape writer.
 
 **You see.**
 
-- [ ] A fixture whose count is 4500 sends `where=YEARBLT = 0 OR SQFT = 0`, `orderByFields=OBJECTID`, and `resultRecordCount=2000`, then three feature pages and one count query. Two kept features with the same PID become one `parcels` row at SRID 3857, and a second save keeps `parcels.id`.
+- [ ] A fixture whose count is 4500 sends `where=1=1`, `orderByFields=OBJECTID`, and `resultRecordCount=2000`, then three feature pages and one count query. A house and a numeric-zero parcel are both rows, with `likely_vacant` false and true. Two features with the same PID become one `parcels` row at SRID 3857, and a second save keeps `parcels.id`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `parcel_id_importer_test.go` gains a case that the kept-record hook receives geometry and the id hook still receives only strings. It also gains a case that a kept record with no rings returns an error and inserts nothing. `gis_test.go` gains the vacant where, `OBJECTID`, and page size 2000 on the import path. Run `go test -race ./internal/service/ ./internal/parcelstore/ ./internal/connector/union/ -count=1`.
+- [ ] `parcel_id_importer_test.go` gains a case that the shape hook receives geometry for a house and for a numeric-zero parcel, and the id hook still receives only strings. It also gains a case that a record with no rings returns an error and inserts nothing, and a case that a null `PID` is skipped while the other record on the page is stored. `gis_test.go` gains `where=1=1`, `OBJECTID`, and page size 2000 on the import path, and asserts the vacant clause is absent. Run `go test -race ./internal/service/ ./internal/parcelstore/ ./internal/connector/union/ -count=1`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
@@ -236,19 +240,19 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 - [ ] Lane 2. Save one kept parcel whose rings match the translator fixture. Omit `id` on the insert. Save `/tmp/swarm-persist-1/worker-2/insert-shape.png`. Pass when `ST_SRID(shape)` is 3857, `source_parcel_id` is the PID, and `id` is a UUID.
 - [ ] Lane 3. Save the same PID again with a different `mapped_acres`. Do not set `id`. Save `/tmp/swarm-persist-1/worker-3/upsert.png`. Pass when the table still has one row, `id` is unchanged, and `mapped_acres` matches the second save.
 - [ ] Lane 4. Save two kept features with the same PID and disjoint squares, on two pages. Save `/tmp/swarm-persist-1/worker-4/two-parts.png`. Pass when one row exists and `ST_Area` of the stored shape equals the sum of the two squares.
-- [ ] Lane 5. Serve a count of 4500 and three pages of 2000, 2000, and 500. Save `/tmp/swarm-persist-1/worker-5/page-budget.png`. Pass when the log shows one count query and three feature pages, every feature URL contains `where=YEARBLT = 0 OR SQFT = 0`, `orderByFields=OBJECTID`, and `resultRecordCount=2000`, and none send `resultRecordCount=50`.
+- [ ] Lane 5. Serve a count of 4500 and three pages of 2000, 2000, and 500. Save `/tmp/swarm-persist-1/worker-5/page-budget.png`. Pass when the log shows one count query and three feature pages, every feature URL contains `where=1%3D1` or `where=1=1`, `orderByFields=OBJECTID`, and `resultRecordCount=2000`, and none send `YEARBLT` or `resultRecordCount=50`.
 - [ ] Lane 6. Return a count of 10 and pages whose features sum to 9. Also serve a count body with no `count` field. Save `/tmp/swarm-persist-1/worker-6/short-count.png`. Pass when both cases return an error and the table gains no row.
 - [ ] Lane 7. Serve two pages. Save `/tmp/swarm-persist-1/worker-7/page-loop.png`. Pass when the part insert for page 1 has finished before page 2's request is sent, and the import does not start a second request while that insert is still running.
-- [ ] Lane 8. Put one `YEARBLT` 1998 record on a page the server returned. Save `/tmp/swarm-persist-1/worker-8/go-guard.png`. Pass when that PID is not staged and a `SQFT` 0 record on the same page is staged.
+- [ ] Lane 8. Put one `YEARBLT` 1998 record, one `SQFT` 0 record, and one record with a null `PID` on the same page. Save `/tmp/swarm-persist-1/worker-8/both-stored.png`. Pass when the two PIDs are stored, `likely_vacant` is false on the 1998 row and true on the zero row, the null `PID` has no row, and the import returns nil.
 - [ ] Lane 9. Save two PIDs, then save only the first PID again. Save `/tmp/swarm-persist-1/worker-9/no-delete.png`. Pass when the omitted PID is still present and its `id` is unchanged.
 - [ ] Lane 10. Cancel the context after page 1 is parsed and before the commit. Save `/tmp/swarm-persist-1/worker-10/cancel.png`. Pass when no `parcels` row is committed.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Feature-page count for a fixture whose server count is 4500, the `resultRecordCount` on those URLs, the one-parcel upsert time, and whether `parcels.id` changed. Trunk pages `where=1=1` at batch size 50 and has no writer. The end state is a vacant import at page size 2000 and one stable parcel row.
-- [ ] Probe. The httptest counter around the import, at head, after a trunk run that records `where=1=1` and batch size 50. Then time the one-parcel upsert at head and run it a second time. Do not download the county inside this probe. The county arithmetic is in Appendix A.
-- [ ] Baseline. Record trunk as batch size 50, `where=1=1`, and no writer.
-- [ ] Rule. Fail if the 4500 fixture issues more than 4 HTTP calls, if any feature URL sends `resultRecordCount` other than 2000, or if any import URL sends `where=1=1`. Fail if the one-parcel upsert takes 5 seconds or longer, if the second upsert leaves a row count other than 1, or if `parcels.id` changes. Do not report a ratio against trunk. The 10 minute cancel stays. Appendix A shows 21 county HTTP calls fit inside it.
+- [ ] Metric. Feature-page count for a fixture whose server count is 4500, the `resultRecordCount` on those URLs, whether any URL filters on `YEARBLT`, the one-parcel upsert time, and whether `parcels.id` changed. Trunk pages `where=1=1` at batch size 50 and has no writer. The end state is an import of every fixture parcel at page size 2000 and one stable parcel row.
+- [ ] Probe. The httptest counter around the import, at head, after a trunk run that records batch size 50. Then time the one-parcel upsert at head and run it a second time. Do not download the county inside this probe. The county arithmetic is in Appendix A.
+- [ ] Baseline. Record trunk as batch size 50 and no writer.
+- [ ] Rule. Fail if the 4500 fixture issues more than 4 HTTP calls, if any feature URL sends `resultRecordCount` other than 2000, or if any import URL sends `YEARBLT` or `SQFT` in `where`. Fail if the one-parcel upsert takes 5 seconds or longer, if the second upsert leaves a row count other than 1, or if `parcels.id` changes. Do not report a ratio against trunk. The 10 minute cancel stays. Appendix A shows 68 county HTTP calls fit inside it.
 
 **Review gate.** None. persist-1 is not review-gated.
 
@@ -276,7 +280,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 - [ ] Add `FetchSoilPolygons(ctx) ([]soil.Polygon, []soil.MapUnit, error)` on `GISSource`. Each polygon uses `county.Union`. Build the request with the existing `s.httpClient`. Do not call `NewRateLimitedClient` again.
 - [ ] Page with `resultOffset`, `resultRecordCount` 2000, and `orderByFields=OBJECTID_1`. Use the `orderByFields` field persist-1 added. Do not add a second copy of it. Do not page without the order. Do not use `GISSource.batchSize`. That value is 50 and would turn this pull into hundreds of requests.
 - [ ] Stop when a page returns fewer than 2000 features. If the pages do not add up to the count query, return an error. A body with no numeric `count` is an error. persist-1 makes the parcel pager fail that check. Use the same failure for soil pages. Do not restore the old nil return from `gis.go` lines 132 to 158. `queryTotalParcels` already returns an error when `count` is missing. `gis.go` lines 172 to 175. Keep that check.
-- [ ] Soil pages and parcel pages share `s.httpClient`. Run the soil loop, then the parcel loop, on that one client. Do not construct another rate limited client for layer 197, and do not raise `RateLimit`. Do not fetch the two layers from two goroutines. Appendix A adds the 6 soil feature pages and the soil count query to the 13 vacant feature pages and the parcel count query. The combined budget is 21 HTTP calls.
+- [ ] Soil pages and parcel pages share `s.httpClient`. Run the soil loop, then the parcel loop, on that one client. Do not construct another rate limited client for layer 197, and do not raise `RateLimit`. Do not fetch the two layers from two goroutines. Appendix A adds the 6 soil feature pages and the soil count query to the 60 parcel feature pages and the parcel count query. The combined budget is 68 HTTP calls.
 - [ ] Treat HTTP status outside 200 to 299 as an error that includes the status. `get` already does this at `gis.go` lines 226 to 228. Treat an ArcGIS `error` object as an error. `fetchBatch` does not. `gis.go` lines 190 to 210. Do not copy that silence. Send `User-Agent` `ParcelDataCollection/0.0.1`, the same header as `get` at `gis.go` line 219.
 - [ ] Before each page, if `ctx.Err()` is set, return `ctx.Err()` and do not start the request. Pass that `ctx` into `http.NewRequestWithContext` and into `RateLimitedClient.Do`.
 - [ ] Out fields are `OBJECTID_1,AREASYMBOL,SPATIALVER,MUSYM,MUKEY`. `returnGeometry` is true. `where` is `1=1`. `f` is `json`. Do not request `HydrcRatng`.
@@ -308,7 +312,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 - [ ] Metric. Requests issued to pull a layer whose count is 11250 at page size 2000. Trunk issues no soil requests. The end state is one full in-memory copy of the polygons.
 - [ ] Probe. The httptest counter in `TestFetchSoilPolygons`, run at head. Trunk has no test to run. Record trunk soil requests as 0 before the head run. Separately, and not inside `go test`, `curl` the live count URL in Appendix A and confirm the cap with `resultRecordCount=5000`.
 - [ ] Baseline. Record trunk soil requests as 0 first.
-- [ ] Rule. Fail if the fixture does not issue exactly 6 feature-page requests for a count of 11250 and a page size of 2000. A separate count query may add a 7th HTTP call. Fail if any feature page asks for more than 2000 rows. Fail if `FetchSoilPolygons` constructs its own limiter or issues a request while a parcel request on the same source is still in flight. Fail if the live re-measure shows `maxRecordCount` above 2000 and the client still assumes 2000 without reading it. Do not report a ratio against trunk. The combined 21 call budget is in Appendix A.
+- [ ] Rule. Fail if the fixture does not issue exactly 6 feature-page requests for a count of 11250 and a page size of 2000. A separate count query may add a 7th HTTP call. Fail if any feature page asks for more than 2000 rows. Fail if `FetchSoilPolygons` constructs its own limiter or issues a request while a parcel request on the same source is still in flight. Fail if the live re-measure shows `maxRecordCount` above 2000 and the client still assumes 2000 without reading it. Do not report a ratio against trunk. The combined 68 call budget is in Appendix A.
 
 **Review gate.** None. soil-2 is not review-gated.
 
@@ -321,11 +325,11 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 
 ## Add the shared soil tables (soil-3)
 
-**Depends on.** soil-1.
+**Depends on.** soil-1 and persist-1. persist-1 adds the `likely_vacant` migration, and this PR takes the next prefix after that file.
 
 **Files.**
 
-- [ ] Create the soil migration by hand. `make migrate-create` runs `goose create` with no sequential flag (`Makefile` lines 82 to 88), so the name it emits is a timestamp. At implementation time, list `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. Name the file `db/migrations/<prefix>_soil.sql`. On main at `d4654f6` the highest prefix is `000003`. Do not assume `000004` is free. uuid-1 on `plans/parcel-sales-uuid-ids.md` plans `db/migrations/000004_parcel_sales_uuid_id.sql`. If that file exists, use the next integer. Do not edit uuid-1's file.
+- [ ] Create the soil migration by hand. `make migrate-create` runs `goose create` with no sequential flag (`Makefile` lines 82 to 88), so the name it emits is a timestamp. At implementation time, list `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. Name the file `db/migrations/<prefix>_soil.sql`. On main at `d4654f6` the highest prefix is `000003`. Do not assume `000004` is free. uuid-1 on `plans/parcel-sales-uuid-ids.md` plans `db/migrations/000004_parcel_sales_uuid_id.sql`. persist-1 adds `<prefix>_parcels_likely_vacant.sql`. If either file exists, use the next integer after both. Do not edit those files.
 - [ ] Do not edit `db/migrations/000001_init_schema.sql`, `db/migrations/000002_parcels_storage_srid.sql`, or `db/migrations/000003_parcels_county_check.sql`. Do not create a PostgreSQL enum.
 
 **Build.**
@@ -415,10 +419,10 @@ CREATE INDEX soil_polygon_parcels_parcel_id_idx ON soil_polygon_parcels (parcel_
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
-- [ ] Rebased onto soil-1 after the verdict, with `git patch-id` unchanged.
-- [ ] The owner does not merge. The operator lands soil-3 after soil-1. Order against soil-2 does not matter.
+- [ ] Rebased onto soil-1 and persist-1 after the verdict, with `git patch-id` unchanged.
+- [ ] The owner does not merge. The operator lands soil-3 after soil-1 and persist-1. Order against soil-2 does not matter once those parents have landed.
 
-## Join kept parcels in the shared soil package (soil-4)
+## Join every stored parcel in the shared soil package (soil-4)
 
 **Depends on.** persist-1, soil-2, and soil-3.
 
@@ -433,10 +437,10 @@ CREATE INDEX soil_polygon_parcels_parcel_id_idx ON soil_polygon_parcels (parcel_
 
 **Build.**
 
-- [ ] Put the statement in Appendix A in package `soil`. One result row is one soil polygon and one parcel. Do not group by `map_unit_key`. Keep a row only when the state-plane area is greater than 0, including a sliver. An edge that only touches is area 0 and is not a row. Skip parcels whose `shape` is null. Return an error if a kept id has no shape. Do not insert the missing parcel.
-- [ ] Look up `parcels.id` inside that statement with `(county_id, source_name, source_parcel_id)`. Insert `soil_polygons.id` and `parcels.id` only. Do not insert `source_parcel_id`. Pass every kept parcel id in `$3` on one call. Do not split the list. Do not add a worker pool, a chunk size, or a goroutine per chunk.
+- [ ] Put the statement in Appendix A in package `soil`. One result row is one soil polygon and one parcel. Do not group by `map_unit_key`. Keep a row only when the state-plane area is greater than 0, including a sliver. An edge that only touches is area 0 and is not a row. Skip parcels whose `shape` is null. Do not filter on `likely_vacant`. Do not insert a missing parcel. The statement joins every stored shape for the county and source.
+- [ ] Look up `parcels.id` inside that statement. Insert `soil_polygons.id` and `parcels.id` only. Do not insert `source_parcel_id`. Do not pass a Go list of parcel ids. Do not add a worker pool, a chunk size, or a goroutine per chunk.
 - [ ] Call `FetchSoilPolygons` once per import, on the `GISSource` that `main` already builds, before `ParcelIDImportService.Run`. That call and the parcel pages inside `Run` share the one rate limited client. They run one after the other. persist-1 writes shapes during `Run`. After `Run` returns nil, upsert polygons and run the one join statement inside one transaction. Omit `id` on every insert. On conflict, update the mapped columns and do not set `id`. A cancelled context commits nothing.
-- [ ] Time that one statement in the perf lane. The wall-time budget is 540 seconds. Appendix A derives it from the 10 minute cancel minus the 21 second request floor. If a measured county run of this statement takes 540 seconds or longer, a later change may chunk the insert. That later change is what picks a worker count. This PR does not add the chunks.
+- [ ] Time that one statement in the perf lane. The wall-time budget is 490 seconds. Appendix A derives it from the 10 minute cancel minus the 68 second request floor. If a measured county run of this statement takes 490 seconds or longer, a later change may chunk the insert. That later change is what picks a worker count. This PR does not add the chunks.
 - [ ] Do not delete polygon rows. Do not delete join rows. A second run that no longer overlaps a pair leaves that join row in place. Deleting retired parcels, retired polygons, and stale join rows waits for the later intelligent parcel diff. Do not add that delete here.
 - [ ] Before the polygon upsert, insert a `soil_map_units` row for each distinct `MUKEY` that does not have one. If `map_unit_name` is null, POST one query to Soil Data Access for the missing keys and fill `map_unit_name`, `map_unit_symbol`, `area_symbol`, and `area_name`. Read `sacatalog.saverest` for `NC179` in that same import and set `survey_saved_on` to the calendar date. A name-service error still upserts the stub row with a null name, leaves `survey_saved_on` unchanged, and does not fail the geometry upsert. The next import retries names that are still null. Do not call Soil Data Access once per parcel. Do not put this client on the Union GIS limiter.
 - [ ] If `Run` returns an error, do not start the join. If the soil fetch returns an error, return it from `main` and do not log it and continue. `main.go` already returns the importer error. There is no Spatialist swallow left in `main.go`.
@@ -444,31 +448,31 @@ CREATE INDEX soil_polygon_parcels_parcel_id_idx ON soil_polygon_parcels (parcel_
 
 **You see.**
 
-- [ ] A httptest import with one kept PID and one rejected PID writes a join row only for the kept PID, from one `INSERT ... SELECT`. A second run keeps the polygon UUID and the join UUID. An HTTP 500 from the soil page makes the run return a non-nil error.
+- [ ] A httptest import with one vacant PID and one house PID, both overlapping the polygon, writes a join row for each, from one `INSERT ... SELECT`. The join SQL does not name `likely_vacant`. A second run keeps the polygon UUID and the join UUID. An HTTP 500 from the soil page makes the run return a non-nil error.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `join_test.go` gains a test that the join SQL text names `ST_Transform`, `2264`, `soil_polygons`, and `soil_polygon_parcels`, and that the insert column list does not name `id` or `source_parcel_id`. It also gains a test that an empty kept-id list upserts polygons, writes zero join rows, and returns nil. `names_test.go` gains an httptest that one POST fills two `MUKEY`s and a survey date. Run `go test -race ./internal/soil/ -count=1 -run 'TestSoilJoin|TestSoilNames'`. The acre number is not claimed by this test. Lane 2 measures it.
+- [ ] `join_test.go` gains a test that the join SQL text names `ST_Transform`, `2264`, `soil_polygons`, and `soil_polygon_parcels`, and that the insert column list does not name `id` or `source_parcel_id`, and that the SQL does not name `likely_vacant`. It also gains a test that an empty `parcels` table upserts polygons, writes zero join rows, and returns nil. `names_test.go` gains an httptest that one POST fills two `MUKEY`s and a survey date. Run `go test -race ./internal/soil/ -count=1 -run 'TestSoilJoin|TestSoilNames'`. The acre number is not claimed by this test. Lane 2 measures it.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
 - [ ] Lane 1. Regression lane against trunk. Run `go test -race ./... -count=1` at trunk and at head. Trunk does not load layer 197. Record that, and gate a head run that loads the fixture soil layer and still passes the existing union tests. Save `/tmp/swarm-soil-4/worker-1/regression.png`. Pass when trunk tests pass and head tests pass.
 - [ ] Lane 2. Half-square fixture from Appendix A through the soil-4 function. Save `/tmp/swarm-soil-4/worker-2/half-acre.png`. Pass when `overlap_acres` is between 0.4545 and 0.4637 and the row's `soil_polygon_id` equals the inserted polygon.
 - [ ] Lane 3. Two soil polygons with the same `MUKEY` both overlap one parcel, and a third polygon shares only an edge. Also overlap a 1 foot by 200 foot sliver. Save `/tmp/swarm-soil-4/worker-3/two-polygons.png`. Pass when the same map unit has two join rows, the edge writes no row, and the sliver's `overlap_acres` is between 0.0045 and 0.0047.
-- [ ] Lane 4. One batch contains PID `01060017` marked vacant and a second PID with `YEARBLT` 1998. Save `/tmp/swarm-soil-4/worker-4/kept-only.png`. Pass when the join parameter list contains only `01060017` and the rejected PID has no join row.
+- [ ] Lane 4. One batch contains PID `01060017` with `YEARBLT` 0 and a second PID with `YEARBLT` 1998. Both geometries overlap the soil polygon. Save `/tmp/swarm-soil-4/worker-4/house-and-vacant.png`. Pass when both PIDs have a join row, `likely_vacant` is true only on `01060017`, and the join SQL does not name `likely_vacant`.
 - [ ] Lane 5. Soil page returns HTTP 500. Save `/tmp/swarm-soil-4/worker-5/fail-run.png`. Pass when the exported run function returns an error and the test fails if that error is nil.
 - [ ] Lane 6. Cancel after the count query and before the first geometry page. Save `/tmp/swarm-soil-4/worker-6/cancel.png`. Pass when no row is committed to `soil_polygons`.
 - [ ] Lane 7. Run the import twice. On the second run, change the overlap acres and drop one polygon from the snapshot. Save `/tmp/swarm-soil-4/worker-7/second-run.png`. Pass when the surviving polygon UUID and the surviving join UUID are unchanged, the acres match the second run, and both the dropped polygon row and its join row are still present.
 - [ ] Lane 8. Call the id hook and the soil loader. Save `/tmp/swarm-soil-4/worker-8/hook-ids.png`. Pass when the hook argument type is still `[]string` and the soil loader is not invoked from inside `extractParcelIDs`.
 - [ ] Lane 9. `rg -n "source_extras|INSERT INTO parcels|parcel_soils" internal/soil/` and a package import list. Save `/tmp/swarm-soil-4/worker-9/boundaries.png`. Pass when none of those patterns match and package `soil` does not import `union`.
-- [ ] Lane 10. Join three kept ids. Save `/tmp/swarm-soil-4/worker-10/one-statement.png`. Pass when the log shows one `INSERT ... SELECT`, `$3` contains all three ids, and the package starts no extra goroutine for the join.
+- [ ] Lane 10. Join three stored parcels, one of them a house. Save `/tmp/swarm-soil-4/worker-10/one-statement.png`. Pass when the log shows one `INSERT ... SELECT`, the statement has no parcel-id list and no `likely_vacant` predicate, and the package starts no extra goroutine for the join.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Wall time of the one `INSERT ... SELECT` on the half-square fixture, the number of times that statement runs, soil HTTP calls for a fixture whose count is 11250, and whether a second run keeps the same polygon id. Trunk makes no soil calls and has no join. The end state the user waits on is soil rows for the kept ids from that one statement, or a returned error when the fetch fails.
+- [ ] Metric. Wall time of the one `INSERT ... SELECT` on the half-square fixture, the number of times that statement runs, soil HTTP calls for a fixture whose count is 11250, and whether a second run keeps the same polygon id. Trunk makes no soil calls and has no join. The end state the user waits on is one join row per overlapping stored parcel, including a house, or a returned error when the fetch fails.
 - [ ] Probe. Time the statement at head around the half-square fixture, after a trunk run that records zero soil calls. Count executions of the statement in the same probe. Then run the import twice and compare polygon ids. Do not split the fixture ids to manufacture a worker pool.
 - [ ] Baseline. Record trunk soil HTTP calls as 0 and trunk join-statement executions as 0 first.
-- [ ] Rule. Fail if the fixture import issues more than 7 soil HTTP calls for count 11250 and page size 2000. Fail if a soil HTTP 500 still returns nil. Fail if the second run's polygon id differs from the first. Fail if the join statement runs more than once for one import, or if the half-square statement takes 30 seconds or longer. Do not report a ratio against trunk. The county budget for this same statement is 540 seconds. A measured county run at or over that budget is the trigger for a later chunked join. This lane does not add the chunks, and it does not pick a worker count. Appendix A.
+- [ ] Rule. Fail if the fixture import issues more than 7 soil HTTP calls for count 11250 and page size 2000. Fail if a soil HTTP 500 still returns nil. Fail if the second run's polygon id differs from the first. Fail if the join statement runs more than once for one import, or if the half-square statement takes 30 seconds or longer. Do not report a ratio against trunk. The county budget for this same statement is 490 seconds. A measured county run at or over that budget is the trigger for a later chunked join. This lane does not add the chunks, and it does not pick a worker count. When the county tables are loaded, record `count(*)` from `soil_polygon_parcels`. Appendix A is the baseline. A different count is recorded and does not change the statement. Fail the county load if that count is missing from the report. Appendix A.
 
 **Review gate.** None. soil-4 is not review-gated.
 
@@ -536,7 +540,11 @@ The engine was shapely 2.2.0 and pyproj 3.8.0, not PostGIS. Fifteen soil polygon
 
 **Measured.** Across the 25,884 kept features, the area filter found 59,169 polygon overlaps and 0 zero-area touches. 234 of those overlaps were under 1 square meter in Web Mercator and still had positive area in EPSG:2264. They stay. Per feature, the polygon count is minimum 0, median 2, 90th percentile 4, 95th percentile 6, 99th percentile 10, maximum 84, and mean 2.286. Grouping those same overlaps by `MUKEY` would store 53,761 rows. That drop of 5,408 is the polygons a collapsed join would hide. On PID `04213010` the collapsed join would store 17 rows and hide 67 polygons.
 
-**Measured.** 109 kept PIDs are more than one layer 215 feature. 87 have 2 features, 17 have 3, 4 have 4, and 1 has 5. No kept PID is null. Distinct kept PIDs are 25,747. `PID` `05174005` has 5 polygons and `mapped_acres` 280.82 on each feature. `PID` `07063257M` has 4 polygons and `mapped_acres` 0.873 on each. The parts are separate polygons. After one dissolved geometry per PID, the area filter finds 58,944 join rows across 25,747 parcels. Median 2, 90th percentile 4, 95th percentile 6, 99th percentile 10, maximum 84, mean 2.289. The dissolve removes 225 links that were the same soil polygon on two features of one PID. Four single-feature PIDs have no positive overlap. They are `04162008`, `05180003B`, `06240001B`, and `04189007`. The join stores no row for them.
+**Measured.** 109 likely-vacant PIDs are more than one layer 215 feature. 87 have 2 features, 17 have 3, 4 have 4, and 1 has 5. Distinct likely-vacant PIDs are 25,747. `PID` `05174005` has 5 polygons and `mapped_acres` 280.82 on each feature. `PID` `07063257M` has 4 polygons and `mapped_acres` 0.873 on each. The parts are separate polygons. After one dissolved geometry per PID, the area filter on that vacant set finds 58,944 join rows. Median 2, 90th percentile 4, 95th percentile 6, 99th percentile 10, maximum 84, mean 2.289. The dissolve removes 225 links that were the same soil polygon on two features of one PID. Four single-feature PIDs have no positive overlap. They are `04162008`, `05180003B`, `06240001B`, and `04189007`. The join stores no row for them.
+
+**Measured.** The full layer on 2026-11-09 is still 118,202 features. `PID IS NULL` returned 1,961. Those features also have null `YEARBLT`, `SQFT`, `LAND_TYPE`, and `mapped_acres`. A sample of five had null `mapped_acres` as well. `PID IS NOT NULL` returned 116,241 features. Distinct PIDs are 116,022. 183 PIDs are more than one feature. 155 have 2, 21 have 3, 6 have 4, and 1 has 5. No feature in the GeoJSON pages had an empty geometry. 34 parcel geometries failed shapely's validity check and were repaired with `make_valid` before the count, the same way 15 soil polygons were. After one dissolved geometry per non-null PID, the area filter finds 202,713 join rows across 116,022 parcels. Minimum 0, median 1, 90th percentile 3, 95th percentile 4, 99th percentile 7, maximum 84, mean 1.747. 35 parcels have no positive overlap. 931 overlaps were under 1 square meter in Web Mercator and still positive in EPSG:2264. Zero-area touches were 0. The maximum is still 84. The median falls from 2 on the vacant set to 1 on the full layer because many parcels meet one polygon. The shapely pass took 66.2 seconds. That clock is not a PostGIS budget.
+
+**Measured.** Sixty GeoJSON pages of the full layer, `where=1=1`, `outFields=PID`, `orderByFields=OBJECTID`, `resultRecordCount=2000`, returned in 0.18 to 0.52 seconds, mean 0.28. Every page finished inside the 1 second token. The importer uses Esri JSON and more fields, so these times are not its payload. They show a 2000-row page returning before the next token.
 
 ### Acres and the CRS choice
 
@@ -562,7 +570,6 @@ WITH hit AS (
        AND ST_Intersects(p.shape, s.shape)
     WHERE p.county_id = $1
       AND p.source_name = $2
-      AND p.source_parcel_id = ANY($3)
       AND p.shape IS NOT NULL
 )
 INSERT INTO soil_polygon_parcels (soil_polygon_id, parcel_id, overlap_acres)
@@ -574,7 +581,7 @@ SET overlap_acres = EXCLUDED.overlap_acres,
     updated_at = now();
 ```
 
-soil-4 binds every kept parcel id to `$3` in that one statement. It does not split the list. The polygon upsert omits `id` and conflicts on `(county_id, source_name, object_id)`.
+soil-4 runs that statement once for the county and source. It does not filter on `likely_vacant` and it does not split the parcels. The polygon upsert omits `id` and conflicts on `(county_id, source_name, object_id)`.
 
 ```sql
 INSERT INTO soil_polygons (
@@ -611,7 +618,7 @@ On 2026-11-08 the kept count was 25,885 and `FMV_IMPRV = 0` was 116,242. On 2026
 
 ### Request budget
 
-The decision this number has to support is whether the county ingest fits the 10 minute cancel in `main.go` line 14, and whether the speedup is fewer HTTP calls or more HTTP clients. A page that took 20 seconds or longer would make 21 calls a candidate for a longer cancel. Pages under a second mean the limiter, not the transfer, sets the wait, and 10 minutes is enough. The gate was written before the page samples below.
+The decision this number has to support is whether downloading every parcel still fits the 10 minute cancel in `main.go` line 14. A page that took 8 seconds or longer would make 68 calls a candidate for a longer cancel. Pages under a second mean the limiter sets the wait, and 10 minutes is enough. The gate was written before the full-layer page samples below.
 
 **Measured.** On 2026-11-09 the vacant count was still 25,884 and the soil count was still 11,250. Layer 215 `maxRecordCount` was still 2000. The OID field was `OBJECTID`. `resultRecordCount=5000` was refused earlier the same day and returned 2000 features.
 
@@ -619,13 +626,13 @@ The decision this number has to support is whether the county ingest fits the 10
 
 **Read.** `NewRateLimitedClient` uses `rate.Limit(requestsPerSecond)` and burst 1. The default `RateLimit` is 1. `internal/connector/shared/httpclient/http_client.go` lines 63 to 71. `Do` waits on that limiter before the request. Lines 24 to 28. `FetchBatches` uses `where=1=1` and `s.batchSize`. `gis.go` lines 123 to 129. `DefaultGISSourceConfig.BatchSize` is 50. `gis.go` lines 24 to 30.
 
-**Inferred.** The request floor, before transfer, is 13 vacant feature pages plus one count query, plus 6 soil feature pages plus one count query. 12 times 2000 is 24,000, and the last vacant page is 884, so the vacant feature pages are 13. Soil feature pages are 6. The sum is 21 calls on one limiter. At 1 request per second that floor is 21 seconds. `main` cancels after 10 minutes, which is 600 seconds. 21 seconds fits. This plan does not change that cancel and does not raise the limiter.
+**Inferred.** The request floor, before transfer, is 60 parcel feature pages plus one count query, plus 6 soil feature pages plus one count query. `ceil(118202 / 2000)` is 60. 59 times 2000 is 118,000, and the last page is 202. Soil feature pages are 6. The sum is 68 calls on one limiter. At 1 request per second that floor is 68 seconds. `main` cancels after 10 minutes, which is 600 seconds. 68 seconds fits. This plan does not change that cancel and does not raise the limiter. The vacant where is not part of this floor. That clause still marks 25,884 features, and those rows are stored with `likely_vacant` true. The other parcels are stored with the flag false.
 
 **Inferred.** The old import path is the one that misses the cancel. `ceil(118202 / 50)` is 2,365 feature pages. Plus a count query that is 2,366 calls. Spacing 2,365 seconds is about 39.4 minutes before transfer time. Paging only the 25,884 vacant rows at 50 per page would be 518 feature pages, about 8.6 minutes of spacing, before the 7 soil calls and transfer time. That margin is too thin, and it is not the plan. Page size 2000 is.
 
-**Inferred.** 25,884 spatial queries at the same limiter would wait about 25,884 seconds before transfer time. Two timed intersect calls returned in 0.131 and 0.136 seconds. That pair is not a timing of the full kept set. The request count is the limiter, and it is exact. Many clients would queue on this same limiter or risk a block. They are not a speedup.
+**Inferred.** 118,202 spatial queries at the same limiter would wait about 118,202 seconds before transfer time. Two timed intersect calls returned in 0.131 and 0.136 seconds. That pair is not a timing of the full layer. The request count is the limiter, and it is exact. Many clients would queue on this same limiter or risk a block. They are not a speedup.
 
-**Inferred.** The overlap insert is one statement. Its wall-time budget is 540 seconds. 21 seconds of request floor plus 540 seconds is 561 seconds, which leaves 39 seconds of the 600 second cancel for transfer that runs past the token interval. A measured county run of that statement at 540 seconds or longer is the only reason to add chunked workers later. This plan does not add them and does not name a worker count. `psql` was not installed, so the statement's county time is not measured here. soil-4's perf lane times the same statement on the fixture.
+**Inferred.** The overlap insert is one statement over every stored shape. Its wall-time budget is 490 seconds. 68 seconds of request floor plus 490 seconds is 558 seconds, which leaves 42 seconds of the 600 second cancel for transfer that runs past the token interval. A measured county run of that statement at 490 seconds or longer is the only reason to add chunked workers later. This plan does not add them and does not name a worker count. `psql` was not installed, so the statement's county time is not measured here. soil-4's perf lane times the same statement on the fixture.
 
 ### Where the code stands
 
@@ -635,7 +642,7 @@ The decision this number has to support is whether the county ingest fits the 10
 
 **Read.** `plans/parcel-sales-uuid-ids.md` is not on main. It is on branch `plan/parcel-sales-uuid-ids`, PR 15, open. uuid-1 plans `db/migrations/000004_parcel_sales_uuid_id.sql` and changes `parcel_sales.id` to UUID. uuid-2 plans `internal/parcelstore/parcels.go`, with `SaveParcel` omitting `id`, upserting the natural key, and not deleting. persist-1 must keep those three clauses. If uuid-2 lands first, persist-1 edits the existing file and adds the shape union. If persist-1 lands first, it creates the file with those clauses so uuid-2 can edit it. uuid-2 does not edit `main.go`. The call from `main` stays in persist-1.
 
-**Read.** `main.go` lines 14 to 27 build the Union GIS source, filter with `IsLikelyVacantGISRecord`, and cancel after 10 minutes. The Spatialist package is gone. The hook returns nil today, and `Run`'s error already stops the process. soil-4 does not wait for a swallow that is no longer in the file. The 10 minute cancel stays. The request budget above fits inside it. The old 50 row paging of all 118,202 parcels does not, and persist-1 stops using that path.
+**Read.** `main.go` lines 14 to 27 build the Union GIS source, filter with `IsLikelyVacantGISRecord`, and cancel after 10 minutes. The Spatialist package is gone. The hook returns nil today, and `Run`'s error already stops the process. soil-4 does not wait for a swallow that is no longer in the file. The 10 minute cancel stays. The request budget above fits inside it. persist-1 still downloads all 118,202 features. It stops using batch size 50, which is the path that misses the cancel.
 
 **Read.** No Go file inserts into `parcels`. persist-1 is that writer. `GISParcel` has no id field. `ParcelIdentity.CountyID` stays `string`. Soil uses `county.ID` and does not change that parcel field.
 
@@ -655,15 +662,17 @@ Storing `source_parcel_id` as the join's application identity loses. The parcel'
 
 Delete-and-replace on a second run loses. A delete followed by an insert mints a new UUID for every polygon and every join row, including the ones that did not change. The upsert omits `id` and keeps it. Leaving a stale join row, or a polygon the county has retired, is the cost. The later intelligent parcel diff owns that delete. This program does not.
 
-Last-write-wins for two layer 215 features with the same PID loses. 109 kept PIDs are split across 2 to 5 features. persist-1 stores one row per PID and sets `shape` to the PostGIS union of those features. A second run replaces the shape and keeps `parcels.id`.
+Last-write-wins for two layer 215 features with the same PID loses. On the full layer, 183 PIDs are split across 2 to 5 features. persist-1 stores one row per PID and sets `shape` to the PostGIS union of those features. A second run replaces the shape and keeps `parcels.id`. A null `PID` is not a row. The natural key cannot store it. 1,961 features are in that set, and they are not houses with a year or a floor area.
 
-Per-parcel `esriSpatialRelIntersects` from the id hook loses on the request count. 25,884 kept features would be one spatial query each. The limiter allows one request per second. The bulk load is six soil pages plus 13 vacant parcel pages. The spatial response also omits the overlap area. PostGIS does the clip.
+Per-parcel `esriSpatialRelIntersects` from the id hook loses on the request count. 118,202 features would be one spatial query each. The limiter allows one request per second. The bulk load is six soil pages plus 60 parcel pages. The spatial response also omits the overlap area. PostGIS does the clip.
+
+Downloading only `YEARBLT = 0 OR SQFT = 0` loses. The operator wants every parcel stored so a later pass can study houses. The numeric-zero rule stays as `likely_vacant`. Tax and later views filter on that flag. The fetch `where` stays `1=1`.
 
 Many parallel MapServer clients lose. `NewRateLimitedClient` allows one request per second with burst 1. Extra clients either wait on that same limiter or bypass it. Bypassing it is the block risk. The limiter stays at 1. No measurement in this plan shows the county server accepts a higher rate.
 
 Holding every parcel page in memory until the last response, and only then writing, loses. The page loop already calls `onBatch` and then requests the next page. That callback is where the page is written. A prefetch pipeline that starts the next download before the insert returns is a second mechanism on top of a loop that already persists each page. It is not the design.
 
-An app-level join worker pool as the default loses. It picks a worker count with no measurement of the one statement. The join is the `INSERT ... SELECT` in this appendix, once, with every kept id in `$3`. Chunked workers are a later change only if a measured run of that statement takes 540 seconds or longer. This plan does not name the worker count for that fallback.
+An app-level join worker pool as the default loses. It picks a worker count with no measurement of the one statement. The join is the `INSERT ... SELECT` in this appendix, once, over every stored shape. Chunked workers are a later change only if a measured run of that statement takes 490 seconds or longer. This plan does not name the worker count for that fallback.
 
 A PostgreSQL enum for county loses because `parcels.county_id` is text. A swappable soil interface loses until a second county mapper exists. Putting the types in `internal/models` loses because that package is the parcel row. `parcels.source_extras` loses because one JSON object is not a row per polygon. Rewriting `BaseURL` into a MapServer root loses while the parcel tests lock the full query URL.
 
@@ -677,9 +686,11 @@ persist-1 and uuid-2 both touch `internal/parcelstore/parcels.go`. The owner rea
 
 A second run does not delete a polygon the county dropped, a parcel that left the kept set, or a join row whose overlap fell to zero. Those rows keep their old acres until the intelligent parcel diff. soil-4 lane 7 locks the non-delete on purpose. A stale acre stays wrong until that later feature.
 
-The join only reaches parcels persist-1 stored. That is the kept vacant set, one row per PID. A house the filter rejects has no link. Painting every soil polygon does not need the join. Asking which stored parcels a polygon touches does. Storing the other 118,202 parcels is a different program. After that program writes shapes, the same join statement links them.
+persist-1 downloads 118,202 features and stores 116,022 parcel rows, one per non-null PID, after the union of 183 multi-feature PIDs. It skips 1,961 features whose `PID` is null. A house is stored with `likely_vacant` false. The join links every stored shape. Appendix A counted 202,713 overlap rows, median 1, maximum 84. A soil polygon can name the houses it touches as well as the vacant parcels. Painting every soil polygon still does not need the join. Asking which stored parcels a polygon touches does.
 
-`main` cancels after 10 minutes. `main.go` line 14. The old path, 2,365 feature pages of all 118,202 parcels at batch size 50, is longer than that cancel. persist-1 does not use that path. The new floor, before transfer, is 13 vacant feature pages plus one count query, plus 6 soil feature pages plus one count query. At 1 request per second that is 21 seconds. The overlap insert is one statement with a 540 second budget, so the floor plus the statement stay inside 10 minutes. If a later measurement of that statement misses 540 seconds, chunked workers are the fallback, and that change picks the worker count. If an owner leaves the import on `where=1=1` and batch size 50, the cancel will still fire. persist-1 lane 5 and the perf rule reject that request.
+`main` cancels after 10 minutes. `main.go` line 14. Paging all 118,202 parcels at batch size 50 is 2,365 feature pages and is longer than that cancel. persist-1 pages the same 118,202 rows at 2000. The floor, before transfer, is 60 parcel feature pages plus one count query, plus 6 soil feature pages plus one count query. At 1 request per second that is 68 seconds. The overlap insert is one statement with a 490 second budget, so the floor plus the statement stay inside 10 minutes. If a later measurement of that statement misses 490 seconds, chunked workers are the fallback, and that change picks the worker count. If an owner leaves the import at batch size 50, the cancel will still fire. persist-1 lane 5 and the perf rule reject `resultRecordCount=50`.
+
+persist-1 and soil-3 and uuid-1 can each add a migration. persist-1's file is `<prefix>_parcels_likely_vacant.sql`. soil-3 lists `db/migrations` after that file exists and does not reuse its prefix. Neither hardcodes `000004`.
 
 Fifteen soil polygons and 20 kept features failed shapely's validity check during the measurement. The importer does not copy `make_valid`. If PostGIS rejects a ring, persist-1 or soil-4 returns the error. Do not drop the part to get past it.
 
@@ -725,12 +736,12 @@ Each soil polygon has a UUID primary key, a `MUKEY`, `SPATIALVER`, and the surve
 
 Map painting, vector tiles, low-zoom simplification, and a map UI are out of this program. The GiST index on `soil_polygons.shape` is the storage choice the later paint needs. `parcels.shape` already has `parcels_shape_gist_idx`.
 
-The operator asked to design ingest speed before implementation. "how can we parallelize this ingestion? I think we want to do that ahead of time in the plan." The operator then asked if that parallel design was ideal. "is that an ideal architecture". The answer is that doing less HTTP work is the architecture. The vacant where and pages of 2000 cut the county calls to 13 vacant feature pages plus one count query, plus 6 soil feature pages plus one count query, on one client at one request per second. Each parcel page is written in that page loop. The join stays one SQL statement until a measured run proves it needs chunks. An app-level HTTP fan-out and a default join worker pool are not the design. The 10 minute cancel stays, because that request floor is 21 seconds.
+The operator asked to design ingest speed before implementation. "how can we parallelize this ingestion? I think we want to do that ahead of time in the plan." The operator then asked if that parallel design was ideal. "is that an ideal architecture". The answer is that doing less HTTP work is the architecture. Pages of 2000 on one client at one request per second are the speedup. Each parcel page is written in that page loop. The join stays one SQL statement until a measured run proves it needs chunks. An app-level HTTP fan-out and a default join worker pool are not the design. The 10 minute cancel stays. Downloading every parcel is 60 feature pages plus one count query, plus 6 soil feature pages plus one count query, which is 68 seconds before transfer.
+
+The operator then decided to store every parcel. "I do want to ingest all of the parcels though because I think later we could look for houses as well in the future." That answers the earlier question of joining only the vacant set. persist-1 downloads `where=1=1`. `likely_vacant` is the stored flag from `IsLikelyVacantGISRecord` after filter-1. Tax and later views filter on the flag. soil-4 joins every stored shape, including houses. 1,961 features have a null `PID` and null year, floor area, and land type. They are not inserted, because the natural key cannot hold a null `source_parcel_id`. Say if those geometries should be stored under `OBJECTID` instead.
 
 The survey clock time is dropped. `saverest` returned `9/3/2026 1:43:46 PM` with no timezone. `survey_saved_on` is the date 2026-09-03. Say if the raw string should be stored instead.
 
-Multi-feature PIDs are one parcel row whose shape is the union of the parts. Say if those parts are separate parcels and the natural key should change.
-
-The join links only parcels persist-1 stored, which is the kept vacant set. Say if a later map needs a link for every parcel in the county, including houses. That is a different writer. The same join statement can run again after those shapes exist.
+Multi-feature PIDs stay one parcel row whose shape is the union of the parts. The operator has not asked for a different natural key.
 
 Deleting retired rows waits for the intelligent parcel diff. Say if a second run should delete a join row whose overlap fell to zero while keeping the UUIDs of the rows that remain. This plan does not do that delete.

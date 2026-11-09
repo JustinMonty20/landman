@@ -2,6 +2,8 @@
 
 ## Out-of-scope decision
 
+The operator wants every parcel stored so a later pass can study houses. `likely_vacant` is a column. The download where stays `1=1`. 1,961 features have a null PID and are not inserted, because the natural key cannot hold them.
+
 The operator corrected the parallel ingest. Doing less HTTP work is the architecture. The page loop writes each page, then fetches the next. The join is one SQL statement. A worker pool is a later fallback only if that statement misses 540 seconds, and this plan does not pick the worker count.
 
 PostGIS timing of that statement was skipped. `psql` is not installed here. The 540 second budget is the cancel minus the 21 second request floor, not a measured join time.
