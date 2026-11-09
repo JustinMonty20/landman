@@ -2,7 +2,7 @@
 
 ## Out-of-scope decision
 
-The operator wants every parcel stored so a later pass can study houses. `likely_vacant` is a column. The download where stays `1=1`. 1,961 features have a null PID and are not inserted, because the natural key cannot hold them.
+Justin decided on 2026-11-09 to store the 1,961 null-PID features, each keyed by its OBJECTID text. A live compare of every non-null PID text to every OBJECTID text found no collision, so the key is the raw digits. Those rows are not dissolved together. `likely_vacant` stays false.
 
 The operator corrected the parallel ingest. Doing less HTTP work is the architecture. The page loop writes each page, then fetches the next. The join is one SQL statement. A worker pool is a later fallback only if that statement misses 540 seconds, and this plan does not pick the worker count.
 
