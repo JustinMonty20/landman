@@ -282,7 +282,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 7. Select `source_extras` for a persisted parcel. Save `/tmp/swarm-scrape-4/worker-7/extras.png`. Pass when `Save` did not change it.
 - [ ] Lane 8. Cancel the context before `Save`. Save `/tmp/swarm-scrape-4/worker-8/cancel.png`. Pass when no row is committed.
 - [ ] Lane 9. Call `Save` twice with the same bytes. Save `/tmp/swarm-scrape-4/worker-9/same-bytes.png`. Pass when one row remains and `fetched_at` moved to the second call.
-- [ ] Lane 10. Open a transaction, `Save` one good page, then force the next statement to fail if the test can, or call `Save` with a bad sum after a good one in the same function. Save `/tmp/swarm-scrape-4/worker-10/two-calls.png`. Pass when a failed second `Save` does not remove the first committed row, and the first row is still one row.
+- [ ] Lane 10. Call `Save` with a good page, then call `Save` with a bad sum. Save `/tmp/swarm-scrape-4/worker-10/two-calls.png`. Pass when the failed second `Save` does not remove the first committed row, and the first row is still one row.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -318,6 +318,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `var _ scrape.Client = (*WebSource)(nil)` in `web.go`.
 - [ ] When `Enabled` is false, `Scrape` is not called from `main`. When `BaseURL` is empty, `Scrape` serves the fixture bytes for the known id, returns `ErrNotFound` for any other id, and does not dial. When `BaseURL` is set, build the request, call `httpclient.DoRetry` on a limiter owned by this `WebSource`, then `parse`. `parse` returns `ErrParse` for every body until a page schema exists. `parcelURL` returns `ErrNotConfigured` until the pattern exists, and it does not use the GIS host.
 - [ ] `main` builds `NewWebSource` only when `Enabled` is true. The default path still prints GIS ids and returns the importer error. Do not log a scrape error and return nil. Do not add `func init`. Do not add a registry. Delete the `init` sample in `docs/ARCHITECTURE.md`.
+- [ ] When `Enabled` is true, the parcel-id hook calls `WebSource.Scrape` and then `scrapestore.Save` for each success. That call sits after the parcel save persist-1 added. The hook does not insert a parcel. Package `union` does not import `scrapestore`. The `Enabled` false path calls neither `Scrape` nor `Save`.
 - [ ] `web_test.go` calls `scrape.Conform` on a fixture `WebSource`. Do not import `internal/service` from a new file. `service` still does not import `union`.
 
 **You see.**
@@ -330,6 +331,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Run `go vet ./internal/connector/union/` and `staticcheck ./internal/connector/union/`. Both print no findings.
 - [ ] Run `go test -race -cover ./internal/connector/union/ -count=1`. Fail if coverage is below 76.8 percent. Trunk measured 76.8 percent. Appendix A.
 - [ ] `rg -n "func init\\(" --glob '*.go'` prints nothing. `rg -n "func init\\(" docs/ARCHITECTURE.md` prints nothing. `rg -n "SingleParcelFetcher|BatchEnricher" --glob '*.go'` prints nothing.
+- [ ] `rg -n "scrapestore.Save" main.go` matches the `Enabled` branch and no other branch. The default config keeps `Enabled` false.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
@@ -435,9 +437,9 @@ Open questions that no run in this repo can settle.
 
 ## Appendix B. Alternatives rejected
 
-The two arena sketches and the three required shapes were compared. The cross-judge did not run. Appendix C says why. The base is the concrete HTTP helper and the Union type in package `union`. The shared `Client` interface is grafted on because the operator required it and the scratch compile showed a slice of one result type works.
+The base is the concrete HTTP helper and the Union type in package `union`. The shared `Client` interface is grafted on because the operator required it and the scratch compile showed a slice of one result type works.
 
-**(a) loses as the whole design, and its one method stays.** A shared `Scrape(ctx, Request) (Result, error)` is what `main` calls. The candidates rejected an exported interface because one production client does not earn a port, and because a `Raw` field leaks bytes. The operator asked for the interface now, and for raw bytes or a hash so a later parse can run again. `Result.Raw` is that payload. It is not an `http.Response`. The fixture client and `WebSource` are two implementations, so the interface is not a port with a single deleted body. Per laziness protocol, the interface has one method. Per subtract before you add, the registry stays out.
+**(a) loses as the whole design, and its one method stays.** `WebSource.Scrape` is that method. `main` calls it only when `Enabled` is true. The candidates rejected an exported interface because one production client does not earn a port, and because a `Raw` field leaks bytes. The operator asked for the interface now, and for raw bytes or a hash so a later parse can run again. `Result.Raw` is that payload. It is not an `http.Response`. The fixture client and `WebSource` are two implementations, so the interface is not a port with a single deleted body. Per laziness protocol, the interface has one method. Per subtract before you add, the registry stays out.
 
 **(b) loses as the caller's API.** A public `Fetcher` plus a public `Parser` makes `main` fetch and then parse. The pure parser stays, unexported, so golden files and fuzz hit a function over bytes. `DoRetry` hides status, retry, `Retry-After`, and the body cap. Per boundary discipline, status is classified at the HTTP edge and `parse` does not see `*http.Response`.
 
@@ -463,7 +465,7 @@ soil-3 still says to create `db/migrations/000002_soil.sql`. That number is alre
 
 `WebSource` has a fixture branch and a later HTTP branch in one method. Delete the fixture branch in the same change that sets a real `BaseURL`. Leaving both is two ways to scrape.
 
-`parcel_pages.parcel_id` does not reference `parcels.id`. A direct `Save` can store a page for a parcel row that does not exist. The hook calls `Save` only after persist-1 has stored the kept parcel. The order is the guard. There is no foreign key.
+`parcel_pages.parcel_id` does not reference `parcels.id`. A direct `Save` can store a page for a parcel row that does not exist. There is no foreign key. scrape-5 calls `Save` only from the `Enabled` branch, after the parcel save.
 
 The default `main` path does not call `Scrape`. A later edit that sets `Enabled` true with an empty `BaseURL` would return `ErrNotFound` for real GIS ids and stop the import. Keep `Enabled` false until `parcelURL` is real.
 
@@ -492,8 +494,6 @@ Read before editing.
 - Effective Go and Go Code Review Comments. Small interfaces, accept interfaces and return structs, define the interface at the consumer, `context.Context` first, wrap with `%w`, and check sentinels with `errors.Is`.
 
 scrape-1 and scrape-5 get `pstack/skills/how/SKILL.md` before the import list is edited, because the question is which package owns `Client`. scrape-2 gets `pstack/skills/interrogate/SKILL.md` on the retry loop before the code-ready swarm, because a wrapped `context.Canceled` that also matches `ErrTransient` is the break to look for. The execution trail follows `pstack/skills/show-me-your-work/SKILL.md`.
-
-Principles applied while choosing the shape. Exhaust the design space, by compiling three shapes and reading two arena sketches. Laziness protocol and subtract before you add, by refusing a registry. Foundational thinking, by fixing `Request` and `Result` before the retry loop. Type system discipline, by using `soil.CountyID` and sentinels. Boundary discipline, by parsing bytes in a pure function. Model the domain, by one `Result` for an unknown page. Make operations idempotent, by the upsert key. Sequence verifiable units, by five PRs with separate files. Test behavior not implementation, by `Conform` on `Client`. Explain the number, by separating the loopback probe from the 1 second hang gate. Redesign from first principles, by not keeping `parcelScraper` in package `union`. Separate before serializing shared state, by one limiter per scraper. Encode lessons in structure, by the compile-time assertion and the import test. Guard the context window, by reading the tree through explorers. Never block on the human, by picking the interface the operator already required.
 
 ## Appendix E. Decisions recorded
 
