@@ -82,6 +82,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] `Retry.Attempts` of 0 or less becomes 3. Values above 5 become 5. `Retry.UserAgent` empty becomes `ParcelDataCollection/0.0.1`. `Retry.MaxBody` of 0 or less becomes 8 MiB. That cap is a chosen ceiling. Appendix A says no page size was measured.
 - [ ] On 404 or 410, return `ErrNotFound` inside `*StatusError` and do not retry. On 401 or 403, return `ErrForbidden` and do not retry. On 408, 429, or 500 through 599, return `ErrTransient` and retry until the attempts are spent. Join a network error with `ErrTransient` while the context is still active.
 - [ ] On 429, if `Retry-After` is a delay or an HTTP date, wait that long when it is longer than the limiter wait. Otherwise the limiter is the gap. A canceled context during the wait returns `ctx.Err()` and does not match `ErrTransient`.
+- [ ] Retry a transient failure only for GET or HEAD with an empty body. A POST that returns 500 hits the handler once.
 - [ ] Read at most `MaxBody` plus one byte. A larger body is an error, is not `ErrTransient`, and is not retried. Set `User-Agent` only when the request left it empty.
 - [ ] Do not add a registry, a robots fetch, or a county import. Do not read the environment.
 
@@ -91,7 +92,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Add table-driven `t.Run` cases for 200, 404, 401, 403, 410, 429 with `Retry-After`, 500 then 200, three 500s, a canceled context, a redirect that stays on the test server, an empty `User-Agent`, a preset `User-Agent`, and a body over the cap. Run `go test -race ./internal/connector/shared/httpclient/ -count=1`.
+- [ ] Add table-driven `t.Run` cases for 200, 404, 401, 403, 410, 429 with `Retry-After`, 500 then 200, three 500s, a POST that returns 500 once, a canceled context, a redirect that stays on the test server, an empty `User-Agent`, a preset `User-Agent`, and a body over the cap. Run `go test -race ./internal/connector/shared/httpclient/ -count=1`.
 - [ ] Run `go vet ./internal/connector/shared/httpclient/` and `staticcheck ./internal/connector/shared/httpclient/`. Both print no findings.
 - [ ] Run `go test -race -cover ./internal/connector/shared/httpclient/ -count=1`. Fail if the coverage line is below 100.0 percent. Trunk measured 100.0 percent. Appendix A.
 
