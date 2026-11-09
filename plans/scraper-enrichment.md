@@ -1,10 +1,12 @@
 # Parcel scraper plan
 
-You want one shared scraper contract for every website, and a Union scraper that implements it. The contract package imports no county package. Union's scraper lives in `internal/connector/union`, and `main` constructs it. There is no registry and no `init`.
+Scraping `https://unionnc.devnetwedge.com` parcel and tax pages is disallowed. `robots.txt` for every user agent disallows `/parcel/*`, `/taxbill`, `/mobile_home/*`, `/view/*`, `/personalproperty/*`, `/scripts/*`, `/images/*`, and `/PropertyImages/*`. The tax pages named for this program are in that set. This plan does not design a crawl, a year loop, a tax table, a worker pool, or fixtures taken from those URLs. It does not use `/search/quick` to get around the disallow.
 
-Scraped bytes go in their own table. The scraper does not insert into `parcels` and does not write `source_extras`. The website is unknown, so the contract and a fixture-backed fake ship before any live host.
+You want one shared scraper contract for every website, and a Union scraper that implements it. The contract package imports `internal/county` and no site package. Union's scraper lives in `internal/connector/union`, and `main` constructs it. There is no registry and no `init`.
 
-Run scrape-2 and scrape-3 first. Run scrape-1 after soil-1 is on trunk. Run scrape-4 after scrape-1, scrape-3, and persist-1. Run scrape-5 after scrape-2 and scrape-4.
+Scraped bytes go in their own table. The scraper does not insert into `parcels` and does not write `source_extras`. The devnetwedge host is not the fixture client. The fixture client does not dial it.
+
+Run scrape-2 and scrape-3 first. Run scrape-1 after county-1 is on trunk. Run scrape-4 after scrape-1, scrape-3, and persist-1. Run scrape-5 after scrape-2 and scrape-4.
 
 ## How to read this
 
@@ -37,11 +39,12 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Spawn one owner per PR with the full lifecycle the execution playbook names.
 - [ ] Follow this dependency graph. Start dependent work only after its parent is on trunk. Do not stack these PRs. scrape-4 and scrape-5 each need more than one parent, and a stack has one parent.
   - [ ] scrape-2 and scrape-3 are independent and first. Both branch from trunk.
-  - [ ] scrape-1 after soil-1 from `plans/soil-layer.md` is on trunk. soil-1 is not a PR of this program.
+  - [ ] scrape-1 after county-1 is on trunk. county-1 is not a PR of this program. Another agent owns that plan and PR. Do not edit `plans/soil-layer.md`.
   - [ ] scrape-4 after scrape-1, scrape-3, and persist-1 are on trunk. persist-1 is in `plans/soil-layer.md`.
   - [ ] scrape-5 after scrape-2 and scrape-4 are on trunk.
 - [ ] Hold the file boundaries. scrape-2 touches only `internal/connector/shared/httpclient/`. scrape-3 touches only the new migration file. scrape-1 touches only `internal/scrape/`. scrape-4 touches only `internal/scrapestore/`. scrape-5 touches only `internal/connector/union/web.go`, `internal/connector/union/web_test.go`, `internal/connector/union/testdata/scrape/`, `main.go`, and the `init` sample in `docs/ARCHITECTURE.md`.
 - [ ] Hold the review gate. No PR in this program changes an interaction. None wait for screenshots in chat before the operator decides to land them.
+- [ ] Do not add a PR that requests `unionnc.devnetwedge.com`. Appendix A records the robots disallow. This program has no tax-year table, no worker pool, and no saved parcel page from that host.
 
 ### PR mechanics, for every PR
 
@@ -182,7 +185,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 ## Add the scrape contract and the fixture client (scrape-1)
 
-**Depends on.** soil-1.
+**Depends on.** county-1.
 
 **Files.**
 
@@ -200,11 +203,11 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Build.**
 
-- [ ] Add `Request`, `Result`, and `Client` in package `scrape`. `Request` holds `soil.CountyID` and `ParcelID`. `Result` holds `County`, `ParcelID`, `Source`, `FetchedAt`, `Raw`, and `Sum`. Use `soil.CountyID` from soil-1. Do not declare another county type.
-- [ ] Add `ErrNotFound`, `ErrForbidden`, `ErrTransient`, and `ErrParse`. Add `StatusError` with `Unwrap`. Package `scrape` imports `internal/soil` and the standard library only.
+- [ ] Add `Request`, `Result`, and `Client` in package `scrape`. `Request` holds `county.CountyID` and `ParcelID`. `Result` holds `County`, `ParcelID`, `Source`, `FetchedAt`, `Raw`, and `Sum`. Use `county.CountyID` from `internal/county`. Do not declare another county type.
+- [ ] Add `ErrNotFound`, `ErrForbidden`, `ErrTransient`, and `ErrParse`. Add `StatusError` with `Unwrap`. Package `scrape` imports `internal/county` and the standard library only.
 - [ ] Add `RobotsAllow(body []byte, path, userAgent string) (bool, error)`. A disallow returns false. Do not fetch a URL inside this function.
 - [ ] Add `Fixture` with `Scrape`. It copies `Raw` before return, sets `Sum` to SHA-256 of that copy, returns `ErrNotFound` for an unknown parcel id, and returns `ErrParse` for the bad fixture id. A later `Scrape` must not overwrite an earlier `Result.Raw`. A canceled context returns `ctx.Err()` before a lookup.
-- [ ] Add `Conform(t *testing.T, client Client, county soil.CountyID, source, knownID, missingID, badID string)`. Every later scraper calls it. The helper asserts the known id, the missing id, the bad id, an empty parcel id, cancellation, and a second call with the same `Sum`.
+- [ ] Add `Conform(t *testing.T, client Client, county county.CountyID, source, knownID, missingID, badID string)`. Every later scraper calls it. The helper asserts the known id, the missing id, the bad id, an empty parcel id, cancellation, and a second call with the same `Sum`.
 - [ ] Add `var _ Client = (*Fixture)(nil)` in `client.go`.
 - [ ] Do not import `internal/connector/union`, `internal/service`, or `internal/models`. Do not add a registry.
 
@@ -230,7 +233,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 7. Compare `Raw` to `testdata/fixture-page.bin`. Save `/tmp/swarm-scrape-1/worker-7/golden.png`. Pass when the bytes match and a second call returns the same `Sum`.
 - [ ] Lane 8. Scrape parcel A, then scrape parcel B on the same `Fixture`. Save `/tmp/swarm-scrape-1/worker-8/copy.png`. Pass when the first `Result.Raw` is still parcel A's bytes, `Sum` is the SHA-256 of those bytes, and mutating the caller's copy of `Raw` leaves `Result.Raw` unchanged.
 - [ ] Lane 9. Parse `testdata/robots.txt` with `RobotsAllow` for an allowed path and a disallowed path. Save `/tmp/swarm-scrape-1/worker-9/robots.png`. Pass when the allowed path is true, the disallowed path is false, and the function opened no socket.
-- [ ] Lane 10. Parse the Go files in `internal/scrape` and list imports. Save `/tmp/swarm-scrape-1/worker-10/imports.png`. Pass when the only module import is `internal/soil`.
+- [ ] Lane 10. Parse the Go files in `internal/scrape` and list imports. Save `/tmp/swarm-scrape-1/worker-10/imports.png`. Pass when the only module import is `internal/county`.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -245,8 +248,8 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
-- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged. soil-1 is already on that trunk.
-- [ ] The owner does not merge. The operator lands scrape-1 after soil-1.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged. county-1 is already on that trunk.
+- [ ] The owner does not merge. The operator lands scrape-1 after county-1.
 
 ## Upsert a scraped page (scrape-4)
 
@@ -279,7 +282,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 2. `Save` one fixture page. Save `/tmp/swarm-scrape-4/worker-2/insert.png`. Pass when `parcel_id` is the fixture id and `raw_sha256` equals `Sum`.
 - [ ] Lane 3. `Save` the same key with different `Raw`. Save `/tmp/swarm-scrape-4/worker-3/upsert.png`. Pass when the count is 1 and `raw` matches the second save.
 - [ ] Lane 4. `Save` a `Result` whose `Sum` does not match `Raw`. Save `/tmp/swarm-scrape-4/worker-4/bad-sum.png`. Pass when `Save` returns an error and the table gains no row.
-- [ ] Lane 5. `Save` county `nope` if `Valid` rejects it. Save `/tmp/swarm-scrape-4/worker-5/bad-county.png`. Pass when `Save` returns an error. If soil-1's `Valid` accepts only `union`, this is that rejection.
+- [ ] Lane 5. `Save` county `nope` if `Valid` rejects it. Save `/tmp/swarm-scrape-4/worker-5/bad-county.png`. Pass when `Save` returns an error. If county-1's `Valid` accepts only `union`, this is that rejection.
 - [ ] Lane 6. Count `parcels` before and after `Save`. Save `/tmp/swarm-scrape-4/worker-6/no-parcel.png`. Pass when the count is unchanged.
 - [ ] Lane 7. Select `source_extras` for a persisted parcel. Save `/tmp/swarm-scrape-4/worker-7/extras.png`. Pass when `Save` did not change it.
 - [ ] Lane 8. Cancel the context before `Save`. Save `/tmp/swarm-scrape-4/worker-8/cancel.png`. Pass when no row is committed.
@@ -322,6 +325,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] `main` builds `NewWebSource` only when `Enabled` is true. The default path still prints GIS ids and returns the importer error. Do not log a scrape error and return nil. Do not add `func init`. Do not add a registry. Delete the `init` sample in `docs/ARCHITECTURE.md`.
 - [ ] When `Enabled` is true, the parcel-id hook calls `WebSource.Scrape` and then `scrapestore.Save` for each success. That call sits after the parcel save persist-1 added. The hook does not insert a parcel. Package `union` does not import `scrapestore`. The `Enabled` false path calls neither `Scrape` nor `Save`.
 - [ ] `web_test.go` calls `scrape.Conform` on a fixture `WebSource`. Do not import `internal/service` from a new file. `service` still does not import `union`.
+- [ ] Do not set `BaseURL` to `https://unionnc.devnetwedge.com`. `parcelURL` must not build `/parcel/`, `/taxbill`, `/view/`, `/mobile_home/`, or `/personalproperty/`. A test fails if `DefaultWebSourceConfig` or the fixture client contains that host.
 
 **You see.**
 
@@ -377,26 +381,44 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Measured.** A copy of `RateLimitedClient` under `/tmp/interrogate-scrape` failed three classification checks and one alias check. Wrapping a canceled `Do` with `ErrTransient` made `errors.Is` match both, and the loop ran 3 attempts with zero handler hits. A header timeout matched `context.DeadlineExceeded` while `ctx.Err()` was nil, so returning `ctx.Err()` returned nil. A limiter `Wait` that would miss the deadline did not match `context.DeadlineExceeded`, and wrapping it matched `ErrTransient`. A fixture that returned its own buffer changed the first `Raw` to the second parcel's bytes, while `Sum` stayed the hash of the first bytes.
 
+**Measured.** On 2026-11-09, `GET https://unionnc.devnetwedge.com/robots.txt` returned 200, `content-type` `text/plain`, 205 bytes, `last-modified` `Wed, 08 Jan 2025 16:24:02 GMT`. The body is below. The next request was the site root, after a 3 second pause, with the same user agent `LandmanResearch/0.1 (public county parcel research; one-time polite sample; not a bulk crawl)`. The root returned 200, `text/html`, 15,672 bytes, title `Union County Property Tax Inquiry`. The visible footer says `© 2026 DEVNET, Inc`, `wEdge Version: 5.1.9693.29933`, and `Data updated: 2026-11-06 19:45:00`. The root lists no terms, privacy, or disclaimer link. No parcel, tax bill, or search URL was requested.
+
+```
+User-Agent: *
+Disallow: /parcel/*
+Disallow: /taxbill
+Disallow: /mobile_home/*
+Disallow: /view/*
+Disallow: /personalproperty/*
+Disallow: /scripts/*
+Disallow: /images/*
+Disallow: /PropertyImages/*
+```
+
+**Read.** DEVNET describes wEdge as the public web front for county property data, including tax bills and amounts due, at `https://www.devnetinc.com/wedge/`. Other hosts on the same product name include `https://clearfieldpa.devnetwedge.com/`, `https://pemiscotmo.devnetwedge.com/`, and `https://hancockil.devnetwedge.com/`. A shared parser would belong in a vendor package if a crawl were allowed. This plan does not add that package. The Union homepage also links `http://www.devnetinc.com` and `https://assets.devnetwedge.com/`.
+
+**Read.** GIS parcel ids in `plans/soil-layer.md` include `01060017` and `01201017K`. The operator named `09336350` on the tax site. Those strings were not compared on a fetched tax page. The translator fixture `12-345-678` is a test value in `internal/connector/union/translator_test.go`, not a measured tax-site id.
+
 **Measured.** On this tree, `go test -race -cover` printed `httpclient` 100.0 percent, `union` 76.8 percent, and `service` 84.3 percent. `internal/models` has no tests. `make test` is `go test -v -race ./...` at `Makefile` lines 27 to 28. There is no coverage floor, fuzz target, `testdata` directory, or `staticcheck` target in the repo.
 
 **Read.** `RateLimitedClient.Do` waits, then calls `Client.Do`, at `internal/connector/shared/httpclient/http_client.go` lines 24 to 29. It does not retry. `NewRateLimitedClient` turns 0 into 1 and passes a negative rate through, lines 63 to 71. GIS sets `User-Agent` to `ParcelDataCollection/0.0.1` at `internal/connector/union/gis.go` line 219 and clamps a non-positive rate at lines 65 to 67. The only production `https` host in Go is the layer 215 query at `gis.go` line 27. No scraper website is named. Do not use that GIS host as the scraper target.
 
-**Read.** `type CountyID` is not in Go on this branch. soil-1 in `plans/soil-layer.md` adds it in `internal/soil/county.go`, with `CountyUnion` equal to `union` and `Valid`. That plan's check constraint is on the soil tables, not on `parcels.county_id`. `parcels.county_id` is `TEXT NOT NULL` with no check, at `db/migrations/000001_init_schema.sql` line 8. The unique parcel key is line 73. `source_extras` is line 68. Nothing in Go inserts `parcels`. `000002_parcels_storage_srid.sql` already exists, so this program must not create `000002_soil.sql` or another `000002` file.
+**Read.** `type CountyID` is not in Go on this branch. county-1 adds it in `internal/county`. This plan does not declare that type and does not edit `plans/soil-layer.md`. `parcels.county_id` is `TEXT NOT NULL` with no check, at `db/migrations/000001_init_schema.sql` line 8. The unique parcel key is line 73. `source_extras` is line 68. Nothing in Go inserts `parcels`. `000002_parcels_storage_srid.sql` already exists, so this program must not create `000002_soil.sql` or another `000002` file.
 
 **Read.** Removal plan Steps 1, 2, and 5 are already on `main`. `main.go` is the GIS id stream. There is no `func init(` in Go. `service` does not import `union`. Only `main` imports `internal/connector/union`.
 
-The chosen signatures are the contract. They are not a second copy of `soil.CountyID`.
+The chosen signatures are the contract. They are not a second copy of `county.CountyID`.
 
 ```go
 package scrape
 
 type Request struct {
-	County   soil.CountyID
+	County   county.CountyID
 	ParcelID string
 }
 
 type Result struct {
-	County    soil.CountyID
+	County    county.CountyID
 	ParcelID  string
 	Source    string
 	FetchedAt time.Time
@@ -429,15 +451,15 @@ func (s *WebSource) Scrape(ctx context.Context, req scrape.Request) (scrape.Resu
 var _ scrape.Client = (*WebSource)(nil)
 ```
 
-Open questions that no run in this repo can settle.
+Open questions.
 
-1. Which website, URL pattern, and auth does the Union scraper use? The tree does not name one.
-2. Which fields stay on a later typed page? `Result.Raw` is the re-parse payload until that list exists.
-3. Is the read one GET per parcel, a search, or a paged dump? A paged dump replaces `WebSource.Scrape` with `connector.BatchFetchSource` in that same change.
-4. Should one not-found skip that parcel and continue the batch? This plan returns the error and stops.
-5. If soil-1 names `Valid` something else, match soil-1. Do not keep a second method.
-6. `main` times out after 10 minutes. A 1 request per second walk of every kept id can outlive that timeout once a URL exists. The timeout for a real scrape run is still open.
-7. The 8 MiB body cap is a chosen ceiling. No page was measured. Change it when a real response has a size.
+1. The operator named `https://unionnc.devnetwedge.com`, `/search/quick?q=` plus a GIS parcel id, and `/parcel/view/{PID}/{year}`. `robots.txt` disallows `/parcel/*`. Those parcel pages were not fetched. The PID match, the search result shape, and the unknown-PID status are unmeasured.
+2. Tax fields on the live pages are unmeasured. No fixture was saved from that host. `Result.Raw` remains the re-parse payload for a site that allows a fetch.
+3. Whether one page lists every tax year is unmeasured. Do not guess years, and do not design that crawl, until the disallow changes.
+4. Skip versus stop for a live run stays unresolved. The operator's later rule is that a not-found skips and is recorded, a transient error retries, and a forbidden response or a 429 storm stops the run. That rule applies only after a site allows the fetch. This program does not implement that run.
+5. If county-1 names `Valid` something else, match county-1. Do not keep a second method.
+6. The 10 minute `main` timeout versus a full tax run is unmeasured. No parcel page was fetched, so there is no per-request time and no full-run estimate.
+7. The 8 MiB body cap is a chosen ceiling. No page was measured. Change it when a permitted response has a size.
 
 ## Appendix B. Alternatives rejected
 
@@ -447,7 +469,7 @@ The base is the concrete HTTP helper and the Union type in package `union`. The 
 
 **(b) loses as the caller's API.** A public `Fetcher` plus a public `Parser` makes `main` fetch and then parse. The pure parser stays, unexported, so golden files and fuzz hit a function over bytes. `DoRetry` hides status, retry, `Retry-After`, and the body cap. Per boundary discipline, status is classified at the HTTP edge and `parse` does not see `*http.Response`.
 
-**(c) loses.** `Scraper[T any]` compiles for one `T` and does not compile for a slice of two result types. The probe output is in Appendix A. A second site with a different `T` cannot sit in one list. `Result` is one type, so a second site implements `Client` without a type parameter. Per type system discipline, the county id is `soil.CountyID`, not a second string type and not a type parameter.
+**(c) loses.** `Scraper[T any]` compiles for one `T` and does not compile for a slice of two result types. The probe output is in Appendix A. A second site with a different `T` cannot sit in one list. `Result` is one type, so a second site implements `Client` without a type parameter. Per type system discipline, the county id is `county.CountyID`, not a second string type and not a type parameter.
 
 **A child package `internal/connector/union/scrape` loses.** That package name collides with `internal/scrape` once both are imported. The child that imports parent `union` cannot be imported back by the parent. `WebSource` stays in package `union`, which is the directory the operator named.
 
@@ -459,7 +481,9 @@ The base is the concrete HTTP helper and the Union type in package `union`. The 
 
 ## Appendix C. Risks
 
-`control-cli` is not in this repo. Live lanes drive `go test`, `curl`, and `psql`, and they save a text render at the `.png` path. A lane that cannot draw still returns that file.
+`https://unionnc.devnetwedge.com/robots.txt` disallows the parcel and tax paths for every user agent. A crawl of those paths, a search used to reach them, a year loop, a tax table, and a worker pool are out of this program. The generic fixture client stays. It does not dial that host.
+
+`control-cli` is not in this repo. Live lanes drive `go test`, `curl`, and `psql`, and they save a text render at the `.png` path. A lane that cannot draw still returns that file. Live lanes do not request the disallowed host.
 
 This repo has no `pstack/` tree. `git show origin/main:pstack/...` fails until those files exist on trunk. The owner reads the installed poteto-mode skill and records that fallback. `deslop` was not installed in the planning session. The owner runs it when it is installed.
 
@@ -475,7 +499,7 @@ The default `main` path does not call `Scrape`. A later edit that sets `Enabled`
 
 `httpclient` tests that pass `server.Client()` do not exercise `NewHTTPClient` timeouts. scrape-2's header-timeout case sets `ResponseHeaderTimeout` on its own client. A cancel must not be wrapped as `ErrTransient`.
 
-Package `scrape` imports `internal/soil`. soil-1 must be on trunk first. If soil-1's method is not `Valid() bool`, scrape-1 matches the method soil-1 shipped.
+Package `scrape` imports `internal/county` and does not import `internal/soil`. county-1 must be on trunk first. If county-1's method is not `Valid() bool`, scrape-1 matches the method county-1 shipped.
 
 The 10 minute timeout in `main` is a risk once scraping is enabled. It is open question 6.
 
@@ -493,7 +517,7 @@ Read before editing.
 - `internal/models/gis_parcel.go` lines 13 to 31.
 - `db/migrations/000001_init_schema.sql` lines 5 to 73.
 - `db/migrations/000002_parcels_storage_srid.sql`.
-- `plans/soil-layer.md` soil-1, soil-3, and persist-1.
+- `plans/soil-layer.md` persist-1 and the soil migration number. Do not edit that file. county-1 is the other agent's plan.
 - `plans/spatialist-removal-and-critical-fixes.md` line 5.
 - Effective Go and Go Code Review Comments. Small interfaces, accept interfaces and return structs, define the interface at the consumer, `context.Context` first, wrap with `%w`, and check sentinels with `errors.Is`.
 
@@ -505,12 +529,16 @@ The operator required a generic interface in a shared package, neutral to county
 
 The operator required solid tests. Each implementation PR has unit, live, and perf boxes. The patterns are table-driven tests, `httptest`, golden files with `-update`, `Conform`, fuzz, `-race`, a compile-time assertion, `go vet`, `staticcheck`, and a coverage floor per package.
 
-`CountyID` stays soil-1's type. This plan does not redefine it. [The soil plan PR](https://github.com/JustinMonty20/landman/pull/7) is merged. The Go type is not on `main`.
+`CountyID` moves to `internal/county` in county-1. That plan and PR belong to another agent. This plan uses `county.CountyID` and does not declare the type. It does not edit `plans/soil-layer.md`. The Go type is not on `main`.
 
 Scraped data goes in `parcel_pages`, keyed by county id, parcel id, and source name, with `fetched_at`, `raw`, and `raw_sha256`. It does not go in `parcels.source_extras`. persist-1 writes parcels first. The scraper never inserts parcels. `Save` is an upsert.
 
 No registry until a second site exists. The fixture client is the test double, not a plugin.
 
-The website stays unknown. scrape-1 ships the interface and the fixture. scrape-5's default does not dial.
+The operator named the Union tax site, the search URL, and the parcel URL with a tax year. The operator asked whether every year has to be fetched, asked for parallel scraping, and asked to store what the owner owes because a balance due marks a property that might sell. Those answers are recorded here. `robots.txt` disallows the parcel and tax paths, so none of that crawl is designed.
+
+The operator decided that `CountyID` leaves `internal/soil`. The package path in this plan is `internal/county`. If county-1 settles a different path, match county-1 and keep scrape-1's only module import equal to that path. scrape-1 depends on county-1, not on soil-1.
+
+scrape-1 ships the interface and the fixture. scrape-5's default does not dial. The default base URL is not `https://unionnc.devnetwedge.com`.
 
 The cross-judge was skipped after Claude weekly usage rejected `claude-opus-5-5-xhigh` and `claude-sonnet-5-5-high`. Both arena sketches were written by Grok. The pick is recorded in Appendix B.
