@@ -2,9 +2,9 @@
 
 ## Out-of-scope decision
 
-Ingest parallelism stays inside persist-1, soil-2, and soil-4. No new PR. filter-1 only supplies the vacant rule the server where copies. The county HTTP client stays at 1 request per second. The speedups are the vacant where, page size 2000, a page write overlapped with the next fetch, and a 4 worker join.
+The operator corrected the parallel ingest. Doing less HTTP work is the architecture. The page loop writes each page, then fetches the next. The join is one SQL statement. A worker pool is a later fallback only if that statement misses 540 seconds, and this plan does not pick the worker count.
 
-PostGIS chunk timing was skipped. `psql` and `docker` are not installed here, so 4 workers and 1000 ids per chunk are a conservative default. soil-4 fails a slow fixture at 30 seconds and a county join at 480 seconds.
+PostGIS timing of that statement was skipped. `psql` is not installed here. The 540 second budget is the cancel minus the 21 second request floor, not a measured join time.
 
 ## Unrelated bug
 
@@ -28,7 +28,7 @@ Map painting, vector tiles, low-zoom simplification, and a map UI stay out. The 
 
 ## Unrelated bug
 
-`main` cancels after 10 minutes. Paging every parcel at batch size 50 would still miss that cancel. The parallelism revision above keeps the deadline and changes the import off that path. The earlier note that a live persist-1 run must hit the timeout described the 50 row path only.
+`main` cancels after 10 minutes. Paging every parcel at batch size 50 would still miss that cancel. The revised request floor is 21 seconds before transfer, so the plan keeps the deadline and changes the import off that path. The earlier note that a live persist-1 run must hit the timeout described the 50 row path only.
 
 ## Scope tangent
 
