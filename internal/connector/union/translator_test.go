@@ -1,6 +1,7 @@
 package union
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -163,8 +164,8 @@ func TestGISTranslator_TranslatePopulatesAllGISParcelSections(t *testing.T) {
 	assertString(t, parcel.Owner.CurrentName2, "Current Two", "Owner.CurrentName2")
 	assertString(t, parcel.Owner.TaxName1, "Tax One", "Owner.TaxName1")
 	assertString(t, parcel.Owner.TaxName2, "Tax Two", "Owner.TaxName2")
-	assertInt(t, parcel.Owner.TaxOwnerID1, 101, "Owner.TaxOwnerID1")
-	assertInt(t, parcel.Owner.TaxOwnerID2, 202, "Owner.TaxOwnerID2")
+	assertString(t, parcel.Owner.TaxOwnerID1, "101", "Owner.TaxOwnerID1")
+	assertString(t, parcel.Owner.TaxOwnerID2, "202", "Owner.TaxOwnerID2")
 
 	assertString(t, parcel.Mailing.Line1, "123 Mail St", "Mailing.Line1")
 	assertString(t, parcel.Mailing.Line2, "Suite 4", "Mailing.Line2")
@@ -200,26 +201,24 @@ func TestGISTranslator_TranslatePopulatesAllGISParcelSections(t *testing.T) {
 	assertFloat(t, parcel.Valuation.Total, 350000, "Valuation.Total")
 	assertFloat(t, parcel.Valuation.Assessed, 300000, "Valuation.Assessed")
 
-	if parcel.SourceExtras.Union == nil {
-		t.Fatal("SourceExtras.Union is nil")
-	}
-	assertInt(t, parcel.SourceExtras.Union.OBJECTID, 1, "Extras.OBJECTID")
-	assertInt(t, parcel.SourceExtras.Union.OBJECTID_1, 2, "Extras.OBJECTID_1")
-	assertString(t, parcel.SourceExtras.Union.SUBCODE, "SUB", "Extras.SUBCODE")
-	assertString(t, parcel.SourceExtras.Union.DIST_TWN, "DT", "Extras.DIST_TWN")
-	assertString(t, parcel.SourceExtras.Union.DIST_CODE, "DC", "Extras.DIST_CODE")
-	assertString(t, parcel.SourceExtras.Union.TAX_DISTRI, "TD", "Extras.TAX_DISTRI")
-	assertString(t, parcel.SourceExtras.Union.TWSHP_CD, "TC", "Extras.TWSHP_CD")
-	assertString(t, parcel.SourceExtras.Union.TWSHP_DESC, "Township", "Extras.TWSHP_DESC")
-	assertString(t, parcel.SourceExtras.Union.DESC1_DESC, "Desc", "Extras.DESC1_DESC")
-	assertString(t, parcel.SourceExtras.Union.DESC1_CODE, "D1", "Extras.DESC1_CODE")
-	assertString(t, parcel.SourceExtras.Union.LUV_YES_NO, "N", "Extras.LUV_YES_NO")
-	assertString(t, parcel.SourceExtras.Union.MULSTR, "M", "Extras.MULSTR")
-	assertString(t, parcel.SourceExtras.Union.MULT_LANDSEQ, "SEQ", "Extras.MULT_LANDSEQ")
-	assertString(t, parcel.SourceExtras.Union.NBHDNAME, "Neighborhood", "Extras.NBHDNAME")
-	assertString(t, parcel.SourceExtras.Union.NBHDNUM, "100", "Extras.NBHDNUM")
-	assertString(t, parcel.SourceExtras.Union.NBHNEW, "NEW", "Extras.NBHNEW")
-	assertInt(t, parcel.SourceExtras.Union.IDCOL, 999, "Extras.IDCOL")
+	extras := unionExtras(t, parcel.SourceExtras)
+	assertInt(t, extras.OBJECTID, 1, "Extras.OBJECTID")
+	assertInt(t, extras.OBJECTID_1, 2, "Extras.OBJECTID_1")
+	assertString(t, extras.SUBCODE, "SUB", "Extras.SUBCODE")
+	assertString(t, extras.DIST_TWN, "DT", "Extras.DIST_TWN")
+	assertString(t, extras.DIST_CODE, "DC", "Extras.DIST_CODE")
+	assertString(t, extras.TAX_DISTRI, "TD", "Extras.TAX_DISTRI")
+	assertString(t, extras.TWSHP_CD, "TC", "Extras.TWSHP_CD")
+	assertString(t, extras.TWSHP_DESC, "Township", "Extras.TWSHP_DESC")
+	assertString(t, extras.DESC1_DESC, "Desc", "Extras.DESC1_DESC")
+	assertString(t, extras.DESC1_CODE, "D1", "Extras.DESC1_CODE")
+	assertString(t, extras.LUV_YES_NO, "N", "Extras.LUV_YES_NO")
+	assertString(t, extras.MULSTR, "M", "Extras.MULSTR")
+	assertString(t, extras.MULT_LANDSEQ, "SEQ", "Extras.MULT_LANDSEQ")
+	assertString(t, extras.NBHDNAME, "Neighborhood", "Extras.NBHDNAME")
+	assertString(t, extras.NBHDNUM, "100", "Extras.NBHDNUM")
+	assertString(t, extras.NBHNEW, "NEW", "Extras.NBHNEW")
+	assertInt(t, extras.IDCOL, 999, "Extras.IDCOL")
 }
 
 func TestGISTranslator_TranslateSalesAndDates(t *testing.T) {
@@ -232,9 +231,6 @@ func TestGISTranslator_TranslateSalesAndDates(t *testing.T) {
 	if len(parcel.Sales) != 3 {
 		t.Fatalf("len(Sales) = %d, want 3", len(parcel.Sales))
 	}
-	assertInt(t, parcel.Sales[0].SaleYear, 2020, "Sales[0].SaleYear")
-	assertInt(t, parcel.Sales[0].SaleMonth, 5, "Sales[0].SaleMonth")
-	assertInt(t, parcel.Sales[0].SaleDay, 15, "Sales[0].SaleDay")
 	assertFloat(t, parcel.Sales[0].Amount, 123456, "Sales[0].Amount")
 	assertString(t, parcel.Sales[0].DeedBook, "DB1", "Sales[0].DeedBook")
 	assertString(t, parcel.Sales[0].DeedPage, "DP1", "Sales[0].DeedPage")
@@ -250,10 +246,25 @@ func TestGISTranslator_TranslateSalesAndDates(t *testing.T) {
 		t.Fatalf("Sales[0].SaleDate = %v, want %v", parcel.Sales[0].SaleDate, wantSaleDate)
 	}
 
-	if parcel.SourceExtras.Union.DATE_CRT == nil || !parcel.SourceExtras.Union.DATE_CRT.Equal(time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("DATE_CRT = %v, want 2021-01-01 UTC", parcel.SourceExtras.Union.DATE_CRT)
+	extras := unionExtras(t, parcel.SourceExtras)
+	if extras.DATE_CRT == nil || !extras.DATE_CRT.Equal(time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("DATE_CRT = %v, want 2021-01-01 UTC", extras.DATE_CRT)
 	}
-	assertInt(t, parcel.SourceExtras.Union.OG_DATE_CRT, 1609459200000, "Extras.OG_DATE_CRT")
+	assertInt(t, extras.OG_DATE_CRT, 1609459200000, "Extras.OG_DATE_CRT")
+}
+
+func unionExtras(t *testing.T, raw json.RawMessage) UnionParcelExtras {
+	t.Helper()
+	var payload struct {
+		Union *UnionParcelExtras `json:"union"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal source extras: %v", err)
+	}
+	if payload.Union == nil {
+		t.Fatal("source extras missing union")
+	}
+	return *payload.Union
 }
 
 func TestGISTranslator_TranslateGeometry(t *testing.T) {
@@ -278,11 +289,11 @@ func TestGISTranslator_TranslateGeometry(t *testing.T) {
 		t.Fatalf("Translate returned error: %v", err)
 	}
 
-	if parcel.Geometry.SRID != unionGISSourceSRID {
-		t.Errorf("Geometry.SRID = %d, want %d", parcel.Geometry.SRID, unionGISSourceSRID)
+	if parcel.Geometry.SRID != 3857 {
+		t.Errorf("Geometry.SRID = %d, want 3857", parcel.Geometry.SRID)
 	}
-	if parcel.Geometry.SourceSRID == nil || *parcel.Geometry.SourceSRID != unionGISSourceSRID {
-		t.Fatalf("Geometry.SourceSRID = %v, want %d", parcel.Geometry.SourceSRID, unionGISSourceSRID)
+	if parcel.Geometry.SourceSRID == nil || *parcel.Geometry.SourceSRID != 3857 {
+		t.Fatalf("Geometry.SourceSRID = %v, want 3857", parcel.Geometry.SourceSRID)
 	}
 	assertFloat(t, parcel.Geometry.SourceArea, 123.45, "Geometry.SourceArea")
 	assertFloat(t, parcel.Geometry.SourceLength, 67.89, "Geometry.SourceLength")
@@ -290,8 +301,8 @@ func TestGISTranslator_TranslateGeometry(t *testing.T) {
 		t.Fatal("Geometry.Shape is nil")
 	}
 	shape := *parcel.Geometry.Shape
-	if shape.SRID() != unionGISSourceSRID {
-		t.Errorf("shape.SRID = %d, want %d", shape.SRID(), unionGISSourceSRID)
+	if shape.SRID() != 3857 {
+		t.Errorf("shape.SRID = %d, want 3857", shape.SRID())
 	}
 	if got := shape.FlatCoords(); len(got) != 8 || got[0] != 0 || got[2] != 1 || got[5] != 1 {
 		t.Fatalf("shape.FlatCoords() = %v, want parsed ring coordinates", got)

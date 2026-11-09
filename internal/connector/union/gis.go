@@ -164,25 +164,16 @@ func (s *GISSource) queryTotalParcels(ctx context.Context, params ArcGISParams) 
 		return 0, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	body, err := s.get(ctx, rawURL)
 	if err != nil {
 		return 0, err
 	}
 
-	req.Header.Set("User-Agent", "ParcelDataCollection/0.0.1")
-	resp, err := s.httpClient.Do(ctx, req)
-	if err != nil {
-		return 0, err
+	count := gjson.Get(string(body), "count")
+	if !count.Exists() {
+		return 0, fmt.Errorf("union county gis response missing count")
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
-	}
-
-	result := gjson.Get(string(body), "count")
-	return result.Int(), nil
+	return count.Int(), nil
 }
 
 func (s *GISSource) fetchBatch(ctx context.Context, params ArcGISParams, fetchedAt time.Time) ([]connector.RawRecord, error) {
@@ -191,19 +182,7 @@ func (s *GISSource) fetchBatch(ctx context.Context, params ArcGISParams, fetched
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("User-Agent", "ParcelDataCollection/0.0.1")
-	resp, err := s.httpClient.Do(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := s.get(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +208,37 @@ func (s *GISSource) fetchBatch(ctx context.Context, params ArcGISParams, fetched
 	}
 
 	return records, nil
+}
+
+func (s *GISSource) get(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", "ParcelDataCollection/0.0.1")
+	resp, err := s.httpClient.Do(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if err := unexpectedHTTPStatus(resp.StatusCode); err != nil {
+		return nil, err
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func unexpectedHTTPStatus(statusCode int) error {
+	if statusCode < http.StatusOK || statusCode > 299 {
+		return fmt.Errorf("union county gis unexpected status: %d", statusCode)
+	}
+	return nil
 }
 
 func (s *GISSource) buildURL(params ArcGISParams) (string, error) {
@@ -274,7 +284,7 @@ func (p ArcGISParams) ToURLValues() (url.Values, error) {
 func validateURL(baseURL string) error {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
-		return fmt.Errorf("invalid baseURL! invalid format: %v", err)
+		return fmt.Errorf("invalid baseURL! invalid format: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("invalid baseURL! must include scheme (http:// or https://)")

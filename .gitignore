@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Binary written by make build and make run
+/landman
+
 # Test binary, built with `go test -c`
 *.test
 

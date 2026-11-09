@@ -53,6 +53,30 @@ func (t *GISTranslator) Translate(raw connector.RawRecord) (*models.GISParcel, e
 	dateCRT, ogDateCRT := arcGISDate(attrs, "DATE_CRT")
 	shape := geometryShape(raw.RawData)
 	sourceSRID := unionGISSourceSRID
+	sourceExtras, err := marshalSourceExtras(UnionParcelExtras{
+		OBJECTID:     intPtr(attrs, "OBJECTID"),
+		OBJECTID_1:   intPtr(attrs, "OBJECTID_1"),
+		SUBCODE:      strPtr(attrs, "SUBCODE"),
+		DIST_TWN:     strPtr(attrs, "DIST_TWN"),
+		DIST_CODE:    strPtr(attrs, "DIST_CODE"),
+		TAX_DISTRI:   strPtr(attrs, "TAX_DISTRI"),
+		TWSHP_CD:     strPtr(attrs, "TWSHP_CD"),
+		TWSHP_DESC:   strPtr(attrs, "TWSHP_DESC"),
+		DESC1_DESC:   strPtr(attrs, "DESC1_DESC"),
+		DESC1_CODE:   strPtr(attrs, "DESC1_CODE"),
+		LUV_YES_NO:   strPtr(attrs, "LUV_YES_NO"),
+		MULSTR:       strPtr(attrs, "MULSTR"),
+		MULT_LANDSEQ: strPtr(attrs, "MULT_LANDSEQ"),
+		NBHDNAME:     strPtr(attrs, "NBHDNAME"),
+		NBHDNUM:      strPtr(attrs, "NBHDNUM"),
+		NBHNEW:       strPtr(attrs, "NBHNEW"),
+		IDCOL:        intPtr(attrs, "idcol"),
+		DATE_CRT:     dateCRT,
+		OG_DATE_CRT:  ogDateCRT,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	parcel := &models.GISParcel{
 		Identity: models.ParcelIdentity{
@@ -69,8 +93,8 @@ func (t *GISTranslator) Translate(raw connector.RawRecord) (*models.GISParcel, e
 			CurrentName2: strPtr(attrs, "CURR_NAME2"),
 			TaxName1:     strPtr(attrs, "JAN1_NAME1"),
 			TaxName2:     strPtr(attrs, "JAN1_NAME2"),
-			TaxOwnerID1:  intPtr(attrs, "JAN1_OWNERID"),
-			TaxOwnerID2:  intPtr(attrs, "JAN1_OWNERID2"),
+			TaxOwnerID1:  strPtr(attrs, "JAN1_OWNERID"),
+			TaxOwnerID2:  strPtr(attrs, "JAN1_OWNERID2"),
 		},
 		Mailing: models.ParcelAddress{
 			Line1:      strPtr(attrs, "CURR_ADDR1"),
@@ -121,29 +145,7 @@ func (t *GISTranslator) Translate(raw connector.RawRecord) (*models.GISParcel, e
 			SourceArea:   floatPtr(attrs, "SHAPE.STArea()"),
 			SourceLength: floatPtr(attrs, "SHAPE.STLength()"),
 		},
-		SourceExtras: models.ParcelSourceExtras{
-			Union: &models.UnionParcelExtras{
-				OBJECTID:     intPtr(attrs, "OBJECTID"),
-				OBJECTID_1:   intPtr(attrs, "OBJECTID_1"),
-				SUBCODE:      strPtr(attrs, "SUBCODE"),
-				DIST_TWN:     strPtr(attrs, "DIST_TWN"),
-				DIST_CODE:    strPtr(attrs, "DIST_CODE"),
-				TAX_DISTRI:   strPtr(attrs, "TAX_DISTRI"),
-				TWSHP_CD:     strPtr(attrs, "TWSHP_CD"),
-				TWSHP_DESC:   strPtr(attrs, "TWSHP_DESC"),
-				DESC1_DESC:   strPtr(attrs, "DESC1_DESC"),
-				DESC1_CODE:   strPtr(attrs, "DESC1_CODE"),
-				LUV_YES_NO:   strPtr(attrs, "LUV_YES_NO"),
-				MULSTR:       strPtr(attrs, "MULSTR"),
-				MULT_LANDSEQ: strPtr(attrs, "MULT_LANDSEQ"),
-				NBHDNAME:     strPtr(attrs, "NBHDNAME"),
-				NBHDNUM:      strPtr(attrs, "NBHDNUM"),
-				NBHNEW:       strPtr(attrs, "NBHNEW"),
-				IDCOL:        intPtr(attrs, "idcol"),
-				DATE_CRT:     dateCRT,
-				OG_DATE_CRT:  ogDateCRT,
-			},
-		},
+		SourceExtras: sourceExtras,
 	}
 
 	return parcel, nil
@@ -380,9 +382,6 @@ func buildSales(attrs map[string]interface{}) []models.ParcelSale {
 			Sequence:    i + 1,
 			SaleDate:    saleDate,
 			OGSaleDate:  ogSaleDate,
-			SaleYear:    intPtr(attrs, prefix+"_SALE_YEAR"),
-			SaleMonth:   intPtr(attrs, prefix+"_SALE_MTH"),
-			SaleDay:     intPtr(attrs, prefix+"_SALE_DAY"),
 			Amount:      floatPtr(attrs, prefix+"_SALESAMT"),
 			DeedBook:    strPtr(attrs, prefix+"_DEED_BOOK"),
 			DeedPage:    strPtr(attrs, prefix+"_DEED_PAGE"),
@@ -399,5 +398,5 @@ func buildSales(attrs map[string]interface{}) []models.ParcelSale {
 }
 
 func saleHasData(sale models.ParcelSale) bool {
-	return sale.SaleDate != nil || sale.OGSaleDate != nil || sale.SaleYear != nil || sale.SaleMonth != nil || sale.SaleDay != nil || sale.Amount != nil || sale.DeedBook != nil || sale.DeedPage != nil || sale.DeedType != nil || sale.DeedQuality != nil || sale.Grantor != nil || sale.Grantor2 != nil
+	return sale.SaleDate != nil || sale.OGSaleDate != nil || sale.Amount != nil || sale.DeedBook != nil || sale.DeedPage != nil || sale.DeedType != nil || sale.DeedQuality != nil || sale.Grantor != nil || sale.Grantor2 != nil
 }
