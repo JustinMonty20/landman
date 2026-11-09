@@ -77,7 +77,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 **Files.**
 
 - [ ] Create `internal/county/county.go`.
-- [ ] Create `internal/county/county_test.go`.
+- [ ] Create `internal/county/county_test.go` with `package county`, the same package as `county.go`. Existing tests use that form. `internal/connector/union/vacant_filter_test.go` line 1 is `package union`.
 - [ ] Create one goose migration, `db/migrations/<prefix>_parcels_county_check.sql`. At implementation time, list `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. On main at `1bdf7b8cd51f8031f5ff108be623f6a354ef70b1` the highest prefix is `000002`, so the file is `db/migrations/000003_parcels_county_check.sql` unless a higher prefix has already landed. Do not call `make migrate-create` for the name. `Makefile` lines 82 to 88 run `goose create` with no sequential flag, and the name it emits is a timestamp.
 - [ ] Do not edit `db/migrations/000001_init_schema.sql` or `db/migrations/000002_parcels_storage_srid.sql`.
 
@@ -180,7 +180,7 @@ No prototype branch, SHA, or screenshot. `playbooks/prototype.md` step 1 says no
 
 ## Appendix B. Alternatives rejected
 
-`county.CountyID` loses. Clients would write `county.CountyID`, which repeats the package name. Effective Go uses `bufio.Reader` for that reason. Code Review Comments uses `chubby.File`. The same rule makes the constant `county.Union`, not `county.CountyUnion`. `county.ID` does not collide with a package or a defined type on `main`. The packages on `main` are `main`, `connector`, `httpclient`, `union`, `models`, and `service`. Package `union` is the adapter under `internal/connector/union`. A file can import `county` and `union` together. The qualifiers differ. The field name `CountyID` on `ParcelIdentity` stays a field in package `models`. It is not this type.
+`county.CountyID` loses. Clients would write `county.CountyID`, which repeats the package name. Effective Go uses `bufio.Reader` for that reason. Code Review Comments uses `chubby.File`. The same rule makes the constant `county.Union`, not `county.CountyUnion`. `county.ID` does not collide with a package or a defined type on `main`. The packages on `main` are `main`, `connector`, `httpclient`, `union`, `models`, and `service`. Package `union` is the adapter under `internal/connector/union`. A file can import `county` and `union` together. The qualifiers differ. The field name `CountyID` on `ParcelIdentity` stays a field in package `models`. It is not this type. `DataSource.County` at `internal/connector/datasource.go` line 33 and `GISSource.County` at `internal/connector/union/gis.go` line 80 are methods. A file can call `src.County()` and use `county.ID` together. Those names do not clash.
 
 Keeping the type in `internal/soil` loses. `plans/soil-layer.md` soil-1 was going to declare `type CountyID string` in `internal/soil/county.go`. Scrape would then import `internal/soil` to name a county. Soil polygons use a county id. They do not own it. `parcels.county_id` already exists, and no soil table exists on `main`. That import would make scrape depend on soil for a value that is not a soil polygon. Per model-the-domain, the id gets its own small package. Per subtract-before-you-add, do not add the type to soil and move it later.
 
