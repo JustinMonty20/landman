@@ -2,13 +2,13 @@
 
 You want soil for every parcel the vacant filter keeps, for every county, in one shared model. Union is only the first adapter. It reads MapServer layer 197. This file is the plan. It changes no Go code, no migration, and no config.
 
-Shared types live in `internal/soil`. Shared tables are `soil_polygons`, `parcel_soils`, and `soil_map_units`. County id is a Go string enum and a check-constrained text column, the same text type as `parcels.county_id`. Appendix A holds the measurements. Appendix B holds the rejected designs.
+Shared types live in `internal/soil`. Shared tables are `soil_polygons`, `parcel_soils`, and `soil_map_units`. The county id type lives in `internal/county`, from `plans/county-id-package.md`. Soil stores that id as `TEXT` with `CHECK (county_id IN ('union'))`, the same text type as `parcels.county_id`. Appendix A holds the measurements. Appendix B holds the rejected designs.
 
 ## How to read this
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs `pstack/skills/poteto-mode/playbooks/autopilot-stack.md`. The operator lands filter-1, soil-1, persist-1, soil-2, soil-3, and soil-4. This plan stops at merge-ready. Nobody merges from the checklist.
+The program runs `pstack/skills/poteto-mode/playbooks/autopilot-stack.md`. The operator lands filter-1, soil-1, persist-1, soil-2, soil-3, and soil-4. soil-1 waits until county-1 from `plans/county-id-package.md` is on trunk. This program does not land county-1. This plan stops at merge-ready. Nobody merges from the checklist.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -22,6 +22,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] `git show origin/main:pstack/skills/swarm/SKILL.md`
   - [ ] `git show origin/main:pstack/skills/poteto-mode/playbooks/opening-a-pr.md`
   - [ ] `git show origin/main:plans/soil-layer.md`
+  - [ ] `git show origin/main:plans/county-id-package.md`
   - [ ] `git show origin/main:plans/scraper-enrichment.md`
   - [ ] `git show origin/main:plans/spatialist-removal-and-critical-fixes.md`
 - [ ] On the operator's go, arm the audit tick as `/loop 1h` with the tick prompt below. Never leave the cadence to memory.
@@ -32,11 +33,12 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] Spawn one owner per PR with the full lifecycle the execution playbook names.
 - [ ] Follow this dependency graph. Start dependent work only after its parent merges, or base it on the parent branch when the execution playbook stacks.
-  - [ ] filter-1 and soil-1 are independent and first. Both branch from trunk.
+  - [ ] filter-1 branches from trunk. It does not wait on county-1.
+  - [ ] soil-1 starts only after county-1 from `plans/county-id-package.md` is on trunk. county-1 is not an owner in this program.
   - [ ] persist-1 after filter-1.
   - [ ] soil-2 and soil-3 both start after soil-1. They do not edit the same files.
   - [ ] soil-4 after persist-1, soil-2, and soil-3.
-- [ ] Hold the file boundaries. filter-1 touches only `internal/connector/union/vacant_filter.go` and `internal/connector/union/vacant_filter_test.go`. persist-1 touches only `internal/service/parcel_id_importer.go`, `internal/service/parcel_id_importer_test.go`, `internal/parcelstore/parcels.go`, `internal/parcelstore/parcels_test.go`, and `main.go`. soil-1 touches only `internal/soil/` and `internal/connector/union/soil_translate.go`, `internal/connector/union/soil_translate_test.go`, and `internal/connector/union/testdata/soil/`. soil-2 touches only `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, and `internal/connector/union/soil_fetch.go`. soil-3 touches only `db/migrations/000002_soil.sql`. soil-4 touches only `internal/soil/join.go`, `internal/soil/names.go`, their tests, and `main.go`.
+- [ ] Hold the file boundaries. filter-1 touches only `internal/connector/union/vacant_filter.go` and `internal/connector/union/vacant_filter_test.go`. persist-1 touches only `internal/service/parcel_id_importer.go`, `internal/service/parcel_id_importer_test.go`, `internal/parcelstore/parcels.go`, `internal/parcelstore/parcels_test.go`, and `main.go`. soil-1 touches only `internal/soil/` and `internal/connector/union/soil_translate.go`, `internal/connector/union/soil_translate_test.go`, and `internal/connector/union/testdata/soil/`. soil-2 touches only `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, and `internal/connector/union/soil_fetch.go`. soil-3 touches only the one new `db/migrations/<prefix>_soil.sql` file named in its Files box. soil-4 touches only `internal/soil/join.go`, `internal/soil/names.go`, their tests, and `main.go`.
 - [ ] Hold the review gate. No PR in this program changes an interaction. None wait for screenshots in chat before the operator decides to land them.
 
 ### PR mechanics, for every PR
@@ -174,33 +176,31 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 ## Add the shared soil types (soil-1)
 
-**Depends on.** None.
+**Depends on.** county-1.
 
 **Files.**
 
-- [ ] Create `internal/soil/county.go`.
 - [ ] Create `internal/soil/polygon.go`.
 - [ ] Create `internal/soil/overlap.go`.
-- [ ] Create `internal/soil/county_test.go`.
 - [ ] Create `internal/connector/union/soil_translate.go`.
 - [ ] Create `internal/connector/union/soil_translate_test.go`.
 - [ ] Create `internal/connector/union/testdata/soil/layer197-feature.json` from a live layer 197 feature response. Do not point the test at `docs/examples/`.
 
 **Build.**
 
-- [ ] Add `CountyID` as a string type with `CountyUnion` equal to `union`. Add `Valid`. Do not add a second county constant in this PR.
+- [ ] Import `github.com/JustinMonty20/landman/internal/county`. `Polygon.County` is `county.ID`. Use `county.Union` for Union County. Do not declare `CountyID`, `CountyUnion`, or `Valid` in package `soil`. Do not add a second county constant in this PR.
 - [ ] Add `Polygon` and `Overlap` in package `soil` with the fields in Appendix A. `MapUnitKey` is the national `MUKEY`. `ObjectID` is the text form of the county layer's feature id. `Overlap` has no minimum share.
-- [ ] Add `ParseSoilFeature` in package `union`. It returns `soil.Polygon` with `County` set to `soil.CountyUnion` and `SourceName` `union_county_gis`. Map `OBJECTID_1` to `ObjectID`, `MUKEY`, `MUSYM`, `AREASYMBOL`, and `SPATIALVER`. Ignore `HydrcRatng`. Reject a missing `MUKEY`, a missing `MUSYM`, and a geometry with no rings.
+- [ ] Add `ParseSoilFeature` in package `union`. It returns `soil.Polygon` with `County` set to `county.Union` and `SourceName` `union_county_gis`. Map `OBJECTID_1` to `ObjectID`, `MUKEY`, `MUSYM`, `AREASYMBOL`, and `SPATIALVER`. Ignore `HydrcRatng`. Reject a missing `MUKEY`, a missing `MUSYM`, and a geometry with no rings.
 - [ ] Set the polygon SRID to 3857, the same constant `unionGISSourceSRID` in `translator.go` line 15. Parse rings the way `geometryShape` does at `translator.go` lines 311 to 335.
 - [ ] Do not put these types in `internal/models`. Do not import `internal/service`. Package `soil` does not import `union`.
 
 **You see.**
 
-- [ ] `go test -race ./internal/soil/ ./internal/connector/union/ -count=1 -run 'TestCountyID|TestParseSoilFeature'` prints `PASS` and names the ChA fixture.
+- [ ] `go test -race ./internal/soil/ ./internal/connector/union/ -count=1 -run TestParseSoilFeature` prints `PASS` and names the ChA fixture.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `soil_translate_test.go` gains a table for the captured ChA feature, a missing `MUKEY`, an empty `features` list, and a geometry with no rings. `county_test.go` rejects an unknown county string. Run `go test -race ./internal/soil/ ./internal/connector/union/ -count=1 -run 'TestCountyID|TestParseSoilFeature'`.
+- [ ] `soil_translate_test.go` gains a table for the captured ChA feature, a missing `MUKEY`, an empty `features` list, and a geometry with no rings. Do not add `internal/soil/county_test.go`. County id tests stay in county-1. Run `go test -race ./internal/soil/ ./internal/connector/union/ -count=1 -run TestParseSoilFeature`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
@@ -245,7 +245,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 **Build.**
 
 - [ ] Add `SoilQueryURL` to `GISSourceConfig`, set in `DefaultGISSourceConfig` to `https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197/query`. Leave `BaseURL` as the layer 215 query URL. `TestDefaultGISSourceConfig` already locks that parcel URL at `gis_test.go` lines 128 to 131.
-- [ ] Add `FetchSoilPolygons(ctx) ([]soil.Polygon, error)` on `GISSource`. Each polygon uses `soil.CountyUnion`. Build the request with the existing `s.httpClient`. Do not call `NewRateLimitedClient` again.
+- [ ] Add `FetchSoilPolygons(ctx) ([]soil.Polygon, error)` on `GISSource`. Each polygon uses `county.Union`. Build the request with the existing `s.httpClient`. Do not call `NewRateLimitedClient` again.
 - [ ] Page with `resultOffset`, `resultRecordCount` 2000, and `orderByFields=OBJECTID_1`. `ArcGISParams` cannot send `orderByFields`. `gis.go` lines 40 to 49. Add that field, or build the soil query in `soil_fetch.go`. Do not page without the order. The measured pages sent `orderByFields=OBJECTID_1`. Do not use `GISSource.batchSize`. That value is 50 and would turn this pull into hundreds of requests.
 - [ ] Stop when a page returns fewer than 2000 features. If the pages do not add up to the count query, return an error. A body with no numeric `count` is an error. `queryTotalParcels` reads `count` with no existence check, so a bad body becomes 0 and `FetchBatches` returns nil. `gis.go` lines 184 to 185 and 111 to 158. Do not copy that.
 - [ ] Treat HTTP status outside 200 to 299 as an error that includes the status. Treat an ArcGIS `error` object as an error. `queryTotalParcels` does not check status, at `gis.go` lines 173 to 185. Do not copy that. Send `User-Agent` `ParcelDataCollection/0.0.1`, the same header as `fetchBatch` at `gis.go` line 199.
@@ -296,7 +296,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Files.**
 
-- [ ] Create `db/migrations/000002_soil.sql` by hand. `make migrate-create` runs `goose create` with no sequential flag (`Makefile` lines 82 to 88), so the name it emits is a timestamp. The only committed migration is `000001_init_schema.sql`. Keep the `000002_` prefix.
+- [ ] Create the soil migration by hand. `make migrate-create` runs `goose create` with no sequential flag (`Makefile` lines 82 to 88), so the name it emits is a timestamp. Do not use `000002`. `db/migrations/000002_parcels_storage_srid.sql` is already on main. At implementation time, list `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. county-1 may already have taken the next prefix for `parcels_county_check`. Name the file `db/migrations/<prefix>_soil.sql`. On main at `1bdf7b8cd51f8031f5ff108be623f6a354ef70b1` the highest prefix is `000002`. If county-1 then landed `000003_parcels_county_check.sql` and nothing higher exists, soil-3 uses `000004`.
 - [ ] Do not edit `db/migrations/000001_init_schema.sql`. Do not create a PostgreSQL enum.
 
 **Build.**
@@ -304,7 +304,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `soil_map_units`, `soil_polygons`, and `parcel_soils` with the columns in the sketch below. Goose `Up` and `Down`. `Down` drops `parcel_soils`, then `soil_polygons`, then `soil_map_units`.
 - [ ] `parcel_soils.parcel_id` references `parcels(id)` with `ON DELETE CASCADE`, the same link `parcel_sales` uses at `000001_init_schema.sql` lines 94 to 97.
 - [ ] Also add a foreign key from `(county_id, source_name, source_parcel_id)` to `parcels (county_id, source_name, source_parcel_id)`, which is `parcels_source_identity_unique` at line 73. The only insert is the `INSERT ... SELECT` in soil-4, so both keys come from one `parcels` row.
-- [ ] `county_id` is `TEXT NOT NULL`, the same type as `parcels.county_id` at line 8. A `CHECK` allows only `union` until the next county. A PostgreSQL enum would not match that text column, so the composite foreign key would not type-check.
+- [ ] `county_id` is `TEXT NOT NULL`, the same type as `parcels.county_id` at line 8. The `CHECK` list is the `String` values of `county.All`, in that order. After county-1, that list is `('union')` until the next county. A PostgreSQL enum would not match that text column, so the composite foreign key would not type-check.
 - [ ] `soil_map_units` is keyed only by `map_unit_key`. It has no county column. `MUKEY` is national.
 - [ ] `soil_polygons` primary key is `(county_id, source_name, object_id)`. `shape` is `GEOMETRY(Geometry, 3857)`, matching `parcels.shape` at line 62, with a SRID check and a GiST index.
 - [ ] Do not add a JSON document column. Do not write these rows into `parcels.source_extras`. Do not name any table with a `union_` prefix.
@@ -371,11 +371,11 @@ CREATE INDEX parcel_soils_source_parcel_idx ON parcel_soils (county_id, source_n
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] No new Go test. `go test -race ./...` still passes with no database running. Run `rg -n "source_extras|union_soil|CREATE TYPE" db/migrations/000002_soil.sql` and require no matches. Run `rg -n "soil_map_units" db/migrations/000002_soil.sql` and require a match.
+- [ ] No new Go test. `go test -race ./...` still passes with no database running. Run `rg -n "source_extras|union_soil|CREATE TYPE"` on the soil migration file and require no matches. Run `rg -n "soil_map_units"` on that same file and require a match. Run `rg -n "CHECK \\(county_id IN"` on that file and require the quoted list to equal `county.All` as strings, in order.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Run `make migrate-up` at trunk and at head. Trunk has `parcels` and `parcel_sales` only. Record that, and gate the three new tables at head plus a successful migrate of `000001` at trunk. Save `/tmp/swarm-soil-3/worker-1/regression.png`. Pass when trunk `\dt` has no `soil_polygons` and head `\dt` lists `soil_map_units`, `soil_polygons`, and `parcel_soils`.
+- [ ] Lane 1. Regression lane against trunk. Run `make migrate-up` at trunk and at head. Trunk has no soil tables. county-1 may already have added `parcels_county_id_check`. Record that, and gate the three new tables at head plus a successful migrate of the trunk migrations. Save `/tmp/swarm-soil-3/worker-1/regression.png`. Pass when trunk `\dt` has no `soil_polygons` and head `\dt` lists `soil_map_units`, `soil_polygons`, and `parcel_soils`.
 - [ ] Lane 2. Insert one square parcel and one square soil polygon that covers half of it, then run the `INSERT ... SELECT` from Appendix A. Save `/tmp/swarm-soil-3/worker-2/half-overlap.png`. Pass when one `parcel_soils` row exists and `area_share` is between 0.48 and 0.52.
 - [ ] Lane 3. Insert two soil polygons with the same `map_unit_key` that both meet the parcel. Also insert a second polygon whose overlap is a thin sliver. Save `/tmp/swarm-soil-3/worker-3/same-mukey.png`. Pass when the same map unit is one row, the sliver is its own row if its key differs, and no row is dropped for a small positive share.
 - [ ] Lane 4. Insert a soil polygon that does not meet the parcel. Save `/tmp/swarm-soil-3/worker-4/no-hit.png`. Pass when the join writes no row for that map unit.
@@ -554,13 +554,13 @@ The decision this number has to support is bulk load versus one spatial query pe
 
 ### Struct and table
 
-**Read.** `parcels.county_id` is `TEXT NOT NULL`. `000001_init_schema.sql` line 8. The unique key is `(county_id, source_name, source_parcel_id)` at line 73. There is no `CREATE TYPE` in that file. A PostgreSQL enum for county would not match that text column, so a composite foreign key from a soil table would fail to type-check. The county column stays text, with `CHECK (county_id IN ('union'))` until the next county is added. The Go side is `type CountyID string` with `const CountyUnion CountyID = "union"` and a `Valid` method. Adding a county extends the check and adds a constant in the same change. `source_name` stays plain text. Union's value is `union_county_gis`.
+**Read.** `parcels.county_id` is `TEXT NOT NULL`. `000001_init_schema.sql` line 8. The unique key is `(county_id, source_name, source_parcel_id)` at line 73. There is no `CREATE TYPE` in that file. A PostgreSQL enum for county would not match that text column, so a composite foreign key from a soil table would fail to type-check. The county column stays text, with `CHECK (county_id IN ('union'))` until the next county is added. The Go type is `county.ID` in `internal/county`, with `county.Union` and `Parse`. county-1 in `plans/county-id-package.md` owns that type. Soil does not declare it. Adding a county adds a constant in that package and extends the check list in a new migration. `source_name` stays plain text. Union's value is `union_county_gis`.
 
-**Read.** `internal/models.GISParcel` is the parcel row. The removal plan is moving Union types out of `internal/models`. Soil polygons, overlaps, and national map units are their own domain, so they live in `internal/soil`. That package does not import `union`. The Union adapter imports `soil` and is the only place that knows layer 197's URL and field names. `internal/models` stays the parcel. A second soil package is not a junk drawer of every future county type.
+**Read.** `internal/models.GISParcel` is the parcel row. The removal plan is moving Union types out of `internal/models`. Soil polygons, overlaps, and national map units are their own domain, so they live in `internal/soil`. The county id does not live in `internal/soil`. `Polygon.County` uses `county.ID` from `internal/county`. Package `soil` does not import `union`. The Union adapter imports `soil` and is the only place that knows layer 197's URL and field names. `internal/models` stays the parcel. A second soil package is not a junk drawer of every future county type.
 
 Two structs, because a soil polygon and a parcel overlap are not the same row. A third table holds the national name.
 
-`soil.Polygon` is one county soil feature. The primary key is county, source name, and `ObjectID` as text, so the next county is not forced to use an integer `OBJECTID_1`. Union writes the decimal form of `OBJECTID_1`. Fields are `County`, `SourceName`, `ObjectID`, `MapUnitKey`, `MapUnitSymbol`, `AreaSymbol`, optional `SpatialVersion`, optional source area and length, `Shape` at SRID 3857, and `FetchedAt`. `HydrcRatng` stays on the raw Union feature. It is not a shared column. 11,250 polygons, 48 map units.
+`soil.Polygon` is one county soil feature. The primary key is county, source name, and `ObjectID` as text, so the next county is not forced to use an integer `OBJECTID_1`. Union writes the decimal form of `OBJECTID_1`. Fields are `County` of type `county.ID`, `SourceName`, `ObjectID`, `MapUnitKey`, `MapUnitSymbol`, `AreaSymbol`, optional `SpatialVersion`, optional source area and length, `Shape` at SRID 3857, and `FetchedAt`. `HydrcRatng` stays on the raw Union feature. It is not a shared column. 11,250 polygons, 48 map units.
 
 `soil.Overlap` is one kept parcel plus one `MUKEY`. The 1,592 acre parcel hit 14 polygons of `BaB` and still only one map unit. Store the summed overlap. Store every group whose intersection area is greater than 0. There is no minimum share. `IntersectionAreaSqM` is `ST_Area` of the intersection in SRID 3857, planar meters. `AreaShare` is that area divided by `ST_Area(parcels.shape)`. The share is a ratio, so 0.25 means 25 percent. A share above 1 stays. Do not store the soil polygon's `Shape.STArea()` on this row.
 
@@ -570,9 +570,9 @@ Two structs, because a soil polygon and a parcel overlap are not the same row. A
 
 soil-4 inserts a stub `soil_map_units` row for each distinct key before the polygon insert, then fills null names with one POST per import. A name-service failure does not fail the geometry join. The next import retries rows whose name is still null. Do not call Soil Data Access once per parcel. Do not put this client on the Union GIS limiter. It is a different host.
 
-The overlap row carries `CountyID`, `SourceName`, and `SourceParcelID` because that is the identity `GISTranslator` writes. `translator.go` lines 57 to 63. The database row also has `parcel_id UUID` so `ON DELETE CASCADE` matches `parcel_sales`. Both foreign keys are filled by one `INSERT ... SELECT` from `parcels`. `map_unit_key` references `soil_map_units`.
+The overlap row carries a county id of type `county.ID`, plus `SourceName` and `SourceParcelID`, because that is the identity `GISTranslator` writes. `translator.go` lines 57 to 63. The database row also has `parcel_id UUID` so `ON DELETE CASCADE` matches `parcel_sales`. Both foreign keys are filled by one `INSERT ... SELECT` from `parcels`. `map_unit_key` references `soil_map_units`.
 
-County two plugs in without a new interface. Add a `CountyID` constant, extend the check list in a later migration, add `internal/connector/<county>` with a function that returns `[]soil.Polygon`, and call it from `main`'s county list. Shared tables, the join statement, and the name client do not change. Do not add a swappable interface until that second mapper exists. One implementation is indirection.
+County two plugs in without a new interface. Add a `county.ID` constant in `internal/county`, extend the check list in a new migration, add `internal/connector/<county>` with a function that returns `[]soil.Polygon`, and call it from `main`'s county list. Shared tables, the join statement, and the name client do not change. Do not add a swappable interface until that second mapper exists. One implementation is indirection.
 
 `source_name` for Union polygons and overlaps is `union_county_gis`, from `GISSource.Name` at `gis.go` line 79.
 
@@ -665,6 +665,7 @@ Read before editing.
 - `internal/service/parcel_id_importer.go` lines 10 to 12 and 63 to 125.
 - `db/migrations/000001_init_schema.sql` lines 5 to 73 and 94 to 97.
 - `plans/scraper-enrichment.md` lines 36 to 87.
+- `plans/county-id-package.md` for `county.ID`, `Parse`, and the parcels check migration.
 - `plans/spatialist-removal-and-critical-fixes.md` Step 2 and Step 6.
 - `internal/connector/shared/httpclient/http_client.go` lines 24 to 28 and 63 to 70.
 
@@ -682,7 +683,7 @@ soil-2 and soil-4 get `pstack/skills/how/SKILL.md` before the fetch loop is edit
 
 The earlier open questions are closed.
 
-The model is shared. `internal/soil` holds `CountyID`, `Polygon`, and `Overlap`. Tables are `soil_polygons`, `parcel_soils`, and `soil_map_units`. Union keeps only the layer 197 URL and the field mapping. County id is a Go string enum and check-constrained text, matching `parcels.county_id`.
+The model is shared. `internal/county` holds the county id. `internal/soil` holds `Polygon` and `Overlap`, and the county field uses `county.ID`. Tables are `soil_polygons`, `parcel_soils`, and `soil_map_units`. Union keeps only the layer 197 URL and the field mapping. County id is check-constrained text, matching `parcels.county_id`.
 
 The vacant filter does not widen. Numeric `FMV_IMPRV` 0 is 116,242 rows, including 90,357 parcels with a year and a square footage. `RURAL ACRES` is 30,861 rows, and 19,141 of them already have a year and a square footage. filter-1 deletes the two dead clauses and keeps the 25,885 numeric-zero parcels.
 
