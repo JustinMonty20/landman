@@ -81,7 +81,9 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `Retry` and `DoRetry`. Leave `RateLimitedClient.Do` as a single wait plus `Client.Do`. GIS keeps calling `Do`. A scraper calls `DoRetry` on its own `RateLimitedClient`.
 - [ ] `Retry.Attempts` of 0 or less becomes 3. Values above 5 become 5. `Retry.UserAgent` empty becomes `ParcelDataCollection/0.0.1`. `Retry.MaxBody` of 0 or less becomes 8 MiB. That cap is a chosen ceiling. Appendix A says no page size was measured.
 - [ ] On 404 or 410, return `ErrNotFound` inside `*StatusError` and do not retry. On 401 or 403, return `ErrForbidden` and do not retry. On 408, 429, or 500 through 599, return `ErrTransient` and retry until the attempts are spent. Join a network error with `ErrTransient` while the context is still active.
-- [ ] On 429, if `Retry-After` is a delay or an HTTP date, wait that long when it is longer than the limiter wait. Otherwise the limiter is the gap. A canceled context during the wait returns `ctx.Err()` and does not match `ErrTransient`.
+- [ ] On 429, if `Retry-After` is a delay or an HTTP date, wait that long when it is longer than the limiter wait. Otherwise the limiter is the gap.
+- [ ] If the error matches `context.Canceled` or `context.DeadlineExceeded`, return that error and do not wrap it with `ErrTransient`. Do not substitute `ctx.Err()` when `ctx.Err()` is nil. A response-header timeout matches `context.DeadlineExceeded` while `ctx.Err()` is nil, and returning `ctx.Err()` there yields a nil error.
+- [ ] An error from the limiter `Wait` is not `ErrTransient` and is not retried. A `Wait` that cannot finish before the deadline does not match `context.DeadlineExceeded`. Wrapping it would burn the remaining attempts without a handler call.
 - [ ] Retry a transient failure only for GET or HEAD with an empty body. A POST that returns 500 hits the handler once.
 - [ ] Read at most `MaxBody` plus one byte. A larger body is an error, is not `ErrTransient`, and is not retried. Set `User-Agent` only when the request left it empty.
 - [ ] Do not add a registry, a robots fetch, or a county import. Do not read the environment.
@@ -92,7 +94,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Add table-driven `t.Run` cases for 200, 404, 401, 403, 410, 429 with `Retry-After`, 500 then 200, three 500s, a POST that returns 500 once, a canceled context, a redirect that stays on the test server, an empty `User-Agent`, a preset `User-Agent`, and a body over the cap. Run `go test -race ./internal/connector/shared/httpclient/ -count=1`.
+- [ ] Add table-driven `t.Run` cases for 200, 404, 401, 403, 410, 429 with `Retry-After`, 500 then 200, three 500s, a POST that returns 500 once, a canceled context, a response-header timeout whose `ctx.Err` is nil, a second call whose limiter `Wait` cannot finish before the deadline, a redirect that stays on the test server, an empty `User-Agent`, a preset `User-Agent`, and a body over the cap. Run `go test -race ./internal/connector/shared/httpclient/ -count=1`. The header-timeout case returns a non-nil error. The limiter-deadline case does not match `ErrTransient` and the handler count stays 0.
 - [ ] Run `go vet ./internal/connector/shared/httpclient/` and `staticcheck ./internal/connector/shared/httpclient/`. Both print no findings.
 - [ ] Run `go test -race -cover ./internal/connector/shared/httpclient/ -count=1`. Fail if the coverage line is below 100.0 percent. Trunk measured 100.0 percent. Appendix A.
 
@@ -201,7 +203,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `Request`, `Result`, and `Client` in package `scrape`. `Request` holds `soil.CountyID` and `ParcelID`. `Result` holds `County`, `ParcelID`, `Source`, `FetchedAt`, `Raw`, and `Sum`. Use `soil.CountyID` from soil-1. Do not declare another county type.
 - [ ] Add `ErrNotFound`, `ErrForbidden`, `ErrTransient`, and `ErrParse`. Add `StatusError` with `Unwrap`. Package `scrape` imports `internal/soil` and the standard library only.
 - [ ] Add `RobotsAllow(body []byte, path, userAgent string) (bool, error)`. A disallow returns false. Do not fetch a URL inside this function.
-- [ ] Add `Fixture` with `Scrape`. It copies `Raw`, sets `Sum` to SHA-256 of that copy, returns `ErrNotFound` for an unknown parcel id, and returns `ErrParse` for the bad fixture id. A canceled context returns `ctx.Err()` before a lookup.
+- [ ] Add `Fixture` with `Scrape`. It copies `Raw` before return, sets `Sum` to SHA-256 of that copy, returns `ErrNotFound` for an unknown parcel id, and returns `ErrParse` for the bad fixture id. A later `Scrape` must not overwrite an earlier `Result.Raw`. A canceled context returns `ctx.Err()` before a lookup.
 - [ ] Add `Conform(t *testing.T, client Client, county soil.CountyID, source, knownID, missingID, badID string)`. Every later scraper calls it. The helper asserts the known id, the missing id, the bad id, an empty parcel id, cancellation, and a second call with the same `Sum`.
 - [ ] Add `var _ Client = (*Fixture)(nil)` in `client.go`.
 - [ ] Do not import `internal/connector/union`, `internal/service`, or `internal/models`. Do not add a registry.
@@ -226,7 +228,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 5. Cancel the context, then scrape the known id. Save `/tmp/swarm-scrape-1/worker-5/cancel.png`. Pass when the error matches `context.Canceled` and does not match `ErrTransient`.
 - [ ] Lane 6. Scrape an empty `ParcelID`. Save `/tmp/swarm-scrape-1/worker-6/empty-id.png`. Pass when the error is non-nil and the golden bytes were not returned.
 - [ ] Lane 7. Compare `Raw` to `testdata/fixture-page.bin`. Save `/tmp/swarm-scrape-1/worker-7/golden.png`. Pass when the bytes match and a second call returns the same `Sum`.
-- [ ] Lane 8. Mutate the caller's buffer after `Scrape` returns. Save `/tmp/swarm-scrape-1/worker-8/copy.png`. Pass when `Result.Raw` is unchanged.
+- [ ] Lane 8. Scrape parcel A, then scrape parcel B on the same `Fixture`. Save `/tmp/swarm-scrape-1/worker-8/copy.png`. Pass when the first `Result.Raw` is still parcel A's bytes, `Sum` is the SHA-256 of those bytes, and mutating the caller's copy of `Raw` leaves `Result.Raw` unchanged.
 - [ ] Lane 9. Parse `testdata/robots.txt` with `RobotsAllow` for an allowed path and a disallowed path. Save `/tmp/swarm-scrape-1/worker-9/robots.png`. Pass when the allowed path is true, the disallowed path is false, and the function opened no socket.
 - [ ] Lane 10. Parse the Go files in `internal/scrape` and list imports. Save `/tmp/swarm-scrape-1/worker-10/imports.png`. Pass when the only module import is `internal/soil`.
 
@@ -373,6 +375,8 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Measured.** The same scratch module timed 20 local `httptest` fetches and 20 parses. Fetch average was 116.371 microseconds. Parse average was 125 nanoseconds. That is loopback on a 12 byte body, with no limiter and no reported spread. It is not a remote site budget. The 1 second fail rule in the perf boxes is about 8000 times that fetch average, so it catches a hang. It is not a tuning target.
 
+**Measured.** A copy of `RateLimitedClient` under `/tmp/interrogate-scrape` failed three classification checks and one alias check. Wrapping a canceled `Do` with `ErrTransient` made `errors.Is` match both, and the loop ran 3 attempts with zero handler hits. A header timeout matched `context.DeadlineExceeded` while `ctx.Err()` was nil, so returning `ctx.Err()` returned nil. A limiter `Wait` that would miss the deadline did not match `context.DeadlineExceeded`, and wrapping it matched `ErrTransient`. A fixture that returned its own buffer changed the first `Raw` to the second parcel's bytes, while `Sum` stayed the hash of the first bytes.
+
 **Measured.** On this tree, `go test -race -cover` printed `httpclient` 100.0 percent, `union` 76.8 percent, and `service` 84.3 percent. `internal/models` has no tests. `make test` is `go test -v -race ./...` at `Makefile` lines 27 to 28. There is no coverage floor, fuzz target, `testdata` directory, or `staticcheck` target in the repo.
 
 **Read.** `RateLimitedClient.Do` waits, then calls `Client.Do`, at `internal/connector/shared/httpclient/http_client.go` lines 24 to 29. It does not retry. `NewRateLimitedClient` turns 0 into 1 and passes a negative rate through, lines 63 to 71. GIS sets `User-Agent` to `ParcelDataCollection/0.0.1` at `internal/connector/union/gis.go` line 219 and clamps a non-positive rate at lines 65 to 67. The only production `https` host in Go is the layer 215 query at `gis.go` line 27. No scraper website is named. Do not use that GIS host as the scraper target.
@@ -459,7 +463,7 @@ The base is the concrete HTTP helper and the Union type in package `union`. The 
 
 This repo has no `pstack/` tree. `git show origin/main:pstack/...` fails until those files exist on trunk. The owner reads the installed poteto-mode skill and records that fallback. `deslop` was not installed in the planning session. The owner runs it when it is installed.
 
-Claude seats for the arena cross-judge and for interrogate were rejected for weekly usage. The judge was skipped. One attack run may still land after this file. If it proves a break, edit this plan before execution starts.
+Claude seats for the arena cross-judge and for interrogate were rejected for weekly usage. The judge was skipped. A later attack proved four breaks. scrape-2 covers the wrapped cancel, the header timeout that becomes nil, and the limiter deadline that is not transient. scrape-1 covers the fixture buffer alias. Appendix A records the probe output.
 
 soil-3 still says to create `db/migrations/000002_soil.sql`. That number is already `000002_parcels_storage_srid.sql`. scrape-3 must not take `000002`. If soil-3 lands first and takes `000003`, scrape-3 takes the next integer.
 
@@ -469,7 +473,7 @@ soil-3 still says to create `db/migrations/000002_soil.sql`. That number is alre
 
 The default `main` path does not call `Scrape`. A later edit that sets `Enabled` true with an empty `BaseURL` would return `ErrNotFound` for real GIS ids and stop the import. Keep `Enabled` false until `parcelURL` is real.
 
-`httpclient` tests that pass `server.Client()` do not exercise `NewHTTPClient` timeouts. scrape-2's `DoRetry` tests must use a client that honors the test server's close, or a cancel will look like a retry.
+`httpclient` tests that pass `server.Client()` do not exercise `NewHTTPClient` timeouts. scrape-2's header-timeout case sets `ResponseHeaderTimeout` on its own client. A cancel must not be wrapped as `ErrTransient`.
 
 Package `scrape` imports `internal/soil`. soil-1 must be on trunk first. If soil-1's method is not `Valid() bool`, scrape-1 matches the method soil-1 shipped.
 
