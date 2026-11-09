@@ -13,3 +13,5 @@
 **Scope tangent.** Soil polygons still need their own UUID and an overlap join. That reshape belongs in a follow-up to `plans/soil-layer.md`, not in this plan's code.
 
 **Unrelated.** `plans/spatialist-removal-and-critical-fixes.md` still says `TaxOwnerID1` is `*int64`. `internal/models/gis_parcel.go` already stores those fields as `*string`. Leave that stale sentence alone.
+
+**Out-of-scope decision.** The first plan draft listed the integer type declarations and missed the fixture literals. The follow-up adds those lines, `main.go` lines 29 to 40, `plans/soil-layer.md` line 641, and `plans/db-schema-type-audit.md` line 9. It does not change uuid-1 or uuid-2.
