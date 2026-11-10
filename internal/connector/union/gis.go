@@ -21,12 +21,14 @@ type GISSourceConfig struct {
 	BatchSize int // number of records to fetch per request
 }
 
+const defaultGISBatchSize = 500
+
 // DefaultGISSourceConfig returns the default configuration for Union County GIS.
 func DefaultGISSourceConfig() GISSourceConfig {
 	return GISSourceConfig{
 		BaseURL:   "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query",
 		RateLimit: 1,
-		BatchSize: 50,
+		BatchSize: defaultGISBatchSize,
 	}
 }
 
@@ -46,6 +48,7 @@ type ArcGISParams struct {
 	ResultRecordCount int
 	Format            string
 	OutFields         string
+	OrderByFields     string
 }
 
 // NewGISSource creates a new Union County GIS data source.
@@ -59,7 +62,7 @@ func NewGISSource(config GISSourceConfig) (*GISSource, error) {
 	}
 
 	if config.BatchSize <= 0 {
-		config.BatchSize = 50
+		config.BatchSize = defaultGISBatchSize
 	}
 
 	if config.RateLimit <= 0 {
@@ -127,6 +130,7 @@ func (s *GISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHoo
 		ResultRecordCount: s.batchSize,
 		Format:            "json",
 		OutFields:         "*",
+		OrderByFields:     "OBJECTID",
 	}
 
 	var totalFetched int
@@ -145,9 +149,18 @@ func (s *GISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHoo
 			return fmt.Errorf("failed to fetch batch %d: %w", i, err)
 		}
 
-		totalFetched += len(batchRecords)
+		got := len(batchRecords)
+		want := s.batchSize
+		if remain := int(totalCount) - dataParams.ResultOffset; remain < want {
+			want = remain
+		}
+		if got != want {
+			return fmt.Errorf("count mismatch: page %d got %d want %d", i, got, want)
+		}
+
+		totalFetched += got
 		log.Printf("[%s] Batch %d/%d complete: fetched %d records (total so far: %d)",
-			s.Name(), i+1, batchCount, len(batchRecords), totalFetched)
+			s.Name(), i+1, batchCount, got, totalFetched)
 
 		if err := onBatch(batchRecords); err != nil {
 			return err
@@ -276,6 +289,9 @@ func (p ArcGISParams) ToURLValues() (url.Values, error) {
 		qps.Add("outFields", "*")
 	} else {
 		qps.Add("outFields", p.OutFields)
+	}
+	if p.OrderByFields != "" {
+		qps.Add("orderByFields", p.OrderByFields)
 	}
 
 	return qps, nil
