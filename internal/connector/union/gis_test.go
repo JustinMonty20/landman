@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,8 +112,8 @@ func TestNewGISSource(t *testing.T) {
 				t.Fatal("expected non-nil source")
 			}
 
-			if tt.config.BatchSize <= 0 && source.batchSize != 50 {
-				t.Errorf("expected default batch size 50, got %d", source.batchSize)
+			if tt.config.BatchSize <= 0 && source.batchSize != 500 {
+				t.Errorf("expected default batch size 500, got %d", source.batchSize)
 			}
 		})
 	}
@@ -134,8 +135,8 @@ func TestDefaultGISSourceConfig(t *testing.T) {
 		t.Errorf("RateLimit = %d, want 1", config.RateLimit)
 	}
 
-	if config.BatchSize != 50 {
-		t.Errorf("BatchSize = %d, want 50", config.BatchSize)
+	if config.BatchSize != 500 {
+		t.Errorf("BatchSize = %d, want 500", config.BatchSize)
 	}
 }
 
@@ -374,6 +375,154 @@ func TestGISSource_FetchBatches_ZeroCount(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("FetchBatches error = %v, want nil for count 0", err)
+	}
+}
+
+func TestGISSource_FetchBatches_DefaultFeaturePage(t *testing.T) {
+	const (
+		total    = 1000
+		pageSize = 500
+	)
+
+	type feature struct {
+		Attributes map[string]string `json:"attributes"`
+	}
+	type response struct {
+		Features []feature `json:"features"`
+	}
+
+	page := response{Features: make([]feature, pageSize)}
+	for i := range page.Features {
+		page.Features[i] = feature{Attributes: map[string]string{"PID": fmt.Sprintf("P%d", i)}}
+	}
+
+	var requests []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		requests = append(requests, r.URL.Query())
+
+		if r.URL.Query().Get("returnCountOnly") == "true" {
+			fmt.Fprintf(w, `{"count": %d}`, total)
+			return
+		}
+
+		if err := json.NewEncoder(w).Encode(page); err != nil {
+			t.Errorf("encode features: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := DefaultGISSourceConfig()
+	cfg.BaseURL = server.URL
+	source, err := NewGISSource(cfg)
+	if err != nil {
+		t.Fatalf("failed to create source: %v", err)
+	}
+	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 100)
+
+	var hooks int
+	err = source.FetchBatches(context.Background(), func(batch []connector.RawRecord) error {
+		hooks++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("FetchBatches returned error: %v", err)
+	}
+
+	if len(requests) < 3 {
+		t.Fatalf("requests = %d, want at least 3", len(requests))
+	}
+
+	count := requests[0]
+	if count.Get("returnCountOnly") != "true" {
+		t.Errorf("count returnCountOnly = %q, want true", count.Get("returnCountOnly"))
+	}
+	if _, ok := count["orderByFields"]; ok {
+		t.Errorf("count request sent orderByFields=%q", count.Get("orderByFields"))
+	}
+
+	first := requests[1]
+	if first.Get("resultRecordCount") != "500" {
+		t.Errorf("first resultRecordCount = %q, want 500", first.Get("resultRecordCount"))
+	}
+	if first.Get("orderByFields") != "OBJECTID" {
+		t.Errorf("first orderByFields = %q, want OBJECTID", first.Get("orderByFields"))
+	}
+	if first.Get("returnGeometry") != "true" {
+		t.Errorf("first returnGeometry = %q, want true", first.Get("returnGeometry"))
+	}
+	if _, ok := first["resultOffset"]; ok {
+		t.Errorf("first request sent resultOffset=%q", first.Get("resultOffset"))
+	}
+
+	second := requests[2]
+	if second.Get("resultRecordCount") != "500" {
+		t.Errorf("second resultRecordCount = %q, want 500", second.Get("resultRecordCount"))
+	}
+	if second.Get("orderByFields") != "OBJECTID" {
+		t.Errorf("second orderByFields = %q, want OBJECTID", second.Get("orderByFields"))
+	}
+	if second.Get("resultOffset") != "500" {
+		t.Errorf("second resultOffset = %q, want 500", second.Get("resultOffset"))
+	}
+
+	if hooks != 2 {
+		t.Errorf("hook runs = %d, want 2", hooks)
+	}
+}
+
+func TestGISSource_FetchBatches_CountMismatch(t *testing.T) {
+	const total = 4
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("returnCountOnly") == "true" {
+			fmt.Fprintf(w, `{"count": %d}`, total)
+			return
+		}
+
+		n := 2
+		if offset, _ := strconv.Atoi(r.URL.Query().Get("resultOffset")); offset > 0 {
+			n = 1
+		}
+		fmt.Fprint(w, `{"features":[`)
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				fmt.Fprint(w, ",")
+			}
+			fmt.Fprintf(w, `{"attributes":{"PID":"P%d"}}`, i)
+		}
+		fmt.Fprint(w, `]}`)
+	}))
+	defer server.Close()
+
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL, RateLimit: 100, BatchSize: 2})
+	if err != nil {
+		t.Fatalf("failed to create source: %v", err)
+	}
+	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 100)
+
+	var hooks int
+	err = source.FetchBatches(context.Background(), func(batch []connector.RawRecord) error {
+		if hooks == 0 && len(batch) != 2 {
+			t.Errorf("page 0 length = %d, want 2", len(batch))
+		}
+		if hooks > 0 {
+			t.Errorf("hook ran for page %d with %d records", hooks, len(batch))
+		}
+		hooks++
+		return nil
+	})
+
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	if !strings.Contains(msg, "count mismatch") || !strings.Contains(msg, "page 1") || !strings.Contains(msg, "got 1") || !strings.Contains(msg, "want 2") {
+		t.Errorf("FetchBatches error = %q, want count mismatch for page 1 got 1 want 2", msg)
+	}
+	if hooks != 1 {
+		t.Errorf("hook runs = %d, want 1", hooks)
 	}
 }
 
