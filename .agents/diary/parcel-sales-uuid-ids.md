@@ -15,3 +15,9 @@
 **Unrelated.** `plans/spatialist-removal-and-critical-fixes.md` still says `TaxOwnerID1` is `*int64`. `internal/models/gis_parcel.go` already stores those fields as `*string`. Leave that stale sentence alone.
 
 **Out-of-scope decision.** The first plan draft listed the integer type declarations and missed the fixture literals. The follow-up adds those lines, `main.go` lines 29 to 40, `plans/soil-layer.md` line 641, and `plans/db-schema-type-audit.md` line 9. It does not change uuid-1 or uuid-2.
+
+**Out-of-scope decision.** uuid-1 is the new goose file only. uuid-2, the Go writers, and `internal/parcelstore` stay on a later PR. No Go file was edited. `000001`, `000002`, and `000003` stay as they are. The directory listing at the start had no `000004`, so the file is `000004_parcel_sales_uuid_id.sql`.
+
+**Skipped.** This VM has no Docker and no `psql`, so `make migrate-up`, live lanes 2 through 10, the head column check in lane 1, and the upsert perf probe were not run. Trunk and head `go test -race ./... -count=1` both exited 0. Plan checkboxes stay open because live and perf evidence does not exist yet.
+
+**Skipped.** Did not add `pstack/`, a `/loop` audit, a swarm, Bugbot triage, or `/deslop` during implementation. The repo has none of that. Inventing it would be a different change.
