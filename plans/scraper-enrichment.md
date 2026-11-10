@@ -2,7 +2,7 @@
 
 Source: [Go architecture audit, revised](https://cursor.com/canvas/store-11be7bad-acc0-4616-92d5-8d428c775323/99b2a528-396b-4acf-9126-69a9bf84bab3).
 
-Some parcel facts have to come from a site other than the county GIS service. This plan is that scraper. It replaces [todo/webscraper_enrichment.md](../todo/webscraper_enrichment.md), which pointed at `connector.SingleParcelFetcher` and `SpatialistEnricher`. Those types are removed by [plans/spatialist-removal-and-critical-fixes.md](spatialist-removal-and-critical-fixes.md).
+Some parcel facts have to come from a site other than the county GIS service. This plan is that scraper. It replaces [todo/webscraper_enrichment.md](../todo/webscraper_enrichment.md), which pointed at `connector.SingleParcelFetcher` and `SpatialistEnricher`. Those types are already gone from the Go tree.
 
 The site, the URL pattern, the field list, and any auth or cookie requirement are still unknown. The old todo listed them as open questions, and this plan does not answer them. The package layout, the interface, the place in the GIS run, rate limiting, storage, and error behavior are decided below so the unknown site can land without bringing the Spatialist ports back.
 
@@ -98,15 +98,15 @@ Package `union` tests use a handwritten fake `parcelScraper` for `EnrichParcelID
 
 ## Prerequisites
 
-Do these before the scraper package exists. The steps and the pass/fail checks are in [plans/spatialist-removal-and-critical-fixes.md](spatialist-removal-and-critical-fixes.md).
+Do these before the scraper package exists. The Spatialist removal and the storage-SRID comment are already on main. The checks below are the ones that still have to hold.
 
-**Prerequisite. Spatialist removal (that plan, Steps 1 and 2).** `SingleParcelFetcher`, `BatchEnricher`, and the Spatialist package are gone. `rg -n "spatialist|SingleParcelFetcher|BatchEnricher" --glob '*.go'` prints nothing. `go test -race ./...` and `make build` exit 0. Starting the scraper before this recreates the port the old todo asked for.
+**Prerequisite. Spatialist removal (already on main).** `SingleParcelFetcher`, `BatchEnricher`, and the Spatialist package are gone. `rg -n "spatialist|SingleParcelFetcher|BatchEnricher" --glob '*.go'` prints nothing. `go test -race ./...` and `make build` exit 0. Starting the scraper before this recreates the port the old todo asked for.
 
-**Prerequisite. Union extras leave `internal/models` (that plan, Step 5).** `ParcelSourceExtras` becomes `json.RawMessage`. `rg -n "UnionParcelExtras|UnionGISParcel" internal/models` prints nothing. The scraper then has nowhere convenient to hang a `Scrape` pointer on the shared model. County GIS leftovers and scraped documents stay in different stores.
+**Prerequisite. Union extras leave `internal/models` (already on main).** `ParcelSourceExtras` becomes `json.RawMessage`. `rg -n "UnionParcelExtras|UnionGISParcel" internal/models` prints nothing. The scraper then has nowhere convenient to hang a `Scrape` pointer on the shared model. County GIS leftovers and scraped documents stay in different stores.
 
-**Prerequisite before any insert into `parcels.shape`. Storage SRID rule (that plan, Step 6).** Storage SRID stays 3857. Writers transform into it. `source_srid` is the native code. The comment migration exists, and `translator_test.go` expects the literal `3857`. This is not a blocker for `go test` of package `scrape`, because the scrape table has no geometry. It is a blocker for persisting `GISParcel.Geometry`.
+**Prerequisite before any insert into `parcels.shape`. Storage SRID rule (already on main).** Storage SRID stays 3857. Writers transform into it. `source_srid` is the native code. The comment migration exists, and `translator_test.go` expects the literal `3857`. This is not a blocker for `go test` of package `scrape`, because the scrape table has no geometry. It is a blocker for persisting `GISParcel.Geometry`.
 
-The GIS HTTP status check and the sale/owner type alignment are High findings in the removal plan (Steps 3 and 4). They are not blockers for the scrape package. Land them before a GIS writer exists. The scraper does not read `TaxOwnerID1` or `ParcelSale`.
+The GIS HTTP status check and the sale/owner type alignment are already on main. They are not blockers for the scrape package. The scraper does not read `TaxOwnerID1` or `ParcelSale`.
 
 ## Land alongside: explicit county list in `main`
 
@@ -140,7 +140,7 @@ These block the parser and the real URL. They do not block the interface, the `h
 
 ### Step 1. Scrape package and the Union interface
 
-Prerequisite: removal plan Steps 1, 2, and 5 are green.
+Prerequisite: the Spatialist package is gone, the hook returns its error, and `SourceExtras` is `json.RawMessage`.
 
 1. Add `internal/connector/union/scrape` with a config struct (base URL, requests per second), `New` that rejects an empty URL and clamps a non-positive rate to 1, and `Scrape(ctx, parcelID)`.
 2. Build the client from `httpclient.NewHTTPClient` and `NewRateLimitedClient`. Use `http.NewRequestWithContext`. Return an error on status outside 200 to 299.
@@ -194,4 +194,4 @@ Check, for as long as this hold stands:
 
 ## Done
 
-Steps 1 through 3 are green, Step 4's hold is still true, and the three prerequisites in the removal plan are green. `go test -race ./...`, `go build ./...`, and `make build` exit 0. Default `go test` does not require Postgres.
+Steps 1 through 3 are green, Step 4's hold is still true, and the three prerequisites above are still green. `go test -race ./...`, `go build ./...`, and `make build` exit 0. Default `go test` does not require Postgres.

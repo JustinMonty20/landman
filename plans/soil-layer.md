@@ -27,9 +27,10 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] `git show origin/main:pstack/skills/poteto-mode/playbooks/opening-a-pr.md`
   - [ ] `git show origin/main:pstack/skills/control-cli/SKILL.md`
   - [ ] `git show origin/main:plans/soil-layer.md`
-  - [ ] `git show origin/main:plans/county-id-package.md`
+  - [ ] `git show origin/main:internal/county/county.go`
   - [ ] `git show origin/main:plans/scraper-enrichment.md`
-  - [ ] `git show origin/plan/parcel-sales-uuid-ids:plans/parcel-sales-uuid-ids.md`
+  - [ ] `git show origin/main:db/migrations/000004_parcel_sales_uuid_id.sql`
+  - [ ] `git show origin/main:internal/parcelstore/parcels.go`
 - [ ] When a `git show origin/main:pstack/` path fails, read the installed poteto-mode copy of that playbook. Do not add a `pstack/` tree in this program. Appendix C records the missing `control-cli` skill.
 - [ ] On the operator's go, arm the audit tick as `/loop 1h` with the tick prompt below. Never leave the cadence to memory.
 - [ ] Use this tick prompt, verbatim. "Re-read the execution playbook from trunk. Audit the operation against it and fix drift in this tick. Probe every active lane and judge progress by side effects only. Stand down a stuck lane and dispatch its replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported, such as a PR opened, a code-ready head, a round launched or closed, a verdict, a merge, a stuck agent and the action taken, a blocker added or cleared, or a decision only the operator can make. Name every such change and nothing else. Do not repeat a table, the merged list, or an unchanged blocker. If the audit found none, end the turn with no reply text. Either way, log this tick's row in your decision trail. The row names the items reported, or none."
@@ -207,7 +208,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 - [ ] Create `internal/parcelstore/parcels.go` when the file is absent. Edit it when uuid-2 has already created it.
 - [ ] Create `internal/parcelstore/parcels_test.go` when the file is absent. Edit it when it already exists.
 - [ ] Edit `main.go`.
-- [ ] Create `db/migrations/<prefix>_parcels_likely_vacant.sql`. List `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. On main at `d4654f6` the highest prefix is `000003`. Do not assume `000004` is free. uuid-1 plans `db/migrations/000004_parcel_sales_uuid_id.sql`. If that file exists, use the next integer. Do not edit `000001`, `000002`, `000003`, or uuid-1's file.
+- [ ] Create `db/migrations/<prefix>_parcels_likely_vacant.sql`. List `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. `db/migrations/000004_parcel_sales_uuid_id.sql` is already on main. If that file exists, use the next integer. Do not edit `000001`, `000002`, `000003`, or that file.
 - [ ] Do not edit `internal/parcelstore/sales.go` or any other uuid-2 file. Do not write `parcel_sales` from this PR. Do not add `SoilQueryURL` or `FetchSoilPolygons`. soil-2 adds those after this PR.
 
 **Build.**
@@ -329,7 +330,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 
 **Files.**
 
-- [ ] Create the soil migration by hand. `make migrate-create` runs `goose create` with no sequential flag (`Makefile` lines 82 to 88), so the name it emits is a timestamp. At implementation time, list `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. Name the file `db/migrations/<prefix>_soil.sql`. On main at `d4654f6` the highest prefix is `000003`. Do not assume `000004` is free. uuid-1 on `plans/parcel-sales-uuid-ids.md` plans `db/migrations/000004_parcel_sales_uuid_id.sql`. persist-1 adds `<prefix>_parcels_likely_vacant.sql`. If either file exists, use the next integer after both. Do not edit those files.
+- [ ] Create the soil migration by hand. `make migrate-create` runs `goose create` with no sequential flag (`Makefile` lines 82 to 88), so the name it emits is a timestamp. At implementation time, list `db/migrations/*.sql`, take the highest six-digit prefix, add 1, and zero-pad to six digits. Name the file `db/migrations/<prefix>_soil.sql`. `db/migrations/000004_parcel_sales_uuid_id.sql` is already on main. Do not assume the next prefix is free. persist-1 adds `<prefix>_parcels_likely_vacant.sql`. If that file or `000004_parcel_sales_uuid_id.sql` exists, use the next integer after both. Do not edit those files.
 - [ ] Do not edit `db/migrations/000001_init_schema.sql`, `db/migrations/000002_parcels_storage_srid.sql`, or `db/migrations/000003_parcels_county_check.sql`. Do not create a PostgreSQL enum.
 
 **Build.**
@@ -640,9 +641,9 @@ The decision this number has to support is whether downloading every parcel stil
 
 **Read.** `internal/county` exports `ID`, `Union`, `Parse`, `Valid`, `String`, and `All`. `db/migrations/000003_parcels_county_check.sql` adds `CHECK (county_id IN ('union'))`. county-1 is on trunk. Soil does not declare that type.
 
-**Read.** `parcels.id` is `UUID PRIMARY KEY DEFAULT gen_random_uuid()`. The natural key is `(county_id, source_name, source_parcel_id)`. `shape` is `GEOMETRY(Geometry, 3857)`. `parcels_shape_gist_idx` already exists. `parcel_sales.id` is still `BIGINT GENERATED BY DEFAULT AS IDENTITY` on this trunk. `000001_init_schema.sql` lines 5 to 7, 62, 73, 94 to 97, and 124.
+**Read.** `parcels.id` is `UUID PRIMARY KEY DEFAULT gen_random_uuid()`. The natural key is `(county_id, source_name, source_parcel_id)`. `shape` is `GEOMETRY(Geometry, 3857)`. `parcels_shape_gist_idx` already exists. `000001_init_schema.sql` still creates `parcel_sales.id` as `BIGINT GENERATED BY DEFAULT AS IDENTITY`, and `000004_parcel_sales_uuid_id.sql` changes that column to `uuid`. `000001_init_schema.sql` lines 5 to 7, 62, 73, 94 to 97, and 124.
 
-**Read.** `plans/parcel-sales-uuid-ids.md` is not on main. It is on branch `plan/parcel-sales-uuid-ids`, PR 15, open. uuid-1 plans `db/migrations/000004_parcel_sales_uuid_id.sql` and changes `parcel_sales.id` to UUID. uuid-2 plans `internal/parcelstore/parcels.go`, with `SaveParcel` omitting `id`, upserting the natural key, and not deleting. persist-1 must keep those three clauses. If uuid-2 lands first, persist-1 edits the existing file and adds the shape union. If persist-1 lands first, it creates the file with those clauses so uuid-2 can edit it. uuid-2 does not edit `main.go`. The call from `main` stays in persist-1.
+**Read.** `db/migrations/000004_parcel_sales_uuid_id.sql` changes `parcel_sales.id` to UUID. `internal/parcelstore/parcels.go` has `SaveParcel`, which omits `id`, upserts the natural key, and does not delete. persist-1 must keep those three clauses. That file is already on main, so persist-1 edits it and adds the shape union. The sale writer does not edit `main.go`. The call from `main` stays in persist-1.
 
 **Read.** `main.go` lines 14 to 27 build the Union GIS source, filter with `IsLikelyVacantGISRecord`, and cancel after 10 minutes. The Spatialist package is gone. The hook returns nil today, and `Run`'s error already stops the process. soil-4 does not wait for a swallow that is no longer in the file. The 10 minute cancel stays. The request budget above fits inside it. persist-1 still downloads all 118,202 features. It stops using batch size 50, which is the path that misses the cancel.
 
@@ -682,7 +683,7 @@ A PostgreSQL enum for county loses because `parcels.county_id` is text. A swappa
 
 `control-cli` is not installed and there is no `pstack/` tree on trunk. Live lanes drive `go test`, `curl`, and `psql`, and they save the command output as the screenshot path. A lane that cannot draw still returns that file. When `git show origin/main:pstack/...` fails, the owner reads the installed poteto-mode playbook and records that fallback.
 
-uuid-1 plans `db/migrations/000004_parcel_sales_uuid_id.sql`. soil-3 must not hardcode `000004`. The owner lists `db/migrations` at the start and takes the next free prefix. The two programs do not edit each other's migration files.
+`db/migrations/000004_parcel_sales_uuid_id.sql` is on main. soil-3 must not hardcode `000004`. The owner lists `db/migrations` at the start and takes the next free prefix. The two programs do not edit each other's migration files.
 
 persist-1 and uuid-2 both touch `internal/parcelstore/parcels.go`. The owner reads the file before editing. The upsert omits `id`, conflicts on the natural key, and does not delete. persist-1 adds the shape union. It does not remove a sale writer uuid-2 already added. persist-1 is the PR that edits `main.go` for the parcel save. soil-4 edits `main.go` later, for the soil call.
 
@@ -698,7 +699,7 @@ Fifteen soil polygons and 20 kept features failed shapely's validity check durin
 
 The kept-set count moved by one parcel between 2026-11-08 and 2026-11-09. filter-1 lane 9 records a new count and does not change the rule inside that PR.
 
-`soil_polygons_county_check` quotes `('union')`. A later county drops and re-adds that check in its own migration, the same way `plans/county-id-package.md` already says to do. This program does not add the county.
+`soil_polygons_county_check` quotes `('union')`. A later county drops and re-adds that check in its own migration, the same way `db/migrations/000003_parcels_county_check.sql` already does for `parcels`. This program does not add the county.
 
 Web Mercator remains the stored geometry because that is the map SRID. Do not label `overlap_acres` as a Web Mercator measurement. There is no map UI in this plan.
 
@@ -715,8 +716,8 @@ Read before editing.
 - `main.go` lines 14 to 44.
 - `db/migrations/000001_init_schema.sql` lines 5 to 73, 94 to 97, and 124.
 - `db/migrations/000003_parcels_county_check.sql`.
-- `plans/county-id-package.md` for `county.ID` and the check list a later county extends.
-- `plans/parcel-sales-uuid-ids.md` on branch `plan/parcel-sales-uuid-ids` for uuid-1's `000004` file and uuid-2's `parcels.go` rules.
+- `internal/county/county.go` and `db/migrations/000003_parcels_county_check.sql` for `county.ID` and the check list a later county extends.
+- `db/migrations/000004_parcel_sales_uuid_id.sql` and `internal/parcelstore/parcels.go` for the sale UUID and the parcel upsert that omits `id`.
 - `plans/scraper-enrichment.md` for the per-parcel document this plan does not call.
 - `internal/connector/shared/httpclient/http_client.go` lines 24 to 28 and 63 to 71.
 
