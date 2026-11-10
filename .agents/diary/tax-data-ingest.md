@@ -14,7 +14,7 @@ Did not export the parcel lookup from `internal/parcelstore`. `SaveSales` alread
 
 ## Operator correction
 
-Tax rows match `parcels` and `parcel_sales`. Balances and bills are one row per parcel per tax year, with `county_id` and `source_name`. A foreclosure is a case plus a join row per PIN. A missing parcel keeps the case and skips the join. The `TBD` case key is the PIN-set hash plus the legal-text hash, and the operator still confirms it.
+Tax rows match `parcels` and `parcel_sales`. Balances and bills are one row per parcel per tax year, with `county_id` and `source_name`. A foreclosure is a case plus a join row per PIN. A missing parcel keeps the case and skips the join. The `TBD` case key is the PIN-set hash plus the legal-text hash.
 
 ## Operator correction
 
@@ -27,6 +27,14 @@ A renamed required column fails the file. The error names the missing column and
 ## Operator correction
 
 The billing zip cap stays 256 MiB until tax-4 measures the file. Lane 7 and lane 9 numbers are written into the plan and the PR before that PR merges. A length over 128 MiB raises the cap in that same PR.
+
+## Operator correction
+
+The operator confirmed the null case-number key `(county_id, source_name, parcel_set_sha256, legal_sha256)`. A later file that assigns a real case number leaves the old `TBD` row.
+
+## Out-of-scope decision
+
+A later pass that matches a `TBD` row to a numbered case by legal description and parcel set, then removes the stale row, stays out of this plan.
 
 ## Operator correction
 
