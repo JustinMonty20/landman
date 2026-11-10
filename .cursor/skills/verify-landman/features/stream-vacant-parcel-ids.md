@@ -34,6 +34,7 @@ Preconditions:
 
 - This drive hits the live county ArcGIS service. There is no dry-run flag. Do not run two stream drives at once.
 - The process deadline is 10 minutes, and the client sends about one request per second. Stderr prints `Batch size: 500`. If the deadline fires first, stderr contains `Failed to stream parcel IDs:` followed by `context deadline exceeded` or `rate: Wait(n=1) would exceed context deadline`. That is a failed drive. Do not stop after the first batch and call it verified.
+- Each county request uses a 30-second client timeout and waits 15 seconds for response headers. A stalled request fails the drive while the 10-minute deadline is still running.
 - If a page returns the wrong row count, the drive fails. The last page may be shorter than 500 when that shorter count is the remainder, and that page still succeeds. Any other short page fails. Stderr then contains `Failed to stream parcel IDs:` and `count mismatch: page <n> got <x> want <y>`. The page number in that error is 0-based. `Batch <i>/<total> complete` is 1-based.
 - `make run` rebuilds before it executes. If you already built, `./landman` is the more precise drive.
 - `Batch <n>` on stdout is the GIS batch index, not a count of printed lines. Empty vacant filters skip the stdout line but still increment that index.

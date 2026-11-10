@@ -50,7 +50,7 @@ make db-create
 make migrate-up
 ```
 
-`--wait` waits for the image healthcheck (`pg_isready` against the `postgres` maintenance database). That is not yet a usable landman database. Ready means all three of: the container is healthy, `make db-create` has run (idempotent bootstrap of the `landman` database), and `make migrate-up` has applied every file in `db/migrations/`. Confirm with `make migrate-version`. Stderr contains `goose: version <n>`, where `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000004` prints as `4`).
+`--wait` waits for the Compose service healthcheck (`pg_isready -U $POSTGRES_USER -d postgres`). That is not yet a usable landman database. Ready means all three of: the container is healthy, `make db-create` has run (idempotent bootstrap of the `landman` database), and `make migrate-up` has applied every file in `db/migrations/`. Confirm with `make migrate-version`. Stderr contains `goose: version <n>`, where `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000004` prints as `4`).
 
 The Compose file publishes `5432:5432` and uses volume `landman-postgis-data`. `POSTGRES_PORT` in `.env` does not change the published port. Two instances cannot run side by side with the repo as written.
 

@@ -27,5 +27,5 @@ Preconditions:
 ## Gotchas
 
 - These targets need the container name `landman-postgis`. A Compose service that came up as `postgis` will fail the Makefile's container check.
-- `migrate-status` before `db-create` talks to `DATABASE_URL`'s `landman` database and will fail if that database does not exist yet.
+- `migrate-version` and `migrate-status` before `db-create` talk to `DATABASE_URL`'s `landman` database and fail if that database does not exist yet.
 - Pending files after `migrate-up` mean bootstrap is incomplete. Do not report this feature verified until a follow-up `make migrate-up` leaves no pending landman migrations, or record the failure and the pending names.
