@@ -26,5 +26,4 @@ go.work.sum
 
 # env file
 .env
-# Verification evidence from the verify-landman skill
 artifacts/verify/
