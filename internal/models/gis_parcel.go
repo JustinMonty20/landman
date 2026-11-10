@@ -7,10 +7,19 @@ import (
 	"github.com/twpayne/go-geom"
 )
 
+// ParcelID is parcels.id, the application id minted by Postgres.
+// The county parcel number is a different value.
+type ParcelID string
+
+// SaleID is parcel_sales.id, the application id minted by Postgres.
+type SaleID string
+
 // GISParcel is the county-agnostic, normalized parcel shape persisted by the
 // storage layer. Fields that do not resolve into these concepts belong in
 // SourceExtras as JSON. The writing package chooses the key.
 type GISParcel struct {
+	ID ParcelID `json:"id,omitempty"`
+
 	Identity  ParcelIdentity  `json:"identity"`
 	Owner     ParcelOwner     `json:"owner"`
 	Mailing   ParcelAddress   `json:"mailing"`
@@ -90,6 +99,8 @@ type ParcelValuation struct {
 }
 
 type ParcelSale struct {
+	ID          SaleID     `json:"id,omitempty"`
+	ParcelID    ParcelID   `json:"parcel_id,omitempty"`
 	Sequence    int        `db:"sequence" json:"sequence"`
 	SaleDate    *time.Time `db:"sale_date" json:"sale_date,omitempty"`
 	OGSaleDate  *int64     `db:"og_sale_date" json:"og_sale_date,omitempty"`
