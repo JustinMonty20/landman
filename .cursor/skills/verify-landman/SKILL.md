@@ -33,7 +33,7 @@ The process talks to the live Union County ArcGIS query endpoint:
 
 `https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query`
 
-It sends a count query (`where=1=1`, `returnCountOnly=true`), then fetches every parcel in batches of 50 at about one request per second, including geometry. It prints only IDs that pass the likely-vacant filter (zero `YEARBLT` or `SQFT`, zero `FMV_IMPRV` currency, or a `LAND_TYPE` containing `RURAL ACREAGE TRACT`). The process deadline is 10 minutes. It does not read `DATABASE_URL` and does not write to Postgres.
+It sends a count query (`where=1=1`, `returnCountOnly=true`), then fetches every parcel in batches of 500 at about one request per second, including geometry. Each data page also sends `orderByFields=OBJECTID`. The count query does not. It prints only IDs that pass the likely-vacant filter (zero `YEARBLT` or `SQFT`, zero `FMV_IMPRV` currency, or a `LAND_TYPE` containing `RURAL ACREAGE TRACT`). The process deadline is 10 minutes. It does not read `DATABASE_URL` and does not write to Postgres.
 
 Started: stdout contains `Streaming parcel IDs from Union County GIS...`. That line is printed before any HTTP batch finishes.
 
@@ -50,7 +50,7 @@ make db-create
 make migrate-up
 ```
 
-`--wait` waits for the image healthcheck (`pg_isready` against the `postgres` maintenance database). That is not yet a usable landman database. Ready means all three of: the container is healthy, `make db-create` has run (idempotent bootstrap of the `landman` database), and `make migrate-up` has applied every file in `db/migrations/`. Confirm with `make migrate-version`. The output contains `goose: version <n>`, where `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000003` prints as `3`).
+`--wait` waits for the Compose service healthcheck (`pg_isready -U $POSTGRES_USER -d postgres`). That is not yet a usable landman database. Ready means all three of: the container is healthy, `make db-create` has run (idempotent bootstrap of the `landman` database), and `make migrate-up` has applied every file in `db/migrations/`. Confirm with `make migrate-version`. Stderr contains `goose: version <n>`, where `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000004` prints as `4`).
 
 The Compose file publishes `5432:5432` and uses volume `landman-postgis-data`. `POSTGRES_PORT` in `.env` does not change the published port. Two instances cannot run side by side with the repo as written.
 
