@@ -2,15 +2,15 @@
 
 You want the amount a likely-vacant owner owes, from public county files, so a balance can flag a likely seller. DevNet wEdge stays out. Its robots file disallows the parcel and tax pages. This is a fetch and a parse, not a scraper.
 
-The county-neutral source reads three Union files. They are the billing file, the delinquent tax notice, and the foreclosure list. Personal-property rows are ignored. Each file lands in typed tables shaped like `parcels` and `parcel_sales`. A query joins them on `parcels.id` and `tax_year`. The run does not insert parcels. `parcels.likely_vacant` comes from persist-1 in `plans/soil-layer.md`. This plan does not add that column.
+The county-neutral source reads four Union files. They are the billing file, the delinquent tax notice, the foreclosure sales list, and the upcoming foreclosure list. Personal-property rows are ignored. Each file lands in typed tables shaped like `parcels` and `parcel_sales`. A query joins them on `parcels.id` and, where the file has one, `tax_year`. The run does not insert parcels. `parcels.likely_vacant` comes from persist-1 in `plans/soil-layer.md`. This plan does not add that column.
 
-Run tax-1 first. Run tax-2 after persist-1. Run tax-3, tax-4, and tax-5 after tax-1 and tax-2. Run tax-6 after those three. The production run is about twice a year, and the period is config.
+Run tax-1 first. Run tax-2 after persist-1. Run tax-3, tax-4, tax-5, and tax-7 after tax-1 and tax-2. Run tax-6 after those four. The production run is about twice a year, and the period is config.
 
 ## How to read this
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs `pstack/skills/poteto-mode/playbooks/autopilot-stack.md`. The operator lands tax-1, tax-2, tax-3, tax-4, tax-5, and tax-6. This plan stops at merge-ready. Nobody merges from the checklist.
+The program runs `pstack/skills/poteto-mode/playbooks/autopilot-stack.md`. The operator lands tax-1, tax-2, tax-3, tax-4, tax-5, tax-7, and tax-6. This plan stops at merge-ready. Nobody merges from the checklist.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -37,7 +37,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Spawn owners
 
 - [ ] Spawn one owner per PR with the full lifecycle the execution playbook names.
-- [ ] Follow this dependency graph. Start dependent work only after its parent is on trunk. Do not stack these PRs. tax-2, tax-3, tax-4, tax-5, and tax-6 each need a parent that is not this program's first PR.
+- [ ] Follow this dependency graph. Start dependent work only after its parent is on trunk. Do not stack these PRs. tax-2, tax-3, tax-4, tax-5, tax-7, and tax-6 each need a parent that is not this program's first PR.
 
 ```mermaid
 flowchart LR
@@ -45,19 +45,22 @@ flowchart LR
   tax1[tax-1] --> tax3[tax-3]
   tax1 --> tax4[tax-4]
   tax1 --> tax5[tax-5]
+  tax1 --> tax7[tax-7]
   tax2 --> tax3
   tax2 --> tax4
   tax2 --> tax5
+  tax2 --> tax7
   tax3 --> tax6[tax-6]
   tax4 --> tax6
   tax5 --> tax6
+  tax7 --> tax6
 ```
 
   - [ ] tax-1 is first and branches from trunk.
   - [ ] tax-2 after persist-1 is on trunk. persist-1 is in `plans/soil-layer.md`. It adds `parcels.likely_vacant`. Do not edit that plan. Do not add the column in this program. soil-3 may add `<prefix>_soil.sql` first. tax-2 does not wait on soil-3 for behavior. It takes the next free prefix after every six-digit file present at the start of the PR, including that soil file when it is already there.
-  - [ ] tax-3, tax-4, and tax-5 start after tax-1 and tax-2 are on trunk. They do not edit the same files. `county.ID` is already on trunk in `internal/county`. They do not wait on a county PR.
-  - [ ] tax-6 after tax-3, tax-4, and tax-5 are on trunk.
-- [ ] Hold the file boundaries. tax-1 touches only `internal/taxsource/`. tax-2 touches only the one new tax migration. tax-3 touches only `internal/connector/union/delinquent.go`, `internal/connector/union/delinquent_test.go`, `internal/connector/union/testdata/tax/delinquent.csv`, `internal/taxstore/delinquent.go`, and `internal/taxstore/delinquent_test.go`. tax-4 touches only `internal/connector/union/billing.go`, `internal/connector/union/billing_test.go`, `internal/connector/union/testdata/tax/billing.csv`, `internal/taxstore/bills.go`, and `internal/taxstore/bills_test.go`. tax-5 touches only `internal/connector/union/foreclosure.go`, `internal/connector/union/foreclosure_test.go`, `internal/connector/union/testdata/tax/foreclosure.html`, `internal/taxstore/foreclosure.go`, and `internal/taxstore/foreclosure_test.go`. tax-6 touches only `main.go` and `main_test.go`.
+  - [ ] tax-3, tax-4, tax-5, and tax-7 start after tax-1 and tax-2 are on trunk. They do not edit the same files. `county.ID` is already on trunk in `internal/county`. They do not wait on a county PR.
+  - [ ] tax-6 after tax-3, tax-4, tax-5, and tax-7 are on trunk.
+- [ ] Hold the file boundaries. tax-1 touches only `internal/taxsource/`. tax-2 touches only the one new tax migration. tax-3 touches only `internal/connector/union/delinquent.go`, `internal/connector/union/delinquent_test.go`, `internal/connector/union/testdata/tax/delinquent.csv`, `internal/taxstore/delinquent.go`, and `internal/taxstore/delinquent_test.go`. tax-4 touches only `internal/connector/union/billing.go`, `internal/connector/union/billing_test.go`, `internal/connector/union/testdata/tax/billing.csv`, `internal/taxstore/bills.go`, and `internal/taxstore/bills_test.go`. tax-5 touches only `internal/connector/union/foreclosure.go`, `internal/connector/union/foreclosure_test.go`, `internal/connector/union/testdata/tax/foreclosure.html`, `internal/taxstore/foreclosure.go`, and `internal/taxstore/foreclosure_test.go`. tax-7 touches only `internal/connector/union/pipeline.go`, `internal/connector/union/pipeline_test.go`, `internal/connector/union/testdata/tax/pipeline.pdf`, `internal/connector/union/testdata/tax/pipeline.pptx`, `internal/taxstore/pipeline.go`, and `internal/taxstore/pipeline_test.go`. tax-6 touches only `main.go` and `main_test.go`.
 - [ ] Hold the review gate. No PR in this program changes an interaction. None wait for screenshots in chat before the operator decides to land them.
 - [ ] Do not add a PR that requests `unionnc.devnetwedge.com`. Do not file a records request. Do not add a worker pool, a raw HTML table of DevNet pages, or a per-parcel scrape contract. Do not edit `plans/scraper-enrichment.md` or `plans/soil-layer.md`.
 
@@ -81,7 +84,7 @@ flowchart LR
 Each live lane runs on its own cloud VM at the PR head. This repo has no browser UI for tax ingest. Drive `go test`, `curl`, and `psql`. There is no `control-cli` skill in the repo. Appendix C records that gap. The commands in the lane are the drive.
 
 - [ ] `git fetch origin <head-branch> && git checkout <head SHA>`.
-- [ ] For tax-1, run the `go test -race` command in the lane. For tax-2, tax-3, tax-4, tax-5, and tax-6, start Postgres and PostGIS the way `make migrate-up` does, apply migrations through the head, and wait until `psql` accepts a query. Parser tests that do not open a database stay on `go test` without `DATABASE_URL`.
+- [ ] For tax-1, run the `go test -race` command in the lane. For tax-2, tax-3, tax-4, tax-5, tax-7, and tax-6, start Postgres and PostGIS the way `make migrate-up` does, apply migrations through the head, and wait until `psql` accepts a query. Parser tests that do not open a database stay on `go test` without `DATABASE_URL`.
 - [ ] Deliver input only through those commands. Read-only diagnostics are the test output, the `curl` body, and the `psql` rows.
 - [ ] Save every screenshot to `/tmp/swarm-<pr-id>/worker-<n>/<slug>.png` and return the paths with the report. A lane with no display saves a text render of the command output at that path.
 - [ ] A lane that hits the county site does it once, with a descriptive user agent, and does not loop. Do not download the billing zip in more than one lane. Do not request a path that `robots.txt` disallows.
@@ -101,7 +104,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `Get(ctx context.Context, rawURL string, limit int64, timeout time.Duration) (io.ReadCloser, error)`. A zero limit or a zero timeout is an error. The body is capped at `limit`. One byte past the cap returns an error and closes the body.
 - [ ] Retry once when the first attempt fails before any body byte is read, and the error is a transport error or an HTTP status from 500 through 599. Do not retry 404. Do not retry when the error matches `context.Canceled` or `context.DeadlineExceeded`. Do not read `Retry-After`. Do not add a rate limiter. Do not fetch `robots.txt`.
 - [ ] Add `Meta` with `URL`, `Name`, `SHA256`, and `FetchedAt`. Add `Source[T any]` with `Read(ctx context.Context, yield func(T) error) (Meta, error)`. `Read` is the only method. The shared package does not name a tax column and does not import `internal/county`, `internal/soil`, `internal/connector/union`, or `internal/parcelstore`.
-- [ ] Do not add `DoRetry`, a worker pool, or a per-parcel `Scrape` method. A second county implements `Source` in its own package. Union is the first implementation, and it lands in tax-3, tax-4, and tax-5.
+- [ ] Do not add `DoRetry`, a worker pool, or a per-parcel `Scrape` method. A second county implements `Source` in its own package. Union is the first implementation, and it lands in tax-3, tax-4, tax-5, and tax-7.
 
 **You see.**
 
@@ -157,17 +160,18 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `tax_foreclosure_cases` with the same `id`, `county_id`, `source_name`, `source_url`, `file_sha256`, `fetched_at`, `created_at`, and `updated_at` rules. `case_number TEXT` is NULL when the source says `TBD` or the label is absent. Do not store the text `TBD`. `parcel_set_sha256 BYTEA NOT NULL` is the SHA-256 of the sorted normalized PINs joined by newlines. `legal_sha256 BYTEA NOT NULL` is the SHA-256 of the legal description texts in that same PIN order, joined by newlines. `owner_name TEXT`. `sale_on DATE`. `tax_year SMALLINT` uses the same year check and is NULL when the source names no year. `opening_bid NUMERIC(14, 2)`, `current_bid NUMERIC(14, 2)`, and `upset_bid NUMERIC(14, 2)` are each NULL or `>= 0`. `status TEXT`. `redeemed BOOLEAN NOT NULL DEFAULT false`. `bidding_closed BOOLEAN NOT NULL DEFAULT false`. The parser sets those booleans from the status phrase. A query reads the booleans and does not parse the phrase. The stored `source_name` is `union_foreclosure`. No `JSONB`.
 - [ ] The case upsert key is a decision for the operator to confirm. A real case number conflicts on `(county_id, source_name, case_number)` where `case_number` is not null. A null case number conflicts on `(county_id, source_name, parcel_set_sha256, legal_sha256)` where `case_number` is null. Use two partial unique indexes. Two `TBD` cases with different PIN sets stay two rows. Two `TBD` cases with the same PIN set and different legal text stay two rows. A second save of the same `TBD` PIN set and the same legal text keeps `id`. A numbered case keeps `id` when the PIN list changes, and the hashes on that row update. This plan does not delete the old `TBD` row if a later file gives that PIN set a case number.
 - [ ] Add `tax_foreclosure_parcels`. `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`. `case_id UUID NOT NULL REFERENCES tax_foreclosure_cases(id) ON DELETE CASCADE`. `parcel_id UUID NOT NULL REFERENCES parcels(id) ON DELETE CASCADE`. `tax_value NUMERIC(14, 2)` is NULL or `>= 0`. `situs_line TEXT`. `legal_description TEXT`. `created_at` and `updated_at` match `parcel_sales`. Unique `(case_id, parcel_id)`. Do not put `county_id` or `source_name` here. `parcel_sales` does not copy those columns either. Do not put `source_parcel_id` here. One case that names three PINs is one case row and three join rows. Do not store those PINs in one text column.
-- [ ] Add view `tax_owed`. Read `tax_delinquent_balances` and `parcels` only. Join on `parcels.id = tax_delinquent_balances.parcel_id`. Keep rows where `parcels.likely_vacant` is true and `balance_due > 0`. Return `parcel_id`, `tax_year`, and the summed `balance_due`, grouped by `parcel_id` and `tax_year`. Do not collapse years. A bill joins this view on `parcel_id` and `tax_year`. A foreclosure join row joins on `parcel_id`. Those joins do not parse a string. A foreclosure row does not set the flag by itself. Do not add `parcels.likely_vacant`. Do not add `GEOMETRY`. Do not add `JSONB`.
+- [ ] Add `tax_foreclosure_pipeline`. Same `id`, `county_id`, `source_name`, `source_url`, `file_sha256`, `fetched_at`, `created_at`, and `updated_at` rules. `parcel_id UUID NOT NULL REFERENCES parcels(id) ON DELETE CASCADE`. `owner_name TEXT`. `situs_line TEXT`. `township TEXT`. `acreage TEXT`. `tax_value NUMERIC(14, 2)` is NULL or `>= 0`. `case_number TEXT`. `sale_on DATE`. `schedule_text TEXT`. `status TEXT`. `redeemed BOOLEAN NOT NULL DEFAULT false`. Unique `(county_id, source_name, parcel_id)`. Index `(parcel_id)`. The stored `source_name` is `union_foreclosure_pipeline`. No `tax_year`. The measured file does not name one. No `source_parcel_id`. No `JSONB`. Do not add a boolean column on `parcels`. A parcel is upcoming when this table has its `parcels.id`.
+- [ ] Add view `tax_owed`. Read `tax_delinquent_balances` and `parcels` only. Join on `parcels.id = tax_delinquent_balances.parcel_id`. Keep rows where `parcels.likely_vacant` is true and `balance_due > 0`. Return `parcel_id`, `tax_year`, and the summed `balance_due`, grouped by `parcel_id` and `tax_year`. Do not collapse years. A bill joins this view on `parcel_id` and `tax_year`. A foreclosure join row and a pipeline row join on `parcel_id`. Those joins do not parse a string. A foreclosure row does not set the owed flag by itself. A pipeline row does not set it either. Do not add `parcels.likely_vacant`. Do not add `GEOMETRY`. Do not add `JSONB`.
 - [ ] Money is `NUMERIC(14, 2)`, matching `parcel_sales.amount` and the parcel valuation columns in `000001_init_schema.sql`. The largest amount in the measured delinquent file is 36800.63 on a personal-property row this program does not store. The largest real-estate balance is 14355.02. Do not store money as `float`. Do not use `INTEGER` for `tax_year`.
-- [ ] The upsert in later PRs omits `id` and does not assign `created_at`. On conflict it updates the typed columns and sets `updated_at` to `now()`, the same way `SaveParcel` and `SaveSales` do. Goose `Up` creates the four tables and the view. Goose `Down` drops the view, then `tax_foreclosure_parcels`, then `tax_foreclosure_cases`, then `tax_bills`, then `tax_delinquent_balances`. It does not drop `parcels`.
+- [ ] The upsert in later PRs omits `id` and does not assign `created_at`. On conflict it updates the typed columns and sets `updated_at` to `now()`, the same way `SaveParcel` and `SaveSales` do. The pipeline save also deletes rows for `(county_id, source_name)` whose `parcel_id` is absent from that file, in the same transaction, so the join is the current list. Goose `Up` creates the five tables and the view. Goose `Down` drops the view, then `tax_foreclosure_pipeline`, then `tax_foreclosure_parcels`, then `tax_foreclosure_cases`, then `tax_bills`, then `tax_delinquent_balances`. It does not drop `parcels`.
 
 **You see.**
 
-- [ ] After `make migrate-up` on a database that already has persist-1, `psql` lists `tax_delinquent_balances`, `tax_bills`, `tax_foreclosure_cases`, `tax_foreclosure_parcels`, and `tax_owed`. `\d tax_delinquent_balances` shows a UUID primary key, `county_id`, `source_name`, `tax_year` as smallint, and no `source_parcel_id` column.
+- [ ] After `make migrate-up` on a database that already has persist-1, `psql` lists `tax_delinquent_balances`, `tax_bills`, `tax_foreclosure_cases`, `tax_foreclosure_parcels`, `tax_foreclosure_pipeline`, and `tax_owed`. `\d tax_delinquent_balances` shows a UUID primary key, `county_id`, `source_name`, `tax_year` as smallint, and no `source_parcel_id` column. `\d parcels` does not show an upcoming-foreclosure column.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `rg -n "likely_vacant_parcels|source_parcel_id|GEOMETRY|JSONB|jsonb" db/migrations/<prefix>_tax_files.sql` prints nothing. `rg -n "likely_vacant" db/migrations/<prefix>_tax_files.sql` matches only the view. `rg -n "tax_owed" db/migrations/<prefix>_tax_files.sql` matches the view. `rg -n "SMALLINT" db/migrations/<prefix>_tax_files.sql` matches `tax_year`. `rg -n "tax_foreclosure_parcels" db/migrations/<prefix>_tax_files.sql` matches the join table. `rg -n "ADD COLUMN likely_vacant" db/migrations/<prefix>_tax_files.sql` prints nothing.
+- [ ] `rg -n "likely_vacant_parcels|source_parcel_id|GEOMETRY|JSONB|jsonb|upcoming_foreclosure" db/migrations/<prefix>_tax_files.sql` prints nothing. `rg -n "likely_vacant" db/migrations/<prefix>_tax_files.sql` matches only the view. `rg -n "tax_owed" db/migrations/<prefix>_tax_files.sql` matches the view. `rg -n "SMALLINT" db/migrations/<prefix>_tax_files.sql` matches `tax_year`. `rg -n "tax_foreclosure_parcels" db/migrations/<prefix>_tax_files.sql` matches the join table. `rg -n "tax_foreclosure_pipeline" db/migrations/<prefix>_tax_files.sql` matches the pipeline table. `rg -n "ADD COLUMN likely_vacant" db/migrations/<prefix>_tax_files.sql` prints nothing.
 - [ ] Run `go test -race ./... -count=1` with no database. It still passes. `internal/parcelstore` database tests carry `//go:build postgres`, so this command does not open Postgres. Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
@@ -180,8 +184,8 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 6. Insert one bill and one balance for the same parcel and year. Then insert one foreclosure case with `case_number` null and two join rows for two likely-vacant parcels. Omit every `id`. Save `/tmp/swarm-tax-2/worker-6/insert-bill.png`. Pass when the bill joins the balance on `parcel_id` and `tax_year` as one row, a second insert of the same PIN set and the same legal text keeps the case `id`, and two join rows exist.
 - [ ] Lane 7. With the likely-vacant parcel and balance 10.00, select `tax_owed`. Save `/tmp/swarm-tax-2/worker-7/owed-join.png`. Pass when the view shows that `parcels.id` and the summed balance.
 - [ ] Lane 8. Insert a delinquent row for a parcel whose `likely_vacant` is false. Save `/tmp/swarm-tax-2/worker-8/owed-empty.png`. Pass when the view returns no row for that parcel and the balance row is still in `tax_delinquent_balances`.
-- [ ] Lane 9. Run goose down, then up. Save `/tmp/swarm-tax-2/worker-9/down-up.png`. Pass when the four tables are gone after down, `parcels` remains, and the tables are present after up.
-- [ ] Lane 10. Count `parcels` before and after a delinquent insert. Show the column list. Save `/tmp/swarm-tax-2/worker-10/no-parcel-insert.png`. Pass when the `parcels` count is unchanged, `tax_delinquent_balances` has `county_id` and `source_name` and no `source_parcel_id`, and `tax_foreclosure_parcels` has `case_id` and `parcel_id` and no `source_parcel_id`.
+- [ ] Lane 9. Run goose down, then up. Save `/tmp/swarm-tax-2/worker-9/down-up.png`. Pass when the five tables are gone after down, `parcels` remains, and the tables are present after up.
+- [ ] Lane 10. Count `parcels` before and after a delinquent insert. Show the column list. Save `/tmp/swarm-tax-2/worker-10/no-parcel-insert.png`. Pass when the `parcels` count is unchanged, `tax_delinquent_balances` has `county_id` and `source_name` and no `source_parcel_id`, `tax_foreclosure_parcels` has `case_id` and `parcel_id` and no `source_parcel_id`, and `tax_foreclosure_pipeline` has `parcel_id` and `source_name` and no boolean on `parcels`.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -216,7 +220,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `DelinquentRow` with `ParcelKey`, `Year`, `Balance`, and `PrimarySource`. The county parcel key stays on this struct until the store looks up `parcels.id`. It is not a database id. Add `DelinquentList` with `Read` so that `var _ taxsource.Source[DelinquentRow] = (*DelinquentList)(nil)` compiles in `delinquent.go`.
 - [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4792`. Do not send the `t` query parameter. Appendix A measured that this URL returns the CSV. If the first record's names do not include `Property Key`, `Year`, `Primary Source`, and `Balance Due`, return an error and yield nothing. Do not guess another document id.
 - [ ] Parse with `encoding/csv`. Read columns by those names. Ignore extra empty columns. Trim the key and uppercase it. Do not remove an internal space and do not drop a suffix. `07105038A` stays `07105038A`. `02176011 60` stays `02176011 60`.
-- [ ] Yield a row only when `Primary Source` is `RE`. Drop `RR`. Drop `PP`. Personal property is business equipment and vehicles taxed apart from the land. Parse `Balance Due` by removing `$` and commas. `Year` is a smallint. Store dollars and cents. A balance that does not parse is an error and yields nothing. Delete `-` from the key before lookup. Do not delete spaces.
+- [ ] Yield a row only when `Primary Source` is `RE`. Drop `RR`. Drop `PP`. Personal property is business equipment and vehicles taxed apart from the land. Parse `Balance Due` by removing `$` and commas. `Year` is a smallint. Store dollars and cents. A balance that does not parse is an error and yields nothing. Delete `-` and `.` from the key before lookup, then trim the ends. Do not delete spaces. A key that contains neither character is unchanged.
 - [ ] `SaveDelinquent` looks up `parcels.id` with `(county_id, source_name, source_parcel_id)`. `county_id` is `county.Union`. `source_name` for the lookup is `union_county_gis`, the value `GISSource.Name` returns at `internal/connector/union/gis.go` line 82. `source_parcel_id` is the normalized key. Use the same three columns as `lookupParcelSQL` in `internal/parcelstore/sales.go` lines 91 to 97. Do not edit `internal/parcelstore`. Also read `likely_vacant`. No parcel row is an unmatched skip. A parcel with `likely_vacant` false is a not-enriched skip. A true row is upserted. The stored `county_id` is the parcel's `county_id`. The stored `source_name` is `union_delinquent`. Do not insert a parcel. Do not write the county key onto the tax row.
 - [ ] The upsert omits `id` and `created_at` and conflicts on `(county_id, source_name, parcel_id, tax_year)`. It replaces `balance_due`, `primary_source`, `source_url`, `file_sha256`, and `fetched_at`, and sets `updated_at` to `now()`. It does not assign `id`. `file_sha256` is the SHA-256 of the file bytes. `SaveDelinquent` returns the saved count, the skipped PP count, the skipped RR count, the unmatched count, and the not-enriched count. Add `Latest(ctx) (time.Time, bool, error)` as the max `fetched_at`, with false when the table is empty. A second `Read` of the same bytes yields the same keys and balances.
 - [ ] Put the database test behind `//go:build postgres`, matching `internal/parcelstore/parcels_test.go`. `go test` without that tag does not open Postgres.
@@ -339,10 +343,10 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 **Build.**
 
 - [ ] Add `ForeclosureCase` with `CaseNumber`, `OwnerName`, `SaleOn`, `Status`, the bid amounts, and a slice of PIN values. Each PIN value has the normalized key, situs line, legal description, and tax value. Add `ForeclosureList` with `Read` so that `var _ taxsource.Source[ForeclosureCase] = (*ForeclosureList)(nil)` compiles. One yield is one case. It is not one yield per PIN.
-- [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4787`. Do not send the `t` query parameter. If the body contains zero `Parcel Identification Number` labels, return an error and yield nothing. Do not guess another document id. Do not fetch the PowerPoint named on the foreclosure page. The operator is reading that deck first. Appendix A did not keep that href.
-- [ ] A block is the text from one case to the next. Delete `-` from each PIN and then trim the ends. Do not delete spaces. `09-125-043` becomes `09125043`. A block with no PIN is skipped and counted. It is not a personal-property row. This file has no source column. Do not drop a PIN because the page mentions personal property in the statute text.
+- [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4787`. Do not send the `t` query parameter. If the body contains zero `Parcel Identification Number` labels, return an error and yield nothing. Do not guess another document id. Do not fetch the upcoming-foreclosure document. tax-7 does that.
+- [ ] A block is the text from one case to the next. Delete `-` and `.` from each PIN and then trim the ends. Do not delete spaces. `09-125-043` becomes `09125043`. A block with no PIN is skipped and counted. It is not a personal-property row. This file has no source column. Do not drop a PIN because the page mentions personal property in the statute text.
 - [ ] One case can name more than one PIN. Appendix A measured case `26M000471-890` with three PINs. Yield one `ForeclosureCase` whose slice has one entry per PIN. Do not join the PINs into one string. `TBD` for the case number, a date, or an amount becomes NULL. Do not store the text `TBD`. A non-empty amount that is not `TBD` and does not parse as dollars and cents fails the file and yields nothing. Set `redeemed` and `bidding_closed` from the status phrase.
-- [ ] `SaveForeclosure` groups one case, writes the case row, and looks up each PIN with the tax-3 lookup. A likely-vacant parcel gets one join row. A PIN with no parcel keeps the case row, skips the join row, and increments the unmatched count. A parcel with `likely_vacant` false keeps the case row, skips the join row, and increments the not-enriched count. Do not insert a parcel. The case upsert uses the partial unique indexes from tax-2 and omits `id`. The join upsert conflicts on `(case_id, parcel_id)` and omits `id`. The save result returns the saved case count, the saved join count, the skipped-block count, the unmatched count, and the not-enriched count. Add `Latest` for `tax_foreclosure_cases`. Database tests use `//go:build postgres`.
+- [ ] `SaveForeclosure` groups one case, writes the case row, and looks up each PIN with the tax-3 lookup. Do not read `likely_vacant`. A stored parcel gets one join row whether or not it has a house. A PIN with no parcel keeps the case row, skips the join row, and increments the unmatched count. Do not insert a parcel. The case upsert uses the partial unique indexes from tax-2 and omits `id`. The join upsert conflicts on `(case_id, parcel_id)` and omits `id`. The save result returns the saved case count, the saved join count, the skipped-block count, and the unmatched count. It does not return a not-enriched count. Add `Latest` for `tax_foreclosure_cases`. Database tests use `//go:build postgres`.
 - [ ] The golden file is a short copy of the measured list. Include case `26M000471-890` with three PINs, one `TBD` case with a different PIN, a second `TBD` case with another PIN, and one block with no PIN. `-update` is off by default.
 
 **You see.**
@@ -360,7 +364,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 - [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/connector/union/ -count=1 -run 'TestDelinquent|TestBilling'` at trunk and at head. Trunk has no foreclosure parser. Record that. Save `/tmp/swarm-tax-5/worker-1/regression.png`. Pass when head's earlier parser tests still pass and `TestForeclosure` passes.
 - [ ] Lane 2. Parse the golden file. Save `/tmp/swarm-tax-5/worker-2/golden.png`. Pass when case `26M000471-890` is one yield with three PINs, `09-125-043` normalizes to `09125043`, and the block with no PIN is absent.
-- [ ] Lane 3. `SaveForeclosure` twice for the same `TBD` case with two likely-vacant parcels. Save `/tmp/swarm-tax-5/worker-3/upsert.png`. Pass when one case row exists, `case_number` is NULL, two join rows exist, and the case `id` is unchanged.
+- [ ] Lane 3. `SaveForeclosure` twice for the same `TBD` case with two stored parcels, one of them `likely_vacant` false. Save `/tmp/swarm-tax-5/worker-3/upsert.png`. Pass when one case row exists, `case_number` is NULL, two join rows exist, and the case `id` is unchanged.
 - [ ] Lane 4. Save two `TBD` cases with different PIN sets, one of them missing from `parcels`. Count `parcels`. Save `/tmp/swarm-tax-5/worker-4/no-parcel.png`. Pass when two case rows exist, the missing PIN has no join row, the unmatched count is 1, and the `parcels` count is unchanged.
 - [ ] Lane 5. Parse a PIN that still contains a space after `-` is removed, using fixture text `02176011 60` with the hyphens the normalizer would see. Save `/tmp/swarm-tax-5/worker-5/keep-space.png`. Pass when the yielded key still contains the space.
 - [ ] Lane 6. Fetch `https://www.unioncountync.gov/home/showdocument?id=4787` once. Save `/tmp/swarm-tax-5/worker-6/live-list.png`. Pass when the body contains `Parcel Identification Number` and does not point the parser at `unionnc.devnetwedge.com`. One request. Do not pass a `t` parameter.
@@ -385,9 +389,73 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
 - [ ] The owner does not merge. The operator lands tax-5 after tax-1 and tax-2.
 
+## Ingest the upcoming foreclosure list (tax-7)
+
+**Depends on.** tax-1 and tax-2. `county.ID` is already on trunk.
+
+**Files.**
+
+- [ ] Create `internal/connector/union/pipeline.go`.
+- [ ] Create `internal/connector/union/pipeline_test.go`.
+- [ ] Create `internal/connector/union/testdata/tax/pipeline.pdf`.
+- [ ] Create `internal/connector/union/testdata/tax/pipeline.pptx`.
+- [ ] Create `internal/taxstore/pipeline.go`.
+- [ ] Create `internal/taxstore/pipeline_test.go`.
+
+**Build.**
+
+- [ ] Add `PipelineProperty` with the normalized parcel key, owner, situs line, township, acreage text, tax value, case number, sale date, schedule text, status, and redeemed flag. Add `PipelineList` with `Read` so that `var _ taxsource.Source[PipelineProperty] = (*PipelineList)(nil)` compiles. One yield is one parcel. A slide that names three PINs yields three times. Do not join those PINs into one string.
+- [ ] Resolve the file from `https://www.unioncountync.gov/government/departments-r-z/taxes-property/collection-payment/property-tax-foreclosure-auction` on every run. Find the anchor whose title or text is `Properties Currently in Tax Foreclosure`. Use that href. Drop the `t` query parameter. Do not hardcode document id `4784`. Appendix A measured that id on 2026-11-10. If the page has no such anchor, GET `taxRunConfig.PipelineURL` when that string is non-empty. If the page has no anchor and `PipelineURL` is empty, or the chosen URL does not return a body, return the error and yield nothing. Do not guess an id. Do not read a PIN list from the operator. Do not file a records request.
+- [ ] Branch on the body. A body that starts with `%PDF` is the PDF path. A body that is a zip whose `[Content_Types].xml` names a presentation is the pptx path. Any other body is an error and yields nothing. Appendix A measured a PDF on 2026-11-10. The same document id was a pptx on 2026-01-15. Both paths stay in this PR so a county switch does not become a manual job.
+- [ ] The PDF path uses `compress/flate` and the page content streams. Read text showing operators and join glyphs that sit on one line, so a parcel token is `02.239.077` and not a string of spaced letters. Read `/ActualText` and `/Alt` when they exist. Do not render the page. Do not OCR. A page whose only drawings are images, with no text operators and no alt text, is skipped and counted. Appendix A found no such property page in this file. The background JPEG on every page is not the parcel data.
+- [ ] The pptx path uses `archive/zip` and `encoding/xml`. Read `a:t` text runs, `a:tbl` cell text, `p:cNvPr` `descr` and `title`, and notes-slide `a:t`. Do not screenshot a slide. Do not add a module requirement. A slide whose shapes are only pictures, with empty text and empty descr and title, is skipped and counted.
+- [ ] Delete `-` and `.` from each parcel token and then trim. Do not delete spaces. `02.239.077` becomes `02239077`. `07.027.002J80` becomes `07027002J80`. A label `Parcel` with no token is a skipped slide, not a personal-property row. Parse `Tax Value` by removing `$`, commas, and spaces. An empty value is NULL. A non-empty value that is not dollars and cents fails the file and yields nothing. Acreage stays TEXT, because the file mixes `0.234`, `5.30 acs`, and `Lot 16 College Grove`. A sale phrase with no year, such as `August 27`, leaves `sale_on` NULL and keeps the phrase in `schedule_text`. Set `redeemed` when the status phrase contains `Redeemed`. Store the case number from `Complaint Filed`, `Judicial Foreclosure Case`, or `Court Case`. A missing case number is NULL. Do not use the TBD case hash on this table.
+- [ ] `SavePipeline` looks up each key with the tax-3 lookup and does not read `likely_vacant`. A stored parcel is upserted whether or not it has a house. A key with no parcel increments the unmatched count and inserts no row. Do not insert a parcel. The upsert omits `id` and conflicts on `(county_id, source_name, parcel_id)`. In the same transaction, delete pipeline rows for that `county_id` and `union_foreclosure_pipeline` whose `parcel_id` is absent from this file. A second save of the same parcel keeps `id`. The save result returns the saved count, the deleted count, the skipped-page count, and the unmatched count. Add `Latest` for `tax_foreclosure_pipeline`. Database tests use `//go:build postgres`.
+- [ ] The golden PDF is one page whose text operators contain parcel `02.239.077`, an owner, and a tax value. The golden pptx is one slide with an `a:t` run, one table cell, a shape `descr`, and a notes `a:t`, each carrying a distinct parcel token. `-update` is off by default. `PipelineURL` is empty unless a test sets it.
+
+**You see.**
+
+- [ ] `go test -race ./internal/connector/union/ -count=1 -run TestPipeline` prints `PASS`, and `02.239.077` yields key `02239077`.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Table-driven tests cover the golden PDF parcel, the golden pptx text run, table cell, descr, and notes, a dotted PIN, a picture-only page that increments the skip count and yields nothing, a page with no anchor and an empty `PipelineURL` that returns an error, a page with no anchor and a set `PipelineURL` that fetches that URL, and a canceled context. Run `go test -race ./internal/connector/union/ -count=1 -run TestPipeline`.
+- [ ] The postgres test saves a parcel with `likely_vacant` false, saves it again and keeps `id`, saves an unmatched key and inserts no row, and deletes a pipeline row whose parcel is absent from the second file. Run `go test -race -tags postgres ./internal/taxstore/ -count=1 -run TestSavePipeline`.
+- [ ] Run `go vet ./internal/connector/union/ ./internal/taxstore/` and `staticcheck ./internal/connector/union/ ./internal/taxstore/`. Both print no findings. `go list -m all` does not gain a PDF or PowerPoint module.
+- [ ] Run `go test -race -cover ./internal/connector/union/ ./internal/taxstore/ -count=1`. Fail if `union` coverage is below 77.4 percent, or below a higher trunk number measured at the start of this PR. Fail if `taxstore` coverage with `-tags postgres` is below 90.0 percent.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/connector/union/ -count=1 -run 'TestDelinquent|TestBilling|TestForeclosure'` at trunk and at head. Trunk has no pipeline parser. Record that. Save `/tmp/swarm-tax-7/worker-1/regression.png`. Pass when head's earlier parser tests still pass and `TestPipeline` passes.
+- [ ] Lane 2. Parse the golden PDF. Save `/tmp/swarm-tax-7/worker-2/golden-pdf.png`. Pass when parcel `02.239.077` is one yield with key `02239077` and the tax value is the fixture amount.
+- [ ] Lane 3. Parse the golden pptx. Save `/tmp/swarm-tax-7/worker-3/golden-pptx.png`. Pass when the text run, the table cell, the descr, and the notes each yield their own parcel key.
+- [ ] Lane 4. `SavePipeline` for a stored parcel with `likely_vacant` false, then again. Save `/tmp/swarm-tax-7/worker-4/upsert.png`. Pass when one row exists, the parcel is joined, and `id` is unchanged.
+- [ ] Lane 5. Save a key that is not in `parcels`. Count `parcels`. Save `/tmp/swarm-tax-7/worker-5/unmatched.png`. Pass when the unmatched count is 1, no pipeline row is inserted, and the `parcels` count is unchanged.
+- [ ] Lane 6. Fetch the auction page once. Save `/tmp/swarm-tax-7/worker-6/discover.png`. Pass when the body contains `Properties Currently in Tax Foreclosure` and the chosen href contains `showdocument`. Record the href. Do not fail only because the id is no longer `4784`.
+- [ ] Lane 7. Fetch that href once with no `t` parameter. Save `/tmp/swarm-tax-7/worker-7/live-file.png`. Pass when the status is 200 and the body starts with `%PDF` or is a presentation zip. Record the byte count and the SHA-256. Appendix A recorded 770854 bytes and sha256 `b0f8926a4d9d893dc022c0225649d9752f2c905ecb8b0ffcf4813d845e5b801b` for the PDF fetched on 2026-11-10. A difference does not fail the lane. Write the new numbers in the lane report.
+- [ ] Lane 8. Run the parser on that body and count yields. Save `/tmp/swarm-tax-7/worker-8/live-count.png`. Pass when the count is recorded. Appendix A counted 49 parcel labels on pages 4 through 26. A difference does not fail the lane. Pages 1, 2, 3, and 27 had no parcel label.
+- [ ] Lane 9. Cancel `Read` before the request. Save `/tmp/swarm-tax-7/worker-9/cancel.png`. Pass when the error matches `context.Canceled` and no row is yielded.
+- [ ] Lane 10. Select parcels that join `tax_foreclosure_pipeline` on `parcels.id` after a save of a parcel with `likely_vacant` false, and select `tax_owed`. Save `/tmp/swarm-tax-7/worker-10/upcoming-join.png`. Pass when the join returns that parcel and `tax_owed` does not gain a row from the pipeline row alone.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Wall time to parse the golden PDF and the golden pptx, and the yielded counts. Trunk has no parser. The end state is the golden yield count for each file.
+- [ ] Probe. At trunk, record that `PipelineList` does not exist. At head, time 20 parses of each golden file.
+- [ ] Baseline. Record trunk as no parser and no elapsed time.
+- [ ] Rule. Fail if the average of 20 head parses of either golden file is 1 second or longer, or if either yielded count is not the golden count. Do not report a ratio against trunk.
+
+**Review gate.** None. tax-7 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
+- [ ] The owner does not merge. The operator lands tax-7 after tax-1 and tax-2.
+
 ## Wire the tax run (tax-6)
 
-**Depends on.** tax-3, tax-4, and tax-5.
+**Depends on.** tax-3, tax-4, tax-5, and tax-7.
 
 **Files.**
 
@@ -396,9 +464,9 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Build.**
 
-- [ ] Add `taxRunConfig` in `main.go` with `Enabled bool` and `Period time.Duration`. The zero value of `Enabled` is false. When it is false, `main` does what trunk does. It does not download a county file. Do not add `func init`.
+- [ ] Add `taxRunConfig` in `main.go` with `Enabled bool`, `Period time.Duration`, and `PipelineURL string`. The zero value of `Enabled` is false. The zero value of `PipelineURL` is empty. When `Enabled` is false, `main` does what trunk does. It does not download a county file. Do not add `func init`. Do not read `PipelineURL` from the environment.
 - [ ] When `Enabled` is true and `Period` is zero, use 180 days. 180 days is a chosen stand-in for about twice a year. It is not a measured county cadence. The operator changes `Period` in this struct. Do not read the period from the environment. Do not add a cron entry, and do not sleep for the period. The process still exits when the run finishes.
-- [ ] When `Enabled` is true, call `Latest` for `tax_delinquent_balances`, then `tax_bills`, then `tax_foreclosure_cases`. If the returned time is inside `Period`, skip that file. Otherwise call `Read` and the matching save. One file at a time. No worker pool. A canceled context stops the next file. An error from a file is returned. Do not log it and return nil. Print the saved count and the skip counts from each save, including the foreclosure join count and the unmatched count.
+- [ ] When `Enabled` is true, call `Latest` for `tax_delinquent_balances`, then `tax_bills`, then `tax_foreclosure_cases`, then `tax_foreclosure_pipeline`. If the returned time is inside `Period`, skip that file. Otherwise call `Read` and the matching save. One file at a time. No worker pool. A canceled context stops the next file. An error from a file is returned. Do not log it and return nil. Print the saved count and the skip counts from each save, including the foreclosure join count, the pipeline saved count, and the unmatched count. The pipeline `Read` discovers its URL from the auction page unless that page has no anchor, in which case it uses `PipelineURL`.
 - [ ] Do not insert parcels. Do not call `IsLikelyVacantGISRecord` from the tax functions. Do not write `likely_vacant`. Do not import `internal/taxsource` from `main` if `main` only calls the union parsers and the taxstore functions.
 
 **You see.**
@@ -407,7 +475,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] A test with `Enabled` false does not call `Read`. A test with `Enabled` true and an empty `Latest` uses local files and writes a delinquent row, a bill row, a foreclosure case, and a join row. A test with `fetched_at` inside 180 days does not call `Read`. A test with `fetched_at` older than `Period` does call `Read`. Run `go test -race . -count=1` from the module root for the main package tests, and `go test -race -tags postgres ./internal/taxstore/ -count=1`.
+- [ ] A test with `Enabled` false does not call `Read`. A test with `Enabled` true and an empty `Latest` uses local files and writes a delinquent row, a bill row, a foreclosure case, a join row, and a pipeline row for a parcel with `likely_vacant` false. A test with `fetched_at` inside 180 days does not call `Read`. A test with `fetched_at` older than `Period` does call `Read`. Run `go test -race . -count=1` from the module root for the main package tests, and `go test -race -tags postgres ./internal/taxstore/ -count=1`.
 - [ ] Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
 - [ ] `rg -n "devnetwedge|func init\\(" --glob '*.go'` prints nothing.
 
@@ -415,21 +483,21 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 - [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/service/ ./internal/connector/union/ -count=1` at trunk and at head. Save `/tmp/swarm-tax-6/worker-1/regression.png`. Pass when both pass. Trunk's `main` has no tax switch. Record that.
 - [ ] Lane 2. Run the default path's unit test. Save `/tmp/swarm-tax-6/worker-2/switch-off.png`. Pass when no county file URL is requested.
-- [ ] Lane 3. Run the switch-on path against local files for a likely-vacant parcel. Save `/tmp/swarm-tax-6/worker-3/switch-on.png`. Pass when one delinquent row, one bill row, one foreclosure case, and one join row are stored, and each `id` is a UUID. The bill and the balance join on `parcel_id` and `tax_year`.
-- [ ] Lane 4. Select `tax_owed` after that run. Save `/tmp/swarm-tax-6/worker-4/owed.png`. Pass when the parcel id is the fixture `parcels.id`, `tax_year` is the fixture year, and the balance is greater than 0. The printed summary includes the skipped PP count. The foreclosure case alone did not create the view row.
-- [ ] Lane 5. Repeat the switch-on run inside the period. Save `/tmp/swarm-tax-6/worker-5/second-run.png`. Pass when `Read` is not called and the delinquent, bill, case, and join ids are unchanged.
-- [ ] Lane 6. Set `fetched_at` older than `Period` and run again. Save `/tmp/swarm-tax-6/worker-6/period-elapsed.png`. Pass when `Read` runs and the delinquent, bill, case, and join ids are still unchanged.
+- [ ] Lane 3. Run the switch-on path against local files for a likely-vacant parcel and a second stored parcel with `likely_vacant` false on the pipeline fixture. Save `/tmp/swarm-tax-6/worker-3/switch-on.png`. Pass when one delinquent row, one bill row, one foreclosure case, one join row, and one pipeline row are stored, and each `id` is a UUID. The bill and the balance join on `parcel_id` and `tax_year`. The pipeline row joins the not-vacant parcel on `parcels.id`.
+- [ ] Lane 4. Select `tax_owed` after that run. Save `/tmp/swarm-tax-6/worker-4/owed.png`. Pass when the likely-vacant parcel id is the fixture `parcels.id`, `tax_year` is the fixture year, and the balance is greater than 0. The printed summary includes the skipped PP count. The foreclosure case alone did not create the view row. The pipeline row alone did not create it either.
+- [ ] Lane 5. Repeat the switch-on run inside the period. Save `/tmp/swarm-tax-6/worker-5/second-run.png`. Pass when `Read` is not called and the delinquent, bill, case, join, and pipeline ids are unchanged.
+- [ ] Lane 6. Set `fetched_at` older than `Period` and run again. Save `/tmp/swarm-tax-6/worker-6/period-elapsed.png`. Pass when `Read` runs and the delinquent, bill, case, join, and pipeline ids are still unchanged.
 - [ ] Lane 7. Cancel during the first file. Save `/tmp/swarm-tax-6/worker-7/cancel.png`. Pass when the later files are not read.
 - [ ] Lane 8. Count `parcels` around the run, and select `source_extras` for the fixture parcel. Save `/tmp/swarm-tax-6/worker-8/no-insert.png`. Pass when the tax run did not insert a parcel and did not change `source_extras`.
-- [ ] Lane 9. Show the `main.go` call order. Save `/tmp/swarm-tax-6/worker-9/order.png`. Pass when delinquent `Read` appears before billing `Read`, billing appears before foreclosure `Read`, all three sit inside the switch, and `IsLikelyVacantGISRecord` is not called from the tax functions.
-- [ ] Lane 10. Run `go test -race ./internal/connector/union/ -count=1 -run 'TestDelinquent|TestBilling|TestForeclosure'`. Save `/tmp/swarm-tax-6/worker-10/parsers.png`. Pass when all three pass.
+- [ ] Lane 9. Show the `main.go` call order. Save `/tmp/swarm-tax-6/worker-9/order.png`. Pass when delinquent `Read` appears before billing `Read`, billing appears before foreclosure `Read`, foreclosure appears before pipeline `Read`, all four sit inside the switch, and `IsLikelyVacantGISRecord` is not called from the tax functions.
+- [ ] Lane 10. Run `go test -race ./internal/connector/union/ -count=1 -run 'TestDelinquent|TestBilling|TestForeclosure|TestPipeline'`. Save `/tmp/swarm-tax-6/worker-10/parsers.png`. Pass when all four pass.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Wall time of one local switch-on run over the golden files, and the row counts. Trunk has no tax switch. The end state is one delinquent row, one bill row, one foreclosure case, and one join row.
+- [ ] Metric. Wall time of one local switch-on run over the golden files, and the row counts. Trunk has no tax switch. The end state is one delinquent row, one bill row, one foreclosure case, one join row, and one pipeline row.
 - [ ] Probe. At trunk, time `go test -race ./internal/service/ -count=1`. At head, time the local switch-on test.
 - [ ] Baseline. Record the trunk service test duration. Record trunk tax run as absent.
-- [ ] Rule. Fail if the head local switch-on run takes 5 seconds or longer, or if any of those four counts is not 1. Do not report a ratio against the trunk service test. That test does not write tax rows.
+- [ ] Rule. Fail if the head local switch-on run takes 5 seconds or longer, or if any of those five counts is not 1. Do not report a ratio against the trunk service test. That test does not write tax rows.
 
 **Review gate.** None. tax-6 is not review-gated.
 
@@ -438,7 +506,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
-- [ ] The owner does not merge. The operator lands tax-6 after tax-3, tax-4, and tax-5.
+- [ ] The owner does not merge. The operator lands tax-6 after tax-3, tax-4, tax-5, and tax-7.
 
 ## Close the program
 
@@ -459,7 +527,15 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Read.** The operator measured the billing zip on 2026-11-08. One CSV, about 124 MB, 138,405 rows, RE 116,421, PP 21,984, year 2026, date due 2027-01-06. Parcel `09336350` was RE, total 2737.12, address `2915 CRIPPLE CREEK CT MONROE NC 28110`. The operator counted 320 of 325 delinquent RE keys on that billing file. This session did not repeat that match. The billing file has no paid column and no balance column.
 
-**Measured.** On 2026-11-10 a fetch of `https://www.unioncountync.gov/home/showdocument?id=4787` with no `t` parameter returned the foreclosure sales list. The markdown conversion contained 9 PIN tokens. They were `09-273-051`, `07-129-160`, `07-129-161`, `07-129-162`, `09-231-101B`, `07-129-046`, `09-228-103`, `09-125-042`, and `09-125-043`. Deleting `-` produced keys. 8 of those 9 keys were in the delinquent RE set. `09273051` was not. `09125043` was, and its 2022 balance is 14355.02. Case `26M000471-890` names three PINs. The foreclosure page also mentions a PowerPoint. This fetch did not keep that href.
+**Measured.** On 2026-11-10 a fetch of `https://www.unioncountync.gov/home/showdocument?id=4787` with no `t` parameter returned the foreclosure sales list. The markdown conversion contained 9 PIN tokens. They were `09-273-051`, `07-129-160`, `07-129-161`, `07-129-162`, `09-231-101B`, `07-129-046`, `09-228-103`, `09-125-042`, and `09-125-043`. Deleting `-` produced keys. 8 of those 9 keys were in the delinquent RE set. `09273051` was not. `09125043` was, and its 2022 balance is 14355.02. Case `26M000471-890` names three PINs.
+
+**Measured.** The auction page is `https://www.unioncountync.gov/government/departments-r-z/taxes-property/collection-payment/property-tax-foreclosure-auction`. `curl` and headless Chrome from this host got Akamai 403 for that page. A reader fetch on 2026-11-10 returned the anchors. The anchor titled `Properties Currently in Tax Foreclosure` points at `https://www.unioncountync.gov/home/showdocument?id=4784` with `t=637775972934935927`. The same href is in the 2026-05-13 archive HTML. The page sentence above that anchor says the power point lists delinquent properties the Tax Administrator is working to pursue.
+
+**Measured.** Headed Chrome fetched `https://www.unioncountync.gov/home/showdocument?id=4784` with no `t` parameter on 2026-11-10. Status 200. `Content-Type` was `application/pdf`. `Content-Disposition` was `filename="Potential Foreclosures.pdf"`. `Last-Modified` was Mon, 12 Oct 2026 07:20:29 GMT. The body was 770,854 bytes. SHA-256 was `b0f8926a4d9d893dc022c0225649d9752f2c905ecb8b0ffcf4813d845e5b801b`. The file starts with `%PDF-1.7`. `pdfinfo` reports 27 pages, title `PowerPoint Presentation`, creator Microsoft PowerPoint for Microsoft 365, tagged yes, page size 960 by 540 points. `pdfimages -list` shows a background JPEG on every page, plus extra images on pages 1 and 27. `/ActualText` count was 0. `/Alt` count was 0.
+
+**Measured.** `pdftotext -layout` on that PDF recovered the parcel lines from the text layer. Pages 4 through 26 hold 49 parcel labels and 49 distinct keys. Pages 1, 2, 3, and 27 have no parcel label. No property page is image-only. A naive join of text-showing strings inserts spaces inside words. The layout extract does not. One label is `Parcel: 02.239.077` with owner `Unknown Heirs of Freddie Sowell`, address `1009 Taylor Street, Wingate`, tax value `$156,600.00`, acreage `Lot 16 College Grove`, and complaint `25CV002739-890`, plus the phrases `Currently In Upset Bid Process` and `Redeemed/Satisfied October 8, 2026`. Page 14 lists `07.129.160`, `07.129.161`, and `07.129.162`. Page 16 lists `07.027.002J80` and `07.027.002J90`. Acreage text also includes `0.234` and `5.30 acs`. One sale phrase is `August 27` with no year.
+
+**Measured.** The Internet Archive capture `20260215194311` of the same document URL was `application/vnd.openxmlformats-officedocument.presentationml.presentation`, filename `Potential Foreclosures.pptx`, last-modified Thu, 15 Jan 2026, crawler length 8,908,391. The saved body stopped at 5,242,880 bytes and is not a zip. Slide XML for that pptx was not counted. The live file on 2026-11-10 is the PDF above.
 
 **Measured.** `https://unionnc.devnetwedge.com/robots.txt` returned 200 on 2026-11-10. `User-Agent: *` disallows `/parcel/*`, `/taxbill`, `/mobile_home/*`, `/view/*`, `/personalproperty/*`, `/scripts/*`, `/images/*`, and `/PropertyImages/*`. Last-Modified was Wed, 08 Jan 2025 16:24:02 GMT.
 
@@ -515,7 +591,8 @@ Open questions.
 
 1. What should happen when a required column is renamed? This plan fails the file and yields nothing. An alias list is not defined.
 2. What is the billing zip length, and what are today's row counts? The operator's 2026-11-08 counts stand. This session did not open a clean zip.
-3. Is the PowerPoint on the foreclosure page a second file this program should parse? The sales list at `showdocument?id=4787` is the file this plan parses. The operator is reading the deck first. The deck's href was not captured.
+3. Should delinquent and billing rows also drop the `likely_vacant` gate, now that parcel ingest stores every parcel? This plan still skips those two files when `likely_vacant` is false. Foreclosure sales and the pipeline list do not use that gate. The owed view still requires `likely_vacant`.
+4. If a later pipeline page has no text operators and no alt text, should a later PR add OCR? This file did not have such a page. This plan skips that page and counts it. No OCR tool is named, because there were no image-only property slides to score.
 
 ## Appendix B. Alternatives rejected
 
@@ -543,7 +620,11 @@ Railroad rows lose. Three rows, keys `21` and `26`. Those are not GIS parcel ids
 
 A hardcoded goose prefix loses. `000004_parcel_sales_uuid_id.sql` is already on main. persist-1 and soil-3 may take the next prefixes before this program starts. The owner lists the directory and adds 1.
 
-Putting the foreclosure row into `tax_owed` loses. The operator's flag is the amount owed on a likely-vacant parcel. A scheduled sale is stored so a later pass can use it. It does not, by itself, mark a likely seller.
+Putting the foreclosure row into `tax_owed` loses. The operator's flag is the amount owed on a likely-vacant parcel. A scheduled sale is stored so a later pass can use it. It does not, by itself, mark a likely seller. A pipeline row does not set that flag either. The upcoming question is the pipeline join.
+
+A boolean column on `parcels` for upcoming foreclosure loses. The pipeline file carries owner, address, tax value, acreage, a case number, and a status. A boolean would drop those fields and would write a tax source onto `parcels`. `parcel_sales` does not add a boolean either. A parcel is upcoming when `tax_foreclosure_pipeline.parcel_id` equals `parcels.id`. Houses stay in that join. The operator asked for the mark on the parcels we already ingest, and the join is that mark.
+
+Screen-reading the pipeline deck loses. The live file is a PDF exported from PowerPoint, and the parcel lines are text operators. A screenshot or an OCR pass would throw away a text layer `pdftotext -layout` already reads. The pptx branch reads slide XML for the same reason. A picture-only page is counted and skipped. OCR stays an open question until a file actually needs it.
 
 ## Appendix C. Risks
 
@@ -567,6 +648,10 @@ A `TBD` case that later receives a case number becomes a second row. The old nul
 
 The 180 day period is a chosen default. A real county cadence that is not about twice a year is a config change in `taxRunConfig.Period`, not a code change in the parsers.
 
+Headless Chrome and `curl` both got Akamai 403 for the pipeline document. Headed Chrome got the PDF. tax-7 uses the same `Get` as the other county files. A 403 is an error, not a pass, and it is not a prompt for the operator to type PINs.
+
+The January 2026 pptx in the Internet Archive is truncated at 5,242,880 bytes of a crawler length 8,908,391, so that copy cannot prove slide XML. The pptx parser is still in tax-7 because the same URL has served a pptx. The golden pptx is a small fixture, not that archive body.
+
 ## Appendix D. Links and reading list
 
 Read before editing.
@@ -581,10 +666,10 @@ Read before editing.
 - `db/migrations/000004_parcel_sales_uuid_id.sql`.
 - `plans/soil-layer.md` persist-1, for `parcels.likely_vacant`. Do not edit that file.
 - `plans/scraper-enrichment.md` is the per-parcel scraper plan still on main. This program does not edit it and does not implement it.
-- The foreclosure page, the GIS download page, and the three document URLs named in Appendix A.
+- The foreclosure auction page, the GIS download page, and the document URLs named in Appendix A.
 - Effective Go and Go Code Review Comments. Small interfaces, accept interfaces and return structs, `context.Context` first, and do not repeat the package name in the type.
 
-tax-3, tax-4, and tax-5 get `pstack/skills/how/SKILL.md` before the parser is split from `Read`, because the question is which package owns the columns. The execution trail follows `pstack/skills/show-me-your-work/SKILL.md`.
+tax-3, tax-4, tax-5, and tax-7 get `pstack/skills/how/SKILL.md` before the parser is split from `Read`, because the question is which package owns the columns. The execution trail follows `pstack/skills/show-me-your-work/SKILL.md`.
 
 ## Appendix E. Decisions recorded
 
@@ -594,7 +679,7 @@ On the open questions he said, "Don't worry about the schedule yet because we ar
 
 The schedule is config. tax-6 keeps the run off unless `Enabled` is set. The production period is about twice a year. The chosen default is 180 days, and the process does not loop. A later runner can read `Period`. This plan does not add cron.
 
-Likely-vacant is `parcels.likely_vacant`, written by persist-1, not by this program. Tax enrichment writes only rows whose parcel is already flagged. `tax_owed` sums `balance_due` for those parcels and is the likely-seller flag. An amount owed is what flags the seller. A foreclosure listing is stored beside that flag.
+Likely-vacant is `parcels.likely_vacant`, written by persist-1, not by this program. Delinquent and billing rows are still written only when that flag is true. `tax_owed` sums `balance_due` for those parcels and is the likely-seller flag. Whether those two files should also store every parcel is open question 3. Foreclosure sales and the pipeline list are not gated on the flag. The operator said upcoming foreclosures are wanted even when the parcel has a house, because parcel ingest stores every parcel.
 
 Personal property is business equipment and vehicles taxed apart from the land. The delinquent file and the billing file drop those rows. The save result counts how many were skipped. The foreclosure list has no source column. Blocks without a PIN are skipped and are not called personal property.
 
@@ -602,10 +687,12 @@ A renamed required column still fails the file. What to do instead stays open.
 
 `county.ID` is `internal/county` on main. This plan does not declare the type and does not edit `plans/soil-layer.md`.
 
-Real-estate rows are stored. Railroad rows are dropped. Money is `NUMERIC(14, 2)`. Tax year is `SMALLINT`. Dates are `DATE` and are NULL when the source says `TBD`. Every new table has a UUID primary key, `created_at`, and `updated_at`. Balances and bills also store `county_id` and `source_name`, because those rows are source records the way `parcels` is. The join table does not copy them, the way `parcel_sales` does not. The county parcel number is only the ingest lookup through `(county_id, source_name, source_parcel_id)` with `source_name` `union_county_gis`. Hyphens are stripped for that lookup and are not stored. The upsert omits `id`, so a rerun keeps the UUID. The tax write does not insert parcels.
+Real-estate rows are stored. Railroad rows are dropped. Money is `NUMERIC(14, 2)`. Tax year is `SMALLINT` where the file has a year. Dates are `DATE` and are NULL when the source says `TBD` or names a month and day with no year. Every new table has a UUID primary key, `created_at`, and `updated_at`. Balances, bills, foreclosure cases, and pipeline rows store `county_id` and `source_name`, because those rows are source records the way `parcels` is. The foreclosure join table does not copy them, the way `parcel_sales` does not. The county parcel number is only the ingest lookup through `(county_id, source_name, source_parcel_id)` with `source_name` `union_county_gis`. Hyphens and dots are stripped for that lookup and are not stored. Spaces stay. The upsert omits `id`, so a rerun keeps the UUID. The tax write does not insert parcels.
 
-A foreclosure case is one row. Each matched likely-vacant PIN is one join row. A PIN that is not in `parcels` keeps the case, skips the join, and increments the unmatched count. The case upsert key for a null case number is `(county_id, source_name, parcel_set_sha256, legal_sha256)`. A real case number uses `(county_id, source_name, case_number)`. The operator confirms that key. Until then, tax-5 implements it as written.
+A foreclosure case is one row. Each PIN that matches a stored parcel is one join row, house or not. A PIN that is not in `parcels` keeps the case, skips the join, and increments the unmatched count. The case upsert key for a null case number is `(county_id, source_name, parcel_set_sha256, legal_sha256)`. A real case number uses `(county_id, source_name, case_number)`. The operator confirms that key. Until then, tax-5 implements it as written.
 
-The stable delinquent URL is `showdocument?id=4792` with no `t` parameter. The billing link is read from the GIS download page so a changed timestamp does not stick in code. The foreclosure list is `showdocument?id=4787` with no `t` parameter. The PowerPoint on that page is not parsed. The operator is reading it first.
+A pipeline property is one row in `tax_foreclosure_pipeline` per stored parcel, with `source_name` `union_foreclosure_pipeline`. The program discovers the document from the auction page on each run and parses the text layer. It does not ask the operator to type PINs. A parcel leaves the table when the next file omits it. There is no upcoming column on `parcels`.
+
+The stable delinquent URL is `showdocument?id=4792` with no `t` parameter. The billing link is read from the GIS download page so a changed timestamp does not stick in code. The foreclosure sales list is `showdocument?id=4787` with no `t` parameter. The upcoming list is whatever href the auction page publishes for `Properties Currently in Tax Foreclosure`. On 2026-11-10 that href was `showdocument?id=4784` and the body was a PDF.
 
 `plans/scraper-enrichment.md` stays as it is on main. It does not say this plan replaced it. This PR does not turn it into a pointer. The soil plan still links it.
