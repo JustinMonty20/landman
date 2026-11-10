@@ -13,8 +13,8 @@ MIGRATIONS_PATH=./db/migrations
 DB_BOOTSTRAP_PATH=./db/bootstrap/create_database.sql
 DOCKER ?= docker
 DB_CONTAINER ?= landman-postgis
-GOOSE_IMAGE ?= golang:1.25-alpine
-GOOSE_VERSION ?= latest
+GOOSE_IMAGE ?= golang:1.26-alpine
+GOOSE_VERSION ?= v3.30.0
 GOOSE_CMD = $(DOCKER) run --rm --network container:$(DB_CONTAINER) -v "$(CURDIR)/$(MIGRATIONS_PATH):/migrations" -e GOOSE_DRIVER=postgres -e GOOSE_DBSTRING="$(DATABASE_URL)" -e GOCACHE=/tmp/.cache/go-build -e GOMODCACHE=/tmp/pkg/mod -e GOBIN=/tmp/bin -u "$$(id -u):$$(id -g)" $(GOOSE_IMAGE) sh -c 'go install github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION) >/dev/null 2>&1 && /tmp/bin/goose -dir /migrations "$$@"' goose
 
 .PHONY: all build test clean run deps db-create db-drop migrate-up migrate-down migrate-create migrate-version migrate-status check-db-container check-postgres-url check-database-url help
