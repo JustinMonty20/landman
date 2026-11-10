@@ -2,7 +2,7 @@
 
 You want the amount a likely-vacant owner owes, from public county files, so a balance can flag a likely seller. DevNet wEdge stays out. Its robots file disallows the parcel and tax pages. This is a fetch and a parse, not a scraper.
 
-The county-neutral source reads three Union files. They are the billing file, the delinquent tax notice, and the foreclosure list. Personal-property rows are ignored. The run does not insert parcels. `parcels.likely_vacant` comes from persist-1 in `plans/soil-layer.md`. This plan does not add that column.
+The county-neutral source reads three Union files. They are the billing file, the delinquent tax notice, and the foreclosure list. Personal-property rows are ignored. Each file lands in typed tables shaped like `parcels` and `parcel_sales`. A query joins them on `parcels.id` and `tax_year`. The run does not insert parcels. `parcels.likely_vacant` comes from persist-1 in `plans/soil-layer.md`. This plan does not add that column.
 
 Run tax-1 first. Run tax-2 after persist-1. Run tax-3, tax-4, and tax-5 after tax-1 and tax-2. Run tax-6 after those three. The production run is about twice a year, and the period is config.
 
@@ -152,34 +152,36 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Build.**
 
-- [ ] Add `tax_delinquent_balances`. `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`. `parcel_id UUID NOT NULL REFERENCES parcels(id) ON DELETE CASCADE`. `tax_year INTEGER NOT NULL`. `balance_due NUMERIC(12,2) NOT NULL`. `primary_source TEXT NOT NULL`. `source_url TEXT NOT NULL`. `file_sha256 BYTEA NOT NULL`. `fetched_at TIMESTAMPTZ NOT NULL`. Unique `(parcel_id, tax_year)`. Check `balance_due >= 0`. Check `primary_source = 'RE'`. Do not add a county parcel number column. Do not add `county_id`. The county lives on `parcels`.
-- [ ] Add `tax_bills`. `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`. `parcel_id UUID NOT NULL REFERENCES parcels(id) ON DELETE CASCADE`. `tax_year INTEGER NOT NULL`. `total_taxes NUMERIC(12,2) NOT NULL`. `property_address TEXT NOT NULL`. `taxpayer_name TEXT NOT NULL`. `mailing_line TEXT NOT NULL`. `mailing_city TEXT NOT NULL`. `mailing_state TEXT NOT NULL`. `mailing_postal_code TEXT NOT NULL`. `source_url TEXT NOT NULL`. `file_sha256 BYTEA NOT NULL`. `fetched_at TIMESTAMPTZ NOT NULL`. Unique `(parcel_id, tax_year)`. Check `total_taxes >= 0`. Do not add a county parcel number column.
-- [ ] Add `tax_foreclosures`. `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`. `parcel_id UUID NOT NULL REFERENCES parcels(id) ON DELETE CASCADE`. `case_number TEXT NOT NULL`. `owner_name TEXT NOT NULL`. `situs_line TEXT NOT NULL`. `tax_value NUMERIC(12,2)`. `opening_bid NUMERIC(12,2)`. `current_bid NUMERIC(12,2)`. `sale_on DATE`. `source_url TEXT NOT NULL`. `file_sha256 BYTEA NOT NULL`. `fetched_at TIMESTAMPTZ NOT NULL`. Unique `(parcel_id, case_number)`. Each nullable amount checks `IS NULL OR column >= 0`. Do not add a county parcel number column.
-- [ ] Add view `tax_owed`. Join `tax_delinquent_balances` to `parcels` on `parcels.id = tax_delinquent_balances.parcel_id`. Keep rows where `parcels.likely_vacant` is true and `balance_due > 0`. Sum `balance_due` per `parcels.id`. This view is the likely-seller flag. A foreclosure row does not set the flag by itself. Do not add `parcels.likely_vacant`. Do not add `GEOMETRY`. Do not add a second parcel table.
-- [ ] `NUMERIC(12,2)` is the money type. The source amounts are dollars and cents. Numeric is exact. 12 digits covers the largest amount in the measured delinquent file, 36800.63, which is a personal-property row this program does not store. The largest real-estate balance in that file is 14355.02. Do not store money as `float`.
-- [ ] The upsert in later PRs omits `id`. On conflict on the unique key, update the amount columns, `source_url`, `file_sha256`, and `fetched_at`, and do not assign `id`. Goose `Up` creates the three tables and the view. Goose `Down` drops the view, then the tables. It does not drop `parcels`.
+- [ ] Add `tax_delinquent_balances`. `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`. `county_id TEXT NOT NULL` with `CHECK (county_id IN ('union'))`, the same check as `db/migrations/000003_parcels_county_check.sql`. `source_name TEXT NOT NULL`. `parcel_id UUID NOT NULL REFERENCES parcels(id) ON DELETE CASCADE`. `tax_year SMALLINT NOT NULL` with `CHECK (tax_year BETWEEN 1900 AND 2200)`, the same year check as `parcels.parcel_year`. `balance_due NUMERIC(14, 2) NOT NULL` with `CHECK (balance_due >= 0)`, the same money scale as `parcel_sales.amount`. `primary_source TEXT NOT NULL` with `CHECK (primary_source = 'RE')`. `source_url TEXT NOT NULL`. `file_sha256 BYTEA NOT NULL`. `fetched_at TIMESTAMPTZ NOT NULL`. `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`. `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`. Unique `(county_id, source_name, parcel_id, tax_year)`. Index `(parcel_id, tax_year)`. Do not add `source_parcel_id`. Do not add a `JSONB` column. The stored `source_name` is `union_delinquent`. That name is this file. Parcel lookup still uses `union_county_gis`.
+- [ ] Add `tax_bills` with the same `id`, `county_id`, `source_name`, `parcel_id`, `tax_year`, `source_url`, `file_sha256`, `fetched_at`, `created_at`, and `updated_at` rules. `total_taxes NUMERIC(14, 2) NOT NULL` with `CHECK (total_taxes >= 0)`. `property_address TEXT`, `taxpayer_name TEXT`, `mailing_line TEXT`, `mailing_city TEXT`, `mailing_state TEXT`, and `mailing_postal_code TEXT` are nullable. An empty cell is NULL. Do not split one address line into city and postal code. Unique `(county_id, source_name, parcel_id, tax_year)`. Index `(parcel_id, tax_year)`. The stored `source_name` is `union_billing`. No `source_parcel_id`. No `JSONB`.
+- [ ] Add `tax_foreclosure_cases` with the same `id`, `county_id`, `source_name`, `source_url`, `file_sha256`, `fetched_at`, `created_at`, and `updated_at` rules. `case_number TEXT` is NULL when the source says `TBD` or the label is absent. Do not store the text `TBD`. `parcel_set_sha256 BYTEA NOT NULL` is the SHA-256 of the sorted normalized PINs joined by newlines. `legal_sha256 BYTEA NOT NULL` is the SHA-256 of the legal description texts in that same PIN order, joined by newlines. `owner_name TEXT`. `sale_on DATE`. `tax_year SMALLINT` uses the same year check and is NULL when the source names no year. `opening_bid NUMERIC(14, 2)`, `current_bid NUMERIC(14, 2)`, and `upset_bid NUMERIC(14, 2)` are each NULL or `>= 0`. `status TEXT`. `redeemed BOOLEAN NOT NULL DEFAULT false`. `bidding_closed BOOLEAN NOT NULL DEFAULT false`. The parser sets those booleans from the status phrase. A query reads the booleans and does not parse the phrase. The stored `source_name` is `union_foreclosure`. No `JSONB`.
+- [ ] The case upsert key is a decision for the operator to confirm. A real case number conflicts on `(county_id, source_name, case_number)` where `case_number` is not null. A null case number conflicts on `(county_id, source_name, parcel_set_sha256, legal_sha256)` where `case_number` is null. Use two partial unique indexes. Two `TBD` cases with different PIN sets stay two rows. Two `TBD` cases with the same PIN set and different legal text stay two rows. A second save of the same `TBD` PIN set and the same legal text keeps `id`. A numbered case keeps `id` when the PIN list changes, and the hashes on that row update. This plan does not delete the old `TBD` row if a later file gives that PIN set a case number.
+- [ ] Add `tax_foreclosure_parcels`. `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`. `case_id UUID NOT NULL REFERENCES tax_foreclosure_cases(id) ON DELETE CASCADE`. `parcel_id UUID NOT NULL REFERENCES parcels(id) ON DELETE CASCADE`. `tax_value NUMERIC(14, 2)` is NULL or `>= 0`. `situs_line TEXT`. `legal_description TEXT`. `created_at` and `updated_at` match `parcel_sales`. Unique `(case_id, parcel_id)`. Do not put `county_id` or `source_name` here. `parcel_sales` does not copy those columns either. Do not put `source_parcel_id` here. One case that names three PINs is one case row and three join rows. Do not store those PINs in one text column.
+- [ ] Add view `tax_owed`. Read `tax_delinquent_balances` and `parcels` only. Join on `parcels.id = tax_delinquent_balances.parcel_id`. Keep rows where `parcels.likely_vacant` is true and `balance_due > 0`. Return `parcel_id`, `tax_year`, and the summed `balance_due`, grouped by `parcel_id` and `tax_year`. Do not collapse years. A bill joins this view on `parcel_id` and `tax_year`. A foreclosure join row joins on `parcel_id`. Those joins do not parse a string. A foreclosure row does not set the flag by itself. Do not add `parcels.likely_vacant`. Do not add `GEOMETRY`. Do not add `JSONB`.
+- [ ] Money is `NUMERIC(14, 2)`, matching `parcel_sales.amount` and the parcel valuation columns in `000001_init_schema.sql`. The largest amount in the measured delinquent file is 36800.63 on a personal-property row this program does not store. The largest real-estate balance is 14355.02. Do not store money as `float`. Do not use `INTEGER` for `tax_year`.
+- [ ] The upsert in later PRs omits `id` and does not assign `created_at`. On conflict it updates the typed columns and sets `updated_at` to `now()`, the same way `SaveParcel` and `SaveSales` do. Goose `Up` creates the four tables and the view. Goose `Down` drops the view, then `tax_foreclosure_parcels`, then `tax_foreclosure_cases`, then `tax_bills`, then `tax_delinquent_balances`. It does not drop `parcels`.
 
 **You see.**
 
-- [ ] After `make migrate-up` on a database that already has persist-1, `psql` lists `tax_delinquent_balances`, `tax_bills`, `tax_foreclosures`, and `tax_owed`. `\d tax_delinquent_balances` shows a UUID primary key and no county parcel number column.
+- [ ] After `make migrate-up` on a database that already has persist-1, `psql` lists `tax_delinquent_balances`, `tax_bills`, `tax_foreclosure_cases`, `tax_foreclosure_parcels`, and `tax_owed`. `\d tax_delinquent_balances` shows a UUID primary key, `county_id`, `source_name`, `tax_year` as smallint, and no `source_parcel_id` column.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `rg -n "likely_vacant_parcels|source_parcel_id|GEOMETRY" db/migrations/<prefix>_tax_files.sql` prints nothing. `rg -n "likely_vacant" db/migrations/<prefix>_tax_files.sql` matches only the view. `rg -n "tax_owed" db/migrations/<prefix>_tax_files.sql` matches the view. `rg -n "ADD COLUMN likely_vacant" db/migrations/<prefix>_tax_files.sql` prints nothing.
+- [ ] `rg -n "likely_vacant_parcels|source_parcel_id|GEOMETRY|JSONB|jsonb" db/migrations/<prefix>_tax_files.sql` prints nothing. `rg -n "likely_vacant" db/migrations/<prefix>_tax_files.sql` matches only the view. `rg -n "tax_owed" db/migrations/<prefix>_tax_files.sql` matches the view. `rg -n "SMALLINT" db/migrations/<prefix>_tax_files.sql` matches `tax_year`. `rg -n "tax_foreclosure_parcels" db/migrations/<prefix>_tax_files.sql` matches the join table. `rg -n "ADD COLUMN likely_vacant" db/migrations/<prefix>_tax_files.sql` prints nothing.
 - [ ] Run `go test -race ./... -count=1` with no database. It still passes. `internal/parcelstore` database tests carry `//go:build postgres`, so this command does not open Postgres. Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
 - [ ] Lane 1. Regression lane against trunk. At trunk and at head, run `psql` with `\dt tax_delinquent_balances`. Save `/tmp/swarm-tax-2/worker-1/regression.png`. Pass when trunk has no such table and head lists it. Trunk may already have `parcels.likely_vacant` if persist-1 has landed. Record that. This PR did not add the column.
 - [ ] Lane 2. Insert one parcel with `likely_vacant` true and omit `id`. Insert one delinquent row for that `parcels.id`, year 2025, balance 10.00, and omit the tax `id`. Save `/tmp/swarm-tax-2/worker-2/insert-delinquent.png`. Pass when the select returns that balance and both ids are UUIDs.
-- [ ] Lane 3. Upsert the same `(parcel_id, tax_year)` with balance 12.50 and omit `id` again. Save `/tmp/swarm-tax-2/worker-3/upsert-delinquent.png`. Pass when the count is 1, the balance is 12.50, and `id` is unchanged.
+- [ ] Lane 3. Upsert the same `(county_id, source_name, parcel_id, tax_year)` with balance 12.50 and omit `id` again. Save `/tmp/swarm-tax-2/worker-3/upsert-delinquent.png`. Pass when the count is 1, the balance is 12.50, and `id` is unchanged.
 - [ ] Lane 4. Insert a delinquent row whose `parcel_id` is a UUID that is not in `parcels`. Save `/tmp/swarm-tax-2/worker-4/missing-parcel.png`. Pass when the foreign key rejects the row.
 - [ ] Lane 5. Insert a negative balance. Save `/tmp/swarm-tax-2/worker-5/negative.png`. Pass when the check rejects the row. Insert `primary_source` `PP`. Pass when that check rejects the row too.
-- [ ] Lane 6. Insert one bill row for the same parcel and year, omitting `id`. Save `/tmp/swarm-tax-2/worker-6/insert-bill.png`. Pass when `total_taxes` and `mailing_line` are stored and a second upsert keeps `id`.
+- [ ] Lane 6. Insert one bill and one balance for the same parcel and year. Then insert one foreclosure case with `case_number` null and two join rows for two likely-vacant parcels. Omit every `id`. Save `/tmp/swarm-tax-2/worker-6/insert-bill.png`. Pass when the bill joins the balance on `parcel_id` and `tax_year` as one row, a second insert of the same PIN set and the same legal text keeps the case `id`, and two join rows exist.
 - [ ] Lane 7. With the likely-vacant parcel and balance 10.00, select `tax_owed`. Save `/tmp/swarm-tax-2/worker-7/owed-join.png`. Pass when the view shows that `parcels.id` and the summed balance.
 - [ ] Lane 8. Insert a delinquent row for a parcel whose `likely_vacant` is false. Save `/tmp/swarm-tax-2/worker-8/owed-empty.png`. Pass when the view returns no row for that parcel and the balance row is still in `tax_delinquent_balances`.
-- [ ] Lane 9. Run goose down, then up. Save `/tmp/swarm-tax-2/worker-9/down-up.png`. Pass when the three tables are gone after down, `parcels` remains, and the tables are present after up.
-- [ ] Lane 10. Count `parcels` before and after a delinquent insert. Show the column list. Save `/tmp/swarm-tax-2/worker-10/no-parcel-insert.png`. Pass when the `parcels` count is unchanged and the tax table has no `source_parcel_id` column.
+- [ ] Lane 9. Run goose down, then up. Save `/tmp/swarm-tax-2/worker-9/down-up.png`. Pass when the four tables are gone after down, `parcels` remains, and the tables are present after up.
+- [ ] Lane 10. Count `parcels` before and after a delinquent insert. Show the column list. Save `/tmp/swarm-tax-2/worker-10/no-parcel-insert.png`. Pass when the `parcels` count is unchanged, `tax_delinquent_balances` has `county_id` and `source_name` and no `source_parcel_id`, and `tax_foreclosure_parcels` has `case_id` and `parcel_id` and no `source_parcel_id`.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -214,9 +216,9 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Add `DelinquentRow` with `ParcelKey`, `Year`, `Balance`, and `PrimarySource`. The county parcel key stays on this struct until the store looks up `parcels.id`. It is not a database id. Add `DelinquentList` with `Read` so that `var _ taxsource.Source[DelinquentRow] = (*DelinquentList)(nil)` compiles in `delinquent.go`.
 - [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4792`. Do not send the `t` query parameter. Appendix A measured that this URL returns the CSV. If the first record's names do not include `Property Key`, `Year`, `Primary Source`, and `Balance Due`, return an error and yield nothing. Do not guess another document id.
 - [ ] Parse with `encoding/csv`. Read columns by those names. Ignore extra empty columns. Trim the key and uppercase it. Do not remove an internal space and do not drop a suffix. `07105038A` stays `07105038A`. `02176011 60` stays `02176011 60`.
-- [ ] Yield a row only when `Primary Source` is `RE`. Drop `RR`. Drop `PP`. Personal property is business equipment and vehicles taxed apart from the land. Parse `Balance Due` by removing `$` and commas. Store dollars and cents. A balance that does not parse is an error and yields nothing. Do not set a county on the row. The store uses `county.Union`.
-- [ ] `SaveDelinquent` looks up `parcels.id` with `(county_id, source_name, source_parcel_id)`. `county_id` is `county.Union`. `source_name` is `union_county_gis`, the value `GISSource.Name` returns at `internal/connector/union/gis.go` line 82. `source_parcel_id` is the trimmed key. Use the same three columns as `lookupParcelSQL` in `internal/parcelstore/sales.go` lines 91 to 97. Do not edit `internal/parcelstore`. Also read `likely_vacant`. No parcel row is an unmatched skip. A parcel with `likely_vacant` false is a not-enriched skip. A true row is upserted. Do not insert a parcel.
-- [ ] The upsert omits `id` and conflicts on `(parcel_id, tax_year)`. It replaces `balance_due`, `primary_source`, `source_url`, `file_sha256`, and `fetched_at`. It does not assign `id`. `file_sha256` is the SHA-256 of the file bytes. `SaveDelinquent` returns the saved count, the skipped PP count, the skipped RR count, the unmatched count, and the not-enriched count. Add `Latest(ctx) (time.Time, bool, error)` as the max `fetched_at`, with false when the table is empty. A second `Read` of the same bytes yields the same keys and balances.
+- [ ] Yield a row only when `Primary Source` is `RE`. Drop `RR`. Drop `PP`. Personal property is business equipment and vehicles taxed apart from the land. Parse `Balance Due` by removing `$` and commas. `Year` is a smallint. Store dollars and cents. A balance that does not parse is an error and yields nothing. Delete `-` from the key before lookup. Do not delete spaces.
+- [ ] `SaveDelinquent` looks up `parcels.id` with `(county_id, source_name, source_parcel_id)`. `county_id` is `county.Union`. `source_name` for the lookup is `union_county_gis`, the value `GISSource.Name` returns at `internal/connector/union/gis.go` line 82. `source_parcel_id` is the normalized key. Use the same three columns as `lookupParcelSQL` in `internal/parcelstore/sales.go` lines 91 to 97. Do not edit `internal/parcelstore`. Also read `likely_vacant`. No parcel row is an unmatched skip. A parcel with `likely_vacant` false is a not-enriched skip. A true row is upserted. The stored `county_id` is the parcel's `county_id`. The stored `source_name` is `union_delinquent`. Do not insert a parcel. Do not write the county key onto the tax row.
+- [ ] The upsert omits `id` and `created_at` and conflicts on `(county_id, source_name, parcel_id, tax_year)`. It replaces `balance_due`, `primary_source`, `source_url`, `file_sha256`, and `fetched_at`, and sets `updated_at` to `now()`. It does not assign `id`. `file_sha256` is the SHA-256 of the file bytes. `SaveDelinquent` returns the saved count, the skipped PP count, the skipped RR count, the unmatched count, and the not-enriched count. Add `Latest(ctx) (time.Time, bool, error)` as the max `fetched_at`, with false when the table is empty. A second `Read` of the same bytes yields the same keys and balances.
 - [ ] Put the database test behind `//go:build postgres`, matching `internal/parcelstore/parcels_test.go`. `go test` without that tag does not open Postgres.
 - [ ] The golden file is a few RE rows, one PP row, and one RR row copied from the measured file, including one 8-digit key, one 9-character key, and one 11-character key. `-update` rewrites it and is off by default.
 
@@ -279,7 +281,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Resolve the URL from the Parcels table on `https://www.unioncountync.gov/government/departments-f-p/gis-mapping/downloadable-gis-data`. Use the link whose label is `Billing Data`. Do not hardcode the numeric timestamp in the path. If that label is missing, return an error.
 - [ ] `Get` the zip with a limit of 256 MiB. That cap is chosen. Appendix A says this session did not obtain a clean zip length, and the operator measured an uncompressed CSV of about 124 MB on 2026-11-08. Write the body to a temp file. Open it with `archive/zip`. A zip directory is at the end of the file, so do not parse the CSV from the socket. Stream the entry whose name contains `WKBILA` and ends in `.csv` with `encoding/csv`. Fail if the uncompressed entry exceeds 256 MiB. Delete the temp file when `Read` returns.
 - [ ] Require `property_key`, `source`, `year`, `TOTAL TAXES AND CHARGES`, `PROPERTY ADDRESS`, `Taxpayer Name 1`, and `Taypayer Address 1`. The address header is spelled `Taypayer` in the operator's column list. Match that spelling. A missing required name fails the parse and yields nothing. Yield `source` `RE` only. Drop `PP` for the same reason as tax-3. `SaveBill` returns the saved count, the skipped PP count, the unmatched count, and the not-enriched count. There is no paid column and no balance column. Do not invent one. `TotalTaxes` is the billed amount, not the amount owed.
-- [ ] Use the same key rule and the same lookup as tax-3. The county is `county.Union`. The source name is `union_county_gis`. `SaveBill` upserts on `(parcel_id, tax_year)` and omits `id`. Add `Latest` for `tax_bills`. The golden file is a few RE rows and one PP row. Include parcel `09336350` when a row is copied from a real file. `-update` is off by default. Database tests use `//go:build postgres`.
+- [ ] Use the same key rule and the same lookup as tax-3. Lookup `source_name` is `union_county_gis`. The stored `source_name` is `union_billing`. The stored `county_id` is the parcel's `county_id`. `SaveBill` upserts on `(county_id, source_name, parcel_id, tax_year)`, omits `id`, and sets `updated_at` to `now()`. Add `Latest` for `tax_bills`. The golden file is a few RE rows and one PP row. Include parcel `09336350` when a row is copied from a real file. `-update` is off by default. Database tests use `//go:build postgres`. Do not write a JSON document.
 - [ ] Do not download the zip in `go test` unless the test points at a local file. The live sample is one lane.
 
 **You see.**
@@ -336,30 +338,30 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Build.**
 
-- [ ] Add `ForeclosureRow` with `ParcelKey`, `CaseNumber`, `OwnerName`, `SitusLine`, and the nullable amounts and sale date on `tax_foreclosures`. Add `ForeclosureList` with `Read` so that `var _ taxsource.Source[ForeclosureRow] = (*ForeclosureList)(nil)` compiles.
-- [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4787`. Do not send the `t` query parameter. If the body contains zero `Parcel Identification Number` labels, return an error and yield nothing. Do not guess another document id. Do not fetch the PowerPoint named on the foreclosure page. Appendix A did not keep that href.
-- [ ] A block is the text from one PIN label to the next. Delete `-` from the PIN and then trim the ends. Do not delete spaces. `09-125-043` becomes `09125043`. A block with no PIN is skipped and counted. It is not a personal-property row. This file has no source column. Do not drop a PIN because the page mentions personal property in the statute text.
-- [ ] One case can name more than one PIN. Yield one row per PIN, with that case number copied onto each row. Appendix A measured case `26M000471-890` with three PINs. `TBD` is a stored case number when that is the text. An amount whose text is `TBD` or empty is NULL. A non-empty amount that is not `TBD` and does not parse as dollars and cents fails the file and yields nothing.
-- [ ] `SaveForeclosure` uses the tax-3 lookup. It writes only a likely-vacant parcel. It upserts on `(parcel_id, case_number)` and omits `id`. It returns the saved count, the skipped-block count, the unmatched count, and the not-enriched count. Add `Latest` for `tax_foreclosures`. Database tests use `//go:build postgres`.
-- [ ] The golden file is a short copy of the measured list. Include `09-125-043`, a two-PIN case, and one block with no PIN. `-update` is off by default.
+- [ ] Add `ForeclosureCase` with `CaseNumber`, `OwnerName`, `SaleOn`, `Status`, the bid amounts, and a slice of PIN values. Each PIN value has the normalized key, situs line, legal description, and tax value. Add `ForeclosureList` with `Read` so that `var _ taxsource.Source[ForeclosureCase] = (*ForeclosureList)(nil)` compiles. One yield is one case. It is not one yield per PIN.
+- [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4787`. Do not send the `t` query parameter. If the body contains zero `Parcel Identification Number` labels, return an error and yield nothing. Do not guess another document id. Do not fetch the PowerPoint named on the foreclosure page. The operator is reading that deck first. Appendix A did not keep that href.
+- [ ] A block is the text from one case to the next. Delete `-` from each PIN and then trim the ends. Do not delete spaces. `09-125-043` becomes `09125043`. A block with no PIN is skipped and counted. It is not a personal-property row. This file has no source column. Do not drop a PIN because the page mentions personal property in the statute text.
+- [ ] One case can name more than one PIN. Appendix A measured case `26M000471-890` with three PINs. Yield one `ForeclosureCase` whose slice has one entry per PIN. Do not join the PINs into one string. `TBD` for the case number, a date, or an amount becomes NULL. Do not store the text `TBD`. A non-empty amount that is not `TBD` and does not parse as dollars and cents fails the file and yields nothing. Set `redeemed` and `bidding_closed` from the status phrase.
+- [ ] `SaveForeclosure` groups one case, writes the case row, and looks up each PIN with the tax-3 lookup. A likely-vacant parcel gets one join row. A PIN with no parcel keeps the case row, skips the join row, and increments the unmatched count. A parcel with `likely_vacant` false keeps the case row, skips the join row, and increments the not-enriched count. Do not insert a parcel. The case upsert uses the partial unique indexes from tax-2 and omits `id`. The join upsert conflicts on `(case_id, parcel_id)` and omits `id`. The save result returns the saved case count, the saved join count, the skipped-block count, the unmatched count, and the not-enriched count. Add `Latest` for `tax_foreclosure_cases`. Database tests use `//go:build postgres`.
+- [ ] The golden file is a short copy of the measured list. Include case `26M000471-890` with three PINs, one `TBD` case with a different PIN, a second `TBD` case with another PIN, and one block with no PIN. `-update` is off by default.
 
 **You see.**
 
-- [ ] `go test -race ./internal/connector/union/ -count=1 -run TestForeclosure` prints `PASS`, and `09-125-043` yields key `09125043`.
+- [ ] `go test -race ./internal/connector/union/ -count=1 -run TestForeclosure` prints `PASS`, and `09-125-043` is one PIN on a case, not a stored id.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Table-driven tests cover the golden PINs, a skipped block with no PIN, a missing PIN label on the whole file, a bad amount, a `TBD` bid stored as NULL, and a canceled context. Run `go test -race ./internal/connector/union/ -count=1 -run TestForeclosure`.
-- [ ] The postgres test saves one likely-vacant parcel twice and keeps `id`. It skips an unmatched key. Run `go test -race -tags postgres ./internal/taxstore/ -count=1 -run TestSaveForeclosure`.
+- [ ] Table-driven tests cover the golden PINs, a three-PIN case as one yield, a skipped block with no PIN, a missing PIN label on the whole file, a bad amount, a `TBD` bid stored as NULL, a `TBD` case number stored as NULL, and a canceled context. Run `go test -race ./internal/connector/union/ -count=1 -run TestForeclosure`.
+- [ ] The postgres test saves one numbered case twice and keeps the case `id`. It saves two `TBD` cases with different PIN sets and keeps two case rows. It saves one unmatched PIN, keeps that case, and inserts no join row. Run `go test -race -tags postgres ./internal/taxstore/ -count=1 -run TestSaveForeclosure`.
 - [ ] Run `go vet ./internal/connector/union/ ./internal/taxstore/` and `staticcheck ./internal/connector/union/ ./internal/taxstore/`. Both print no findings.
 - [ ] Run `go test -race -cover ./internal/connector/union/ ./internal/taxstore/ -count=1`. Fail if `union` coverage is below 77.4 percent, or below a higher trunk number measured at the start of this PR. Fail if `taxstore` coverage with `-tags postgres` is below 90.0 percent.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
 - [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/connector/union/ -count=1 -run 'TestDelinquent|TestBilling'` at trunk and at head. Trunk has no foreclosure parser. Record that. Save `/tmp/swarm-tax-5/worker-1/regression.png`. Pass when head's earlier parser tests still pass and `TestForeclosure` passes.
-- [ ] Lane 2. Parse the golden file. Save `/tmp/swarm-tax-5/worker-2/golden.png`. Pass when `09-125-043` yields `09125043`, the two-PIN case yields two rows, and the block with no PIN is absent.
-- [ ] Lane 3. `SaveForeclosure` twice for the same likely-vacant parcel and case. Save `/tmp/swarm-tax-5/worker-3/upsert.png`. Pass when the count is 1 and `id` is unchanged.
-- [ ] Lane 4. Save a key that is not in `parcels`. Count `parcels`. Save `/tmp/swarm-tax-5/worker-4/no-parcel.png`. Pass when the count is unchanged and no foreclosure row is inserted.
+- [ ] Lane 2. Parse the golden file. Save `/tmp/swarm-tax-5/worker-2/golden.png`. Pass when case `26M000471-890` is one yield with three PINs, `09-125-043` normalizes to `09125043`, and the block with no PIN is absent.
+- [ ] Lane 3. `SaveForeclosure` twice for the same `TBD` case with two likely-vacant parcels. Save `/tmp/swarm-tax-5/worker-3/upsert.png`. Pass when one case row exists, `case_number` is NULL, two join rows exist, and the case `id` is unchanged.
+- [ ] Lane 4. Save two `TBD` cases with different PIN sets, one of them missing from `parcels`. Count `parcels`. Save `/tmp/swarm-tax-5/worker-4/no-parcel.png`. Pass when two case rows exist, the missing PIN has no join row, the unmatched count is 1, and the `parcels` count is unchanged.
 - [ ] Lane 5. Parse a PIN that still contains a space after `-` is removed, using fixture text `02176011 60` with the hyphens the normalizer would see. Save `/tmp/swarm-tax-5/worker-5/keep-space.png`. Pass when the yielded key still contains the space.
 - [ ] Lane 6. Fetch `https://www.unioncountync.gov/home/showdocument?id=4787` once. Save `/tmp/swarm-tax-5/worker-6/live-list.png`. Pass when the body contains `Parcel Identification Number` and does not point the parser at `unionnc.devnetwedge.com`. One request. Do not pass a `t` parameter.
 - [ ] Lane 7. From that same body, list the PIN strings and the keys after deleting `-`. Save `/tmp/swarm-tax-5/worker-7/live-pins.png`. Pass when the count is recorded. Appendix A counted 9 PIN tokens in the 2026-11-10 markdown conversion, and 8 of those keys were in the delinquent RE set. A difference does not fail the lane. Write the new list in the lane report.
@@ -369,10 +371,10 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Wall time to parse the golden foreclosure file, and the yielded row count. Trunk has no parser. The end state is the golden row count.
+- [ ] Metric. Wall time to parse the golden foreclosure file, and the yielded case count. Trunk has no parser. The end state is the golden case count.
 - [ ] Probe. At trunk, record that `ForeclosureList` does not exist. At head, time 20 parses of the golden file.
 - [ ] Baseline. Record trunk as no parser and no elapsed time.
-- [ ] Rule. Fail if the average of 20 head parses is 1 second or longer, or if the yielded count is not the golden count. Do not report a ratio against trunk.
+- [ ] Rule. Fail if the average of 20 head parses is 1 second or longer, or if the yielded case count is not the golden case count. Do not report a ratio against trunk.
 
 **Review gate.** None. tax-5 is not review-gated.
 
@@ -396,7 +398,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 - [ ] Add `taxRunConfig` in `main.go` with `Enabled bool` and `Period time.Duration`. The zero value of `Enabled` is false. When it is false, `main` does what trunk does. It does not download a county file. Do not add `func init`.
 - [ ] When `Enabled` is true and `Period` is zero, use 180 days. 180 days is a chosen stand-in for about twice a year. It is not a measured county cadence. The operator changes `Period` in this struct. Do not read the period from the environment. Do not add a cron entry, and do not sleep for the period. The process still exits when the run finishes.
-- [ ] When `Enabled` is true, call `Latest` for the delinquent table, then the bill table, then the foreclosure table. If the returned time is inside `Period`, skip that file. Otherwise call `Read` and the matching save. One file at a time. No worker pool. A canceled context stops the next file. An error from a file is returned. Do not log it and return nil. Print the saved count and the skip counts from each save.
+- [ ] When `Enabled` is true, call `Latest` for `tax_delinquent_balances`, then `tax_bills`, then `tax_foreclosure_cases`. If the returned time is inside `Period`, skip that file. Otherwise call `Read` and the matching save. One file at a time. No worker pool. A canceled context stops the next file. An error from a file is returned. Do not log it and return nil. Print the saved count and the skip counts from each save, including the foreclosure join count and the unmatched count.
 - [ ] Do not insert parcels. Do not call `IsLikelyVacantGISRecord` from the tax functions. Do not write `likely_vacant`. Do not import `internal/taxsource` from `main` if `main` only calls the union parsers and the taxstore functions.
 
 **You see.**
@@ -405,7 +407,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] A test with `Enabled` false does not call `Read`. A test with `Enabled` true and an empty `Latest` uses local files and writes all three tables. A test with `fetched_at` inside 180 days does not call `Read`. A test with `fetched_at` older than `Period` does call `Read`. Run `go test -race . -count=1` from the module root for the main package tests, and `go test -race -tags postgres ./internal/taxstore/ -count=1`.
+- [ ] A test with `Enabled` false does not call `Read`. A test with `Enabled` true and an empty `Latest` uses local files and writes a delinquent row, a bill row, a foreclosure case, and a join row. A test with `fetched_at` inside 180 days does not call `Read`. A test with `fetched_at` older than `Period` does call `Read`. Run `go test -race . -count=1` from the module root for the main package tests, and `go test -race -tags postgres ./internal/taxstore/ -count=1`.
 - [ ] Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
 - [ ] `rg -n "devnetwedge|func init\\(" --glob '*.go'` prints nothing.
 
@@ -413,10 +415,10 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 - [ ] Lane 1. Regression lane against trunk. Run `go test -race ./internal/service/ ./internal/connector/union/ -count=1` at trunk and at head. Save `/tmp/swarm-tax-6/worker-1/regression.png`. Pass when both pass. Trunk's `main` has no tax switch. Record that.
 - [ ] Lane 2. Run the default path's unit test. Save `/tmp/swarm-tax-6/worker-2/switch-off.png`. Pass when no county file URL is requested.
-- [ ] Lane 3. Run the switch-on path against local files for a likely-vacant parcel. Save `/tmp/swarm-tax-6/worker-3/switch-on.png`. Pass when one delinquent row, one bill row, and one foreclosure row are stored, and each `id` is a UUID.
-- [ ] Lane 4. Select `tax_owed` after that run. Save `/tmp/swarm-tax-6/worker-4/owed.png`. Pass when the parcel id is the fixture `parcels.id` and the balance is greater than 0. The printed summary includes the skipped PP count. The foreclosure row alone did not create the view row.
-- [ ] Lane 5. Repeat the switch-on run inside the period. Save `/tmp/swarm-tax-6/worker-5/second-run.png`. Pass when `Read` is not called and the three ids are unchanged.
-- [ ] Lane 6. Set `fetched_at` older than `Period` and run again. Save `/tmp/swarm-tax-6/worker-6/period-elapsed.png`. Pass when `Read` runs and the three ids are still unchanged.
+- [ ] Lane 3. Run the switch-on path against local files for a likely-vacant parcel. Save `/tmp/swarm-tax-6/worker-3/switch-on.png`. Pass when one delinquent row, one bill row, one foreclosure case, and one join row are stored, and each `id` is a UUID. The bill and the balance join on `parcel_id` and `tax_year`.
+- [ ] Lane 4. Select `tax_owed` after that run. Save `/tmp/swarm-tax-6/worker-4/owed.png`. Pass when the parcel id is the fixture `parcels.id`, `tax_year` is the fixture year, and the balance is greater than 0. The printed summary includes the skipped PP count. The foreclosure case alone did not create the view row.
+- [ ] Lane 5. Repeat the switch-on run inside the period. Save `/tmp/swarm-tax-6/worker-5/second-run.png`. Pass when `Read` is not called and the delinquent, bill, case, and join ids are unchanged.
+- [ ] Lane 6. Set `fetched_at` older than `Period` and run again. Save `/tmp/swarm-tax-6/worker-6/period-elapsed.png`. Pass when `Read` runs and the delinquent, bill, case, and join ids are still unchanged.
 - [ ] Lane 7. Cancel during the first file. Save `/tmp/swarm-tax-6/worker-7/cancel.png`. Pass when the later files are not read.
 - [ ] Lane 8. Count `parcels` around the run, and select `source_extras` for the fixture parcel. Save `/tmp/swarm-tax-6/worker-8/no-insert.png`. Pass when the tax run did not insert a parcel and did not change `source_extras`.
 - [ ] Lane 9. Show the `main.go` call order. Save `/tmp/swarm-tax-6/worker-9/order.png`. Pass when delinquent `Read` appears before billing `Read`, billing appears before foreclosure `Read`, all three sit inside the switch, and `IsLikelyVacantGISRecord` is not called from the tax functions.
@@ -424,10 +426,10 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Wall time of one local switch-on run over the golden files, and the row counts. Trunk has no tax switch. The end state is one delinquent row, one bill row, and one foreclosure row.
+- [ ] Metric. Wall time of one local switch-on run over the golden files, and the row counts. Trunk has no tax switch. The end state is one delinquent row, one bill row, one foreclosure case, and one join row.
 - [ ] Probe. At trunk, time `go test -race ./internal/service/ -count=1`. At head, time the local switch-on test.
 - [ ] Baseline. Record the trunk service test duration. Record trunk tax run as absent.
-- [ ] Rule. Fail if the head local switch-on run takes 5 seconds or longer, or if any of the three counts is not 1. Do not report a ratio against the trunk service test. That test does not write tax rows.
+- [ ] Rule. Fail if the head local switch-on run takes 5 seconds or longer, or if any of those four counts is not 1. Do not report a ratio against the trunk service test. That test does not write tax rows.
 
 **Review gate.** None. tax-6 is not review-gated.
 
@@ -494,16 +496,18 @@ func Get(ctx context.Context, rawURL string, limit int64, timeout time.Duration)
 
 ```sql
 INSERT INTO tax_delinquent_balances (
-    parcel_id, tax_year, balance_due, primary_source, source_url, file_sha256, fetched_at
+    county_id, source_name, parcel_id, tax_year, balance_due, primary_source,
+    source_url, file_sha256, fetched_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
 )
-ON CONFLICT (parcel_id, tax_year) DO UPDATE
+ON CONFLICT (county_id, source_name, parcel_id, tax_year) DO UPDATE
 SET balance_due = EXCLUDED.balance_due,
     primary_source = EXCLUDED.primary_source,
     source_url = EXCLUDED.source_url,
     file_sha256 = EXCLUDED.file_sha256,
-    fetched_at = EXCLUDED.fetched_at
+    fetched_at = EXCLUDED.fetched_at,
+    updated_at = now()
 RETURNING id;
 ```
 
@@ -511,8 +515,7 @@ Open questions.
 
 1. What should happen when a required column is renamed? This plan fails the file and yields nothing. An alias list is not defined.
 2. What is the billing zip length, and what are today's row counts? The operator's 2026-11-08 counts stand. This session did not open a clean zip.
-3. Is the PowerPoint on the foreclosure page a second file this program should parse? The sales list at `showdocument?id=4787` is the file this plan parses. The deck's href was not captured.
-4. What is the foreclosure upsert key when two blocks for one parcel both say case `TBD`? The fetched list did not contain that pair. The second save would keep one row.
+3. Is the PowerPoint on the foreclosure page a second file this program should parse? The sales list at `showdocument?id=4787` is the file this plan parses. The operator is reading the deck first. The deck's href was not captured.
 
 ## Appendix B. Alternatives rejected
 
@@ -521,6 +524,12 @@ Open questions.
 A public fetch plus a public parse loses. The caller would open the body and then parse it. A zip has to be on disk before `archive/zip` can read the directory at the end. Hiding that inside `Read` keeps one call. The CSV parser stays a function over an `io.Reader` so the golden file and the fuzz target do not open a socket. That function is not the interface.
 
 A separate `likely_vacant_parcels` table loses. persist-1 in `plans/soil-layer.md` stores `parcels.likely_vacant` on every parcel and does not insert a second identity. A tax row that stored the county parcel number as its key would ignore `parcels.id`. The sale writer already looks up that UUID and omits `id` on conflict. Tax rows do the same. This plan does not add the column and does not add the side table.
+
+One foreclosure row per PIN loses. Case `26M000471-890` names three PINs. Copying the bids onto three rows repeats one case. A single text column of PINs loses because a query would parse that string. The case table holds the case. The join table holds one parcel per row.
+
+Storing the text `TBD` as `case_number` loses. Two unsold cases would share that text and collapse. A null case number plus the PIN-set hash and the legal-text hash keeps them apart. Appendix E records that key for the operator to confirm.
+
+A `JSONB` dump of the source row loses. `parcels.source_extras` is for GIS leftovers. The tax query surface is the typed columns. This plan does not add a document column.
 
 `iter.Seq2` loses as the interface return. A parse error in the middle of a range has no `error` result on the method. A `yield func(T) error` returns that error from `Read`. Go 1.25 could express an iterator. This plan does not.
 
@@ -552,9 +561,9 @@ The GIS download page says the data is presented as is and that the user holds t
 
 The header spelling `Taypayer Address 1` is the operator's reading of the billing file. Lane 8 records the spelling this program actually sees. A mismatch fails the parse.
 
-The foreclosure list is prose, not a CSV. A county edit that keeps the PIN label and moves the other labels can store empty owner text and still pass the PIN check. Lane 7 records the PIN list so that drift is visible.
+The foreclosure list is prose, not a CSV. A county edit that keeps the PIN label and moves the other labels can store a null owner and still pass the PIN check. Lane 7 records the PIN list so that drift is visible.
 
-Two `TBD` cases for one parcel collapse to one row. Appendix A question 4 is that gap.
+A `TBD` case that later receives a case number becomes a second row. The old null-number row stays, because this plan does not delete cases that disappear from a file. The operator can reject that and ask for a delete.
 
 The 180 day period is a chosen default. A real county cadence that is not about twice a year is a config change in `taxRunConfig.Period`, not a code change in the parsers.
 
@@ -593,8 +602,10 @@ A renamed required column still fails the file. What to do instead stays open.
 
 `county.ID` is `internal/county` on main. This plan does not declare the type and does not edit `plans/soil-layer.md`.
 
-Real-estate rows are stored. Railroad rows are dropped. Money is `NUMERIC(12,2)`. Every new table has a UUID primary key. The county parcel number is only the ingest lookup through `(county_id, source_name, source_parcel_id)`. The upsert omits `id`, so a rerun keeps the UUID. The tax write does not insert parcels.
+Real-estate rows are stored. Railroad rows are dropped. Money is `NUMERIC(14, 2)`. Tax year is `SMALLINT`. Dates are `DATE` and are NULL when the source says `TBD`. Every new table has a UUID primary key, `created_at`, and `updated_at`. Balances and bills also store `county_id` and `source_name`, because those rows are source records the way `parcels` is. The join table does not copy them, the way `parcel_sales` does not. The county parcel number is only the ingest lookup through `(county_id, source_name, source_parcel_id)` with `source_name` `union_county_gis`. Hyphens are stripped for that lookup and are not stored. The upsert omits `id`, so a rerun keeps the UUID. The tax write does not insert parcels.
 
-The stable delinquent URL is `showdocument?id=4792` with no `t` parameter. The billing link is read from the GIS download page so a changed timestamp does not stick in code. The foreclosure list is `showdocument?id=4787` with no `t` parameter.
+A foreclosure case is one row. Each matched likely-vacant PIN is one join row. A PIN that is not in `parcels` keeps the case, skips the join, and increments the unmatched count. The case upsert key for a null case number is `(county_id, source_name, parcel_set_sha256, legal_sha256)`. A real case number uses `(county_id, source_name, case_number)`. The operator confirms that key. Until then, tax-5 implements it as written.
+
+The stable delinquent URL is `showdocument?id=4792` with no `t` parameter. The billing link is read from the GIS download page so a changed timestamp does not stick in code. The foreclosure list is `showdocument?id=4787` with no `t` parameter. The PowerPoint on that page is not parsed. The operator is reading it first.
 
 `plans/scraper-enrichment.md` stays as it is on main. It does not say this plan replaced it. This PR does not turn it into a pointer. The soil plan still links it.
