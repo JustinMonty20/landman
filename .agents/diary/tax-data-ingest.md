@@ -18,6 +18,14 @@ Tax rows match `parcels` and `parcel_sales`. Balances and bills are one row per 
 
 ## Operator correction
 
+OCR stays out of this program. A picture-only pipeline page is skipped and counted. The operator will deal with OCR when a file actually needs it.
+
+## Out-of-scope decision
+
+Left the delinquent and billing `likely_vacant` gate in the plan. The recommendation is to drop that write-time filter and keep `likely_vacant` only on `tax_owed`, so a house on the foreclosure list can still join a balance. The operator has not confirmed that.
+
+## Operator correction
+
 Upcoming foreclosure is not gated on `likely_vacant`. The auction-page list is a discovered file on the same periodic run. The live body on 2026-11-10 is a PDF text layer, stored as `tax_foreclosure_pipeline` rows joined on `parcels.id`. A boolean on `parcels` was rejected. Delinquent and billing still use the vacancy gate, and that choice is an open question.
 
 
