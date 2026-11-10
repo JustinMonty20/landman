@@ -22,6 +22,14 @@ OCR stays out of this program. A picture-only pipeline page is skipped and count
 
 ## Operator correction
 
+A renamed required column fails the file. The error names the missing column and the headers seen. Each CSV parser has an empty alias list. Adding an alias is a later code edit.
+
+## Operator correction
+
+The billing zip cap stays 256 MiB until tax-4 measures the file. Lane 7 and lane 9 numbers are written into the plan and the PR before that PR merges. A length over 128 MiB raises the cap in that same PR.
+
+## Operator correction
+
 The operator confirmed dropping the delinquent and billing write-time `likely_vacant` gate. Every matched real-estate row is stored. `tax_owed` still keeps only likely-vacant parcels with a balance.
 
 ## Operator correction

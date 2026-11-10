@@ -218,7 +218,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 **Build.**
 
 - [ ] Add `DelinquentRow` with `ParcelKey`, `Year`, `Balance`, and `PrimarySource`. The county parcel key stays on this struct until the store looks up `parcels.id`. It is not a database id. Add `DelinquentList` with `Read` so that `var _ taxsource.Source[DelinquentRow] = (*DelinquentList)(nil)` compiles in `delinquent.go`.
-- [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4792`. Do not send the `t` query parameter. Appendix A measured that this URL returns the CSV. If the first record's names do not include `Property Key`, `Year`, `Primary Source`, and `Balance Due`, return an error and yield nothing. Do not guess another document id.
+- [ ] Resolve the file with `GET` of `https://www.unioncountync.gov/home/showdocument?id=4792`. Do not send the `t` query parameter. Appendix A measured that this URL returns the CSV. Require `Property Key`, `Year`, `Primary Source`, and `Balance Due`. This parser keeps a small alias list for those names. The list is empty today. A required name that is absent, and not in the alias list, returns an error and yields nothing. The error names the missing column and lists the headers actually seen. The fix is a code edit that adds the new spelling to this list. Do not guess another document id. Do not invent an alias in the run.
 - [ ] Parse with `encoding/csv`. Read columns by those names. Ignore extra empty columns. Trim the key and uppercase it. Do not remove an internal space and do not drop a suffix. `07105038A` stays `07105038A`. `02176011 60` stays `02176011 60`.
 - [ ] Yield a row only when `Primary Source` is `RE`. Drop `RR`. Drop `PP`. Personal property is business equipment and vehicles taxed apart from the land. Parse `Balance Due` by removing `$` and commas. `Year` is a smallint. Store dollars and cents. A balance that does not parse is an error and yields nothing. Delete `-` and `.` from the key before lookup, then trim the ends. Do not delete spaces. A key that contains neither character is unchanged.
 - [ ] `SaveDelinquent` looks up `parcels.id` with `(county_id, source_name, source_parcel_id)`. `county_id` is `county.Union`. `source_name` for the lookup is `union_county_gis`, the value `GISSource.Name` returns at `internal/connector/union/gis.go` line 82. `source_parcel_id` is the normalized key. Use the same three columns as `lookupParcelSQL` in `internal/parcelstore/sales.go` lines 91 to 97. Do not edit `internal/parcelstore`. Do not read `likely_vacant`. No parcel row is an unmatched skip. A stored parcel is upserted whether or not it has a house. The stored `county_id` is the parcel's `county_id`. The stored `source_name` is `union_delinquent`. Do not insert a parcel. Do not write the county key onto the tax row. `tax_owed` is the vacancy filter, not this save.
@@ -232,7 +232,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Table-driven tests cover the golden RE rows, a skipped PP row, a dropped RR row, a missing `Property Key` header, a bad balance, and a canceled context that yields nothing. Run `go test -race ./internal/connector/union/ -count=1 -run TestDelinquent`.
+- [ ] Table-driven tests cover the golden RE rows, a skipped PP row, a dropped RR row, a missing `Property Key` header, a bad balance, and a canceled context that yields nothing. The missing-header error names `Property Key` and includes a header that is present. Run `go test -race ./internal/connector/union/ -count=1 -run TestDelinquent`.
 - [ ] The postgres test covers a first save, a second save that keeps `id`, an unmatched key, and a parcel with `likely_vacant` false that still writes a row and stays out of `tax_owed`. Run `go test -race -tags postgres ./internal/taxstore/ -count=1 -run TestSaveDelinquent`.
 - [ ] Run `go test -race ./internal/connector/union/ -fuzz=FuzzDelinquentMoney -fuzztime=10s` and `go test -race ./internal/connector/union/ -fuzz=FuzzParcelKey -fuzztime=10s`. Both exit 0.
 - [ ] Run `go vet ./internal/connector/union/ ./internal/taxstore/` and `staticcheck ./internal/connector/union/ ./internal/taxstore/`. Both print no findings.
@@ -246,7 +246,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 4. Change the balance on the second save. Save `/tmp/swarm-tax-3/worker-4/replace.png`. Pass when the count is still 1, `id` is unchanged, and the balance is the second value.
 - [ ] Lane 5. Save a key that is not in `parcels`, and save a key whose parcel has `likely_vacant` false. Count `parcels` around the save. Save `/tmp/swarm-tax-3/worker-5/no-parcel.png`. Pass when the `parcels` count is unchanged, the unmatched count is 1, the housed parcel has one balance row, and `tax_owed` does not return that parcel.
 - [ ] Lane 6. Fetch `https://www.unioncountync.gov/home/showdocument?id=4792` once. Save `/tmp/swarm-tax-3/worker-6/live-csv.png`. Pass when the first line contains `Property Key` and `Balance Due`. One request. Do not pass a `t` parameter.
-- [ ] Lane 7. From that same saved body, count RE, PP, and RR. Save `/tmp/swarm-tax-3/worker-7/live-counts.png`. Pass when RE is 926, PP is 5013, and RR is 3, or record the new counts and stop if the header names changed.
+- [ ] Lane 7. From that same saved body, count RE, PP, and RR. Save `/tmp/swarm-tax-3/worker-7/live-counts.png`. Pass when RE is 926, PP is 5013, and RR is 3, or record the new counts. If a required header is missing, the error names that header and lists the headers seen, and the lane fails. Do not add an alias in the lane.
 - [ ] Lane 8. Sum RE `Balance Due` from that body. Save `/tmp/swarm-tax-3/worker-8/live-sum.png`. Pass when the sum is 232755.26, or record the new sum next to the header check from lane 7.
 - [ ] Lane 9. Cancel `Read` before the request. Save `/tmp/swarm-tax-3/worker-9/cancel.png`. Pass when the error matches `context.Canceled` and no row is yielded.
 - [ ] Lane 10. Run `tax_owed` after saving one RE row for a likely-vacant parcel and one RE row for a parcel with `likely_vacant` false. Save `/tmp/swarm-tax-3/worker-10/owed.png`. Pass when the view returns only the likely-vacant `parcels.id` and the other balance row is still in the table. The skipped PP count for the golden file is 1.
@@ -283,8 +283,8 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 - [ ] Add `BillRow` with `ParcelKey`, `Year`, `TotalTaxes`, `PropertyAddress`, and the mailing fields on `tax_bills`. Add `BillingFile` with `Read` so that `var _ taxsource.Source[BillRow] = (*BillingFile)(nil)` compiles. The parcel key is not a database id.
 - [ ] Resolve the URL from the Parcels table on `https://www.unioncountync.gov/government/departments-f-p/gis-mapping/downloadable-gis-data`. Use the link whose label is `Billing Data`. Do not hardcode the numeric timestamp in the path. If that label is missing, return an error.
-- [ ] `Get` the zip with a limit of 256 MiB. That cap is chosen. Appendix A says this session did not obtain a clean zip length, and the operator measured an uncompressed CSV of about 124 MB on 2026-11-08. Write the body to a temp file. Open it with `archive/zip`. A zip directory is at the end of the file, so do not parse the CSV from the socket. Stream the entry whose name contains `WKBILA` and ends in `.csv` with `encoding/csv`. Fail if the uncompressed entry exceeds 256 MiB. Delete the temp file when `Read` returns.
-- [ ] Require `property_key`, `source`, `year`, `TOTAL TAXES AND CHARGES`, `PROPERTY ADDRESS`, `Taxpayer Name 1`, and `Taypayer Address 1`. The address header is spelled `Taypayer` in the operator's column list. Match that spelling. A missing required name fails the parse and yields nothing. Yield `source` `RE` only. Drop `PP` for the same reason as tax-3. `SaveBill` returns the saved count, the skipped PP count, and the unmatched count. There is no paid column and no balance column. Do not invent one. `TotalTaxes` is the billed amount, not the amount owed. Do not read `likely_vacant`.
+- [ ] `Get` the zip with a limit of 256 MiB. That cap is a chosen ceiling. Appendix A says this session did not obtain a clean zip length, and the operator measured an uncompressed CSV of about 124 MB on 2026-11-08. Write the body to a temp file. Open it with `archive/zip`. A zip directory is at the end of the file, so do not parse the CSV from the socket. Stream the entry whose name contains `WKBILA` and ends in `.csv` with `encoding/csv`. Fail if the uncompressed entry exceeds 256 MiB. Delete the temp file when `Read` returns. Lane 7 is the measurement of record. If the zip bytes or the uncompressed CSV bytes exceed 128 MiB, that lane raises this cap in the same PR to at least twice the larger of those two lengths.
+- [ ] Require `property_key`, `source`, `year`, `TOTAL TAXES AND CHARGES`, `PROPERTY ADDRESS`, `Taxpayer Name 1`, and `Taypayer Address 1`. The address header is spelled `Taypayer` in the operator's column list. Match that spelling. This parser keeps a small alias list for those names. The list is empty today. A required name that is absent, and not in the alias list, returns an error and yields nothing. The error names the missing column and lists the headers actually seen. The fix is a code edit that adds the new spelling to this list. Do not invent an alias in the run. Yield `source` `RE` only. Drop `PP` for the same reason as tax-3. `SaveBill` returns the saved count, the skipped PP count, and the unmatched count. There is no paid column and no balance column. Do not invent one. `TotalTaxes` is the billed amount, not the amount owed. Do not read `likely_vacant`.
 - [ ] Use the same key rule and the same lookup as tax-3. Lookup `source_name` is `union_county_gis`. The stored `source_name` is `union_billing`. The stored `county_id` is the parcel's `county_id`. A stored parcel is upserted whether or not it has a house. `SaveBill` upserts on `(county_id, source_name, parcel_id, tax_year)`, omits `id`, and sets `updated_at` to `now()`. Add `Latest` for `tax_bills`. The golden file is a few RE rows and one PP row. Include parcel `09336350` when a row is copied from a real file. `-update` is off by default. Database tests use `//go:build postgres`. Do not write a JSON document.
 - [ ] Do not download the zip in `go test` unless the test points at a local file. The live sample is one lane.
 
@@ -294,7 +294,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Table-driven tests cover the golden RE row, a skipped PP row, a missing `property_key` header, a zip whose entry exceeds the cap, and a canceled context. Run `go test -race ./internal/connector/union/ -count=1 -run TestBilling`.
+- [ ] Table-driven tests cover the golden RE row, a skipped PP row, a missing `property_key` header, a zip whose entry exceeds the cap, and a canceled context. The missing-header error names `property_key` and includes a header that is present. Run `go test -race ./internal/connector/union/ -count=1 -run TestBilling`.
 - [ ] Run `go test -race ./internal/connector/union/ -fuzz=FuzzBillingMoney -fuzztime=10s`. It exits 0.
 - [ ] Run `go vet ./internal/connector/union/ ./internal/taxstore/` and `staticcheck ./internal/connector/union/ ./internal/taxstore/`. Both print no findings.
 - [ ] Run `go test -race -cover ./internal/connector/union/ ./internal/taxstore/ -count=1`. Fail if `union` coverage is below 77.4 percent, or below a higher trunk number measured at the start of this PR. Fail if `taxstore` coverage with `-tags postgres` is below 90.0 percent.
@@ -307,9 +307,9 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Lane 4. Count `parcels` around a save of an unmatched key and a save for a parcel with `likely_vacant` false. Save `/tmp/swarm-tax-4/worker-4/no-parcel.png`. Pass when the `parcels` count is unchanged, the unmatched key inserts no bill, and the housed parcel has one bill row.
 - [ ] Lane 5. Open a local zip with one CSV entry and stream it. Save `/tmp/swarm-tax-4/worker-5/zip-stream.png`. Pass when the row count matches the entry and the process does not hold the entry as one string. The test compares yielded rows with a second streaming pass.
 - [ ] Lane 6. Fetch the GIS download page once and print the `Billing Data` href. Save `/tmp/swarm-tax-4/worker-6/billing-href.png`. Pass when the href contains `showpublisheddocument` and does not point at `unionnc.devnetwedge.com`.
-- [ ] Lane 7. Download that href once, only in this lane, and keep the raw bytes. Save `/tmp/swarm-tax-4/worker-7/billing-zip.png`. Pass when a zip reader opens the body and an entry name contains `WKBILA` and `.csv`. Record the byte count. Do not repeat this download in another lane. A fetch that replaces invalid bytes with the UTF-8 replacement character is not this pass.
-- [ ] Lane 8. Read the CSV header from that zip. Save `/tmp/swarm-tax-4/worker-8/billing-header.png`. Pass when `property_key` and `TOTAL TAXES AND CHARGES` are present. If `Taypayer Address 1` is absent, fail and record the address header that is present.
-- [ ] Lane 9. Count `source` values and the distinct `year` in that CSV. Save `/tmp/swarm-tax-4/worker-9/billing-counts.png`. Pass when the counts are recorded. The operator's 2026-11-08 counts were RE 116,421, PP 21,984, and year 2026 only. A difference does not fail the lane. Write the new counts in the lane report.
+- [ ] Lane 7. Download that href once, only in this lane, and keep the raw bytes. Save `/tmp/swarm-tax-4/worker-7/billing-zip.png`. Pass when a zip reader opens the body and an entry name contains `WKBILA` and `.csv`. Record the zip byte count, the SHA-256, and the uncompressed CSV byte count. This lane is the measurement of record for those lengths. Do not repeat this download in another lane. A fetch that replaces invalid bytes with the UTF-8 replacement character is not this pass. If either length exceeds 128 MiB, raise the 256 MiB cap in this PR to at least twice the larger length and record the new cap. Otherwise leave the cap at 256 MiB.
+- [ ] Lane 8. Read the CSV header from that zip. Save `/tmp/swarm-tax-4/worker-8/billing-header.png`. Pass when `property_key` and `TOTAL TAXES AND CHARGES` are present. If a required header is absent, the error names that header and lists the headers seen, and the lane fails. Do not add an alias in the lane.
+- [ ] Lane 9. Count CSV rows, `source` values, and the distinct `year` in that CSV. Save `/tmp/swarm-tax-4/worker-9/billing-counts.png`. Pass when the row count, the RE count, and the PP count are recorded. The operator's 2026-11-08 counts were RE 116,421, PP 21,984, and year 2026 only. A difference does not fail the lane. Write the new counts in the lane report.
 - [ ] Lane 10. Find `property_key` `09336350` in that CSV. Save `/tmp/swarm-tax-4/worker-10/example-parcel.png`. Pass when the row is RE, year 2026, and the address contains `CRIPPLE CREEK`, or record that the key is absent.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
@@ -326,7 +326,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto current trunk after the verdict, with `git patch-id` unchanged.
-- [ ] The owner does not merge. The operator lands tax-4 after tax-1 and tax-2.
+- [ ] The owner does not merge. The operator lands tax-4 after tax-1 and tax-2. Before that landing, write lane 7's zip bytes, SHA-256, and uncompressed CSV bytes, and lane 9's CSV row count, RE count, and PP count, into Appendix A and the PR body. A missing write-back blocks this box.
 
 ## Ingest the foreclosure list (tax-5)
 
@@ -587,10 +587,7 @@ SET balance_due = EXCLUDED.balance_due,
 RETURNING id;
 ```
 
-Open questions.
-
-1. What should happen when a required column is renamed? This plan fails the file and yields nothing. An alias list is not defined.
-2. What is the billing zip length, and what are today's row counts? The operator's 2026-11-08 counts stand. This session did not open a clean zip.
+No open questions remain in this plan. The TBD foreclosure case key is still pending in Appendix E.
 
 ## Appendix B. Alternatives rejected
 
@@ -630,7 +627,7 @@ Screen-reading the pipeline deck loses. The live file is a PDF exported from Pow
 
 `curl` from this host to `www.unioncountync.gov` returned Akamai 403 on 2026-11-10. A different fetch of the same document URLs returned the CSV and the foreclosure list. Live lanes that download those files can fail on a host Akamai blocks. That failure is real. Do not treat 403 as a pass.
 
-The billing body saved in this session was not a valid zip after byte replacement. tax-4 lane 7 is the clean byte count. Until that count exists, the 256 MiB cap is a chosen ceiling at about twice the operator's 124 MB CSV, not a measured zip length. A zip directory sits at the end of the file, so the download finishes before the CSV parse starts.
+The billing body saved in this session was not a valid zip after byte replacement. tax-4 lane 7 is the measurement of record for the zip bytes, the SHA-256, and the uncompressed CSV bytes. The 256 MiB cap stays until that lane measures a length over 128 MiB, in which case the same PR raises the cap to at least twice the larger length. A zip directory sits at the end of the file, so the download finishes before the CSV parse starts.
 
 The GIS download page says the data is presented as is and that the user holds the county harmless. The operator chose these files anyway. The plan does not add a click-through.
 
@@ -640,7 +637,7 @@ The GIS download page says the data is presented as is and that the user holds t
 
 `parcels.likely_vacant` is not on main at `e5ac202`. tax-2 cannot migrate until persist-1 has added it. Starting tax-2 earlier fails in `CREATE VIEW`.
 
-The header spelling `Taypayer Address 1` is the operator's reading of the billing file. Lane 8 records the spelling this program actually sees. A mismatch fails the parse.
+The header spelling `Taypayer Address 1` is the operator's reading of the billing file. Lane 8 records the spelling this program actually sees. A missing required header fails the parse. The error names that header and lists the headers seen. An alias is a later code edit, not a guess in the run.
 
 The foreclosure list is prose, not a CSV. A county edit that keeps the PIN label and moves the other labels can store a null owner and still pass the PIN check. Lane 7 records the PIN list so that drift is visible.
 
@@ -683,7 +680,9 @@ Likely-vacant is `parcels.likely_vacant`, written by persist-1, not by this prog
 
 Personal property is business equipment and vehicles taxed apart from the land. The delinquent file and the billing file drop those rows. The save result counts how many were skipped. The foreclosure list has no source column. Blocks without a PIN are skipped and are not called personal property.
 
-A renamed required column still fails the file. What to do instead stays open.
+A renamed required column fails the file and yields nothing. The operator decided that on 2026-11-10. Each CSV parser keeps its own alias list, and both lists are empty today. The error names the missing column and lists the headers actually seen. The fix is a code edit that adds the new spelling to that source's list. The run does not invent an alias.
+
+The billing zip cap stays 256 MiB until tax-4 measures the file. That cap is a chosen ceiling, about twice the operator's 124 MB CSV from 2026-11-08. Lane 7 records the zip bytes, the SHA-256, and the uncompressed CSV bytes. Lane 9 records the CSV row count and the RE and PP split. Those numbers are written into Appendix A and the PR body before tax-4 merges. If either byte length exceeds 128 MiB, lane 7 raises the cap in that same PR to at least twice the larger length.
 
 `county.ID` is `internal/county` on main. This plan does not declare the type and does not edit `plans/soil-layer.md`.
 
