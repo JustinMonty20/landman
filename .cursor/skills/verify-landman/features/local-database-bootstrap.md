@@ -26,7 +26,7 @@ Preconditions:
 - **Start PostGIS.** Run `docker compose up -d postgis --wait`. `docker inspect` on `landman-postgis` shows running and healthy. If a container named `postgis` appeared instead, Compose did not read `DB_CONTAINER`; stop and fix `.env` rather than pointing the Makefile at the wrong name.
 - **Create the database.** Run `make db-create`. Exit code `0`. A second run also exits 0 (the bootstrap SQL is idempotent).
 - **Apply migrations.** Run `make migrate-up`. Exit code `0`.
-- **Confirm usable schema.** Run `make migrate-version`. The output contains `goose: version <n>`, where `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000003` prints as `3`). Then run `docker exec -i landman-postgis psql "$DATABASE_URL" -c '\d parcels'`. The table exists and includes `id`, `county_id`, and `shape`.
+- **Confirm usable schema.** Run `make migrate-version`. Stderr contains `goose: version <n>`, where `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000004` prints as `4`). Then run `docker exec -i landman-postgis psql "$DATABASE_URL" -c '\d parcels'`. The table exists and includes `id`, `county_id`, and `shape`.
 - **Proof.** Save the `migrate-up` output, the `migrate-version` output, and the `\d parcels` output under `artifacts/verify/$RUN_ID/`. Proof requires the version match and the `parcels` table description, not only `pg_isready`.
 
 ## Gotchas

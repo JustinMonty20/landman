@@ -20,8 +20,8 @@ Preconditions:
 - `make db-create` has been run at least once so the `landman` database exists.
 - This is a read of goose state. It does not apply or roll back migrations.
 
-- **Show version.** Run `make migrate-version`. Exit code `0`. Output contains `goose: version <n>`. After a complete `make migrate-up`, `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000003` prints as `3`).
-- **Show status.** Run `make migrate-status`. Exit code `0`. Every `db/migrations/*.sql` file is listed. After a complete `make migrate-up`, none of those files are pending.
+- **Show version.** Run `make migrate-version`. Exit code `0`. Stderr contains `goose: version <n>`. After a complete `make migrate-up`, `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000004` prints as `4`).
+- **Show status.** Run `make migrate-status`. Exit code `0`. Stderr lists every `db/migrations/*.sql` file. After a complete `make migrate-up`, none of those files are pending.
 - **Proof.** Save both command transcripts under `artifacts/verify/$RUN_ID/`. The version and the status listing must agree with each other and with the files on disk. Do not invent a pass from `SELECT 1` alone.
 
 ## Gotchas
