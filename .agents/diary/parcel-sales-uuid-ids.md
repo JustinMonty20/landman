@@ -21,3 +21,9 @@
 **Skipped.** This VM has no Docker and no `psql`, so `make migrate-up`, live lanes 2 through 10, the head column check in lane 1, and the upsert perf probe were not run. Trunk and head `go test -race ./... -count=1` both exited 0. Plan checkboxes stay open because live and perf evidence does not exist yet.
 
 **Skipped.** Did not add `pstack/`, a `/loop` audit, a swarm, Bugbot triage, or `/deslop` during implementation. The repo has none of that. Inventing it would be a different change.
+
+**Out-of-scope decision.** uuid-2 keeps `SaveParcel` and `SaveSales` as functions on the caller's transaction. A store that dials its own pool cannot join the import transaction persist-1 uses for its temporary table. persist-1 adds the connection-string constructor when it edits this package.
+
+**Skipped refactor.** Did not add an error for a repeated sale sequence in one slice. The unique key already turns the second write into an update, and the plan's tests do not cover that case.
+
+**Skipped.** `cursor-team-kit` and `deslop` are not installed. This PR does not add them. `make migrate-up` could not download goose from inside the database container. `make db-create` succeeded. Goose v3.24.3 on the host applied the same four migration files. The ten live lanes ran one after another on that database because they share one PostGIS and one Go build cache.
