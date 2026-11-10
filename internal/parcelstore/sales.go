@@ -76,7 +76,6 @@ func SaveSales(ctx context.Context, tx pgx.Tx, identity models.ParcelIdentity, s
 	return ids, nil
 }
 
-// saleCalendarDate returns the UTC calendar date for t.
 // A nil t returns an invalid Date, which binds as NULL.
 func saleCalendarDate(t *time.Time) pgtype.Date {
 	if t == nil {

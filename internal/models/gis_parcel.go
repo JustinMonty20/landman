@@ -12,7 +12,6 @@ import (
 type ParcelID string
 
 // SaleID is parcel_sales.id, the application id minted by Postgres.
-// A ParcelID identifies the parcel row. A SaleID identifies one sale row.
 type SaleID string
 
 // GISParcel is the county-agnostic, normalized parcel shape persisted by the

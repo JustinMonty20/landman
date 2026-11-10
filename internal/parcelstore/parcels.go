@@ -27,7 +27,7 @@ const defaultStorageSRID = 3857
 // It ignores parcel.ID and parcel.Sales. It omits id, created_at, and
 // updated_at on insert so the column defaults fire. On conflict it does
 // not assign id or created_at, and it sets updated_at to now(). It does
-// not delete. It does not write parcel_sales or likely_vacant.
+// not delete. It does not write parcel_sales.
 //
 // A natural key is missing when TrimSpace of CountyID, SourceName, or
 // SourceParcelID is empty. The stored text is the caller's original string.
@@ -114,8 +114,6 @@ func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel) (models
 	return id, nil
 }
 
-// identityKey reports a missing natural key.
-// TrimSpace of CountyID, SourceName, or SourceParcelID being empty is missing.
 func identityKey(id models.ParcelIdentity) error {
 	var missing []string
 	if strings.TrimSpace(id.CountyID) == "" {
@@ -133,9 +131,7 @@ func identityKey(id models.ParcelIdentity) error {
 	return fmt.Errorf("%w: %s", ErrMissingNaturalKey, strings.Join(missing, ", "))
 }
 
-// encodeShape returns EWKB for a present shape and the srid column value.
 // A nil shape returns a nil byte slice, which the INSERT binds as NULL.
-// It does not assign an SRID onto the geometry and it does not reproject.
 func encodeShape(g models.GISGeometry) ([]byte, int, error) {
 	if g.Shape == nil || *g.Shape == nil {
 		srid := g.SRID
