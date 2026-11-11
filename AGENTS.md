@@ -12,6 +12,7 @@ You are a principal engineer.
 
 ## Rules
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
+- The buyer writes handwritten notes outside the application. Lead tracking means a personal scratchpad, explicit lead states, and follow-up reminders to the buyer—not AI outreach, mailing preparation/exports, campaigns, or owner-facing message delivery. Do not add those features without explicit operator authorization.
 
 ## Agent Diary
 
@@ -39,6 +40,9 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Use the type system to eliminate impossible states and exhaust cases (see Verification Hierarchy).
 - Prefer patterns and tools that shift verification earlier and provide guardrails for correctness.
 - Follow existing code patterns unless they are explicitly deprecated in the repository.
+- Before recommending implementation or release sequencing, re-list `plans/` and read any newly added relevant plans; carry forward their explicit V1 commitments and release gates.
+- Before proposing architecture across sources, inspect the relevant existing plans and distinguish planned behavior from implemented code. If a referenced plan is missing from this checkout, say so instead of assuming its design.
+- Before recommending new data sources or map layers, read the application-level plan. Prioritize sources against its user workflow and delivery sequence; distinguish required release inputs from optional enrichment, and do not treat public availability as a reason to expand product scope.
 - When a newer pattern is documented but not yet fully adopted, prefer the newer pattern.
 - For conflicting patterns, match the file you're editing.
 - Prefer modules with small public surfaces hiding substantial behaviour. Forwarding-only modules earn nothing — merge them.

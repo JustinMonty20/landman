@@ -1,10 +1,10 @@
 # Soil layer plan
 
-You want each soil polygon stored as its own geography, with its own id, so a later map can paint that polygon and ask which parcels it touches. This plan does not paint the map. It sets the tables, the upsert, and the overlap acres.
+You want each soil polygon stored as its own geography, with its own id, so a later map can paint that polygon and ask which parcels it touches. This plan does not paint the map. It sets the tables, the upsert, the overlap acres, and use-specific soil screening. Screening is required for the soil-layer release, not a deferred enhancement. It reports mapped limitations and evidence quality; it does not certify buildability or septic approval.
 
 Union County is the first adapter. It reads MapServer layer 197. A polygon is not keyed by a parcel. The join table stores a polygon UUID, `parcels.id`, and the overlap acres. A second run upserts and keeps those UUIDs.
 
-Stored map geometry stays `GEOMETRY(Geometry, 3857)`. Overlap acres are computed in EPSG:2264. Soil never inserts a parcel. The PRs are filter-1, soil-1, persist-1, soil-2, soil-3, and soil-4. The operator lands each one.
+Stored map geometry stays `GEOMETRY(Geometry, 3857)`. Overlap acres are computed in EPSG:2264. Soil never inserts a parcel. The PRs are filter-1, soil-1, persist-1, soil-2, soil-3, soil-4, and soil-5. The operator lands each one.
 
 The county ingest uses one HTTP client at one request per second. It downloads every layer 215 parcel, pages 2000 rows, and writes each page in that loop. `likely_vacant` is a column on the parcel. The overlap insert is one SQL statement over every stored shape.
 
@@ -12,7 +12,7 @@ The county ingest uses one HTTP client at one request per second. It downloads e
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs `pstack/skills/poteto-mode/playbooks/autopilot-stack.md`. Implementers stop at merge-ready. The operator lands filter-1, soil-1, persist-1, soil-2, soil-3, and soil-4. Nobody merges from the checklist.
+The program runs `pstack/skills/poteto-mode/playbooks/autopilot-stack.md`. Implementers stop at merge-ready. The operator lands filter-1, soil-1, persist-1, soil-2, soil-3, soil-4, and soil-5. Nobody merges from the checklist.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -51,6 +51,7 @@ flowchart LR
   persist1 --> soil4[soil-4]
   soil2 --> soil4
   soil3 --> soil4
+  soil4 --> soil5[soil-5: required suitability screening]
 ```
 
   - [ ] filter-1 and soil-1 are independent and first. Both branch from `main`. county-1 is already on trunk, so soil-1 does not wait. If `internal/county` is missing at program start, stop soil-1 and wait for county-1. Do not declare a second county type in this program.
@@ -58,6 +59,7 @@ flowchart LR
   - [ ] soil-3 after soil-1 and persist-1. persist-1 adds a migration, and soil-3 takes the next prefix after that file. soil-3 does not edit `gis.go`.
   - [ ] soil-2 after soil-1 and persist-1. persist-1 and soil-2 both edit `gis.go` and `gis_test.go`, so soil-2 waits. Soil pages use the client persist-1 already rate limits.
   - [ ] soil-4 after persist-1, soil-2, and soil-3.
+  - [ ] soil-5 after soil-4. Its USDA enrichment and parcel screening are part of this release. Its file boundaries are listed in its section; it does not rewrite the soil-1 through soil-4 contracts.
 - [ ] Hold the file boundaries. filter-1 touches only `internal/connector/union/vacant_filter.go` and `internal/connector/union/vacant_filter_test.go`. soil-1 touches only `internal/soil/polygon.go`, `internal/soil/mapunit.go`, `internal/soil/overlap.go`, `internal/connector/union/soil_translate.go`, `internal/connector/union/soil_translate_test.go`, and `internal/connector/union/testdata/soil/`. persist-1 touches only `internal/service/parcel_id_importer.go`, `internal/service/parcel_id_importer_test.go`, `internal/parcelstore/parcels.go`, `internal/parcelstore/parcels_test.go`, `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, `main.go`, and the one new `db/migrations/<prefix>_parcels_likely_vacant.sql` file named in its Files box. If uuid-2 already created other files in `internal/parcelstore/`, persist-1 does not edit them. soil-2 touches only `internal/connector/union/gis.go`, `internal/connector/union/gis_test.go`, `internal/connector/union/soil_fetch.go`, and `internal/connector/union/testdata/soil/layer197-page.json`. soil-3 touches only the one new `db/migrations/<prefix>_soil.sql` file named in its Files box. soil-4 touches only `internal/soil/join.go`, `internal/soil/join_test.go`, `internal/soil/names.go`, `internal/soil/names_test.go`, and `main.go`. No PR adds a join worker pool.
 - [ ] Hold the review gate. No PR in this program changes an interaction. None wait for screenshots in chat before the operator decides to land them.
 
@@ -482,11 +484,78 @@ CREATE INDEX soil_polygon_parcels_parcel_id_idx ON soil_polygon_parcels (parcel_
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto the stacked persist-1, soil-2, and soil-3 heads after the verdict, with `git patch-id` unchanged.
-- [ ] The owner does not merge. The operator lands soil-4 last.
+- [ ] The owner does not merge. The operator lands soil-4 before soil-5; geometry alone is not the release-completion gate.
+
+## Ship use-specific suitability screening (soil-5)
+
+**Depends on.** soil-4. Screening is required for the soil-layer release, not a deferred enhancement. The current checkout has the parcel adapter and writer, not the soil implementation described above; soil-4 plans map-unit names, not these interpretations.
+
+**Files and boundaries.**
+
+- [ ] Add typed screening records, USDA fetching/persistence, parcel assessment, and tests under `internal/soil/`, with captured responses in `internal/soil/testdata/`. Add the next sequential Goose migration after the soil migration; do not edit applied migrations.
+- [ ] Extend `internal/soil/join.go` and `main.go` to record the successfully fetched polygon set and run screening after geometry persistence. Reuse the USDA client work in `internal/soil/names.go`. No second transport abstraction, county HTTP fan-out, or join worker pool.
+- [ ] Keep interpretations separate from geometry, `parcels.source_extras`, and the shared parcel model. No frontend, API, owner ranking, utilities, or automatic buy/reject decision.
+- [ ] Follow `plans/source-jobs-runner-scheduler.md` if its runner has landed; otherwise use explicit composition in `main`. Do not build another scheduler. Source and derived-screening outcomes remain distinguishable.
+
+**Source and interpretation contract.**
+
+- [ ] Enrich distinct `MUKEY` values through public USDA Soil Data Access (`https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest`). Before implementing queries, inspect the current schema/catalog and capture real Union responses. Record exact rule identifiers, units, rating domains, and aggregation methods in source documentation/fixtures. These have not been verified by this plan amendment; do not guess SQL columns or derive ratings from soil names.
+- [ ] Ship conventional septic absorption-field limitations and dwelling/foundation limitations. Keep dwelling interpretations separate where USDA distinguishes basements or other construction types. Include drainage/wetness, ponding/flooding, slope, shrink–swell, and restrictive-layer evidence where supplied, plus agricultural land-capability class/subclass. General agricultural capability is not crop-specific yield or profitability.
+- [ ] Preserve each interpretation's original rating, limitation reasons, rule identity, and aggregation method. Many use not limited / somewhat limited / very limited; do not force every interpretation or measured property into that scale. Types distinguish ratings, measured values with units, and missing/not-rated results.
+- [ ] Retain component identity, percentage, ratings/reasons, and unrated component share when component data informs a result. Use a documented USDA map-unit aggregation method and preserve its parameters; never silently select the worst component or average categories. Component percentages describe a mixture, not known locations within the parcel.
+- [ ] Unknown values never mean favorable, zero, or absent limitations. Preserve genuine unavailable/not-rated results and their reasons; a source failure is not evidence that a rule is unavailable. Unsupported domains/schema changes that prevent safe interpretation fail validation. Each required use must have an implemented, verified lookup and missing-data path before shipping.
+- [ ] The soil-1/soil-2 exclusions of county `HydrcRatng` remain intentional: it is not a septic suitability rating. USDA hydric information may provide wetness evidence with provenance, but does not establish jurisdictional wetlands.
+
+**Storage, freshness, and errors.**
+
+- [ ] Store map-unit interpretations separately, keyed by `MUKEY`, rule identity, aggregation method, and source revision. Store component facts separately when used. Retain original rating/reasons, units, source URL/query identity, fetched time, survey revision/date when available, and availability status. Stable natural keys retain application UUIDs on upsert.
+- [ ] Fetch keys in bounded bulk requests using the USDA client's own limiter and cancellation, never one request per parcel/polygon. Refresh initially and on survey/rule revision changes; configure and document a freshness interval for unknown revisions plus manual refresh. Do not invent a source revision when none is supplied.
+- [ ] Publish an interpretation set only when all requested keys/rules are accounted for, including explicit missing/not-rated results. HTTP errors, malformed responses, partial batches, or cancellation cannot publish a partial current set. Preserve older successful evidence with its age/status and expose refresh failure. Unlike optional soil-4 name enrichment, required interpretation-fetch failure prevents clean screening success.
+- [ ] Record membership of the current successful county soil fetch without deleting historical polygon rows. Screening uses that set and fresh intersections with current parcel shapes, not unqualified sums of append-only `soil_polygon_parcels`. Soil-4 intentionally retains retired polygons/stale joins; those are not current screening evidence.
+- [ ] Persist assessments with parcel UUID, parcel-geometry fingerprint, soil-set and interpretation-set revisions, method version, and calculation time. Publish atomically. Recompute after relevant geometry/interpretation changes; expose stale status when inputs differ or refresh fails. No deletion of historical soil/parcel records is authorized.
+- [ ] Provide a small typed assessment read surface in `internal/soil` returning ratings, reasons, coverage, contributing polygons, provenance, and freshness. Future consumers and tests use this contract, not private wiring or an opaque scalar.
+
+**Parcel screening output and safeguards.**
+
+- [ ] Per use, return acreage and share overlapping map units in each published rating class, limitation reasons, unrated/uncovered area, and contributing polygon references for a later map. Use parcel geometry and EPSG:2264 areas, not Web Mercator or tax acreage. Missing/zero-area geometry produces unavailable results.
+- [ ] Union duplicate coverage before counting. Conflicting overlapping map-unit assignments become explicit ambiguous area, not an arbitrary favorable class. Edge-only touches contribute no acres. Rated, unrated, uncovered, and ambiguous partitions reconcile to parcel area within a documented numerical tolerance.
+- [ ] Say "70% overlaps map units rated very limited for conventional septic," not "70% fails septic." The remaining area is not automatically suitable. Do not convert component percentages into located parcel acres, double-count overlapping reasons, or combine different uses into one unsuitable-acre total.
+- [ ] Separate suitability from evidence quality: survey date/detail where supplied, mapped/rated coverage, missing component information, freshness, and compatibility of county geometry with USDA survey revision. Unverified/mismatched revisions remain visible warnings.
+- [ ] Evidence level is mapped survey, not site verified. No numerical confidence percentage, approval probability, or universal good-soil score. No claim of septic approval, legal access, contiguous buildable area, or foundation design.
+- [ ] Return a next step appropriate to the use: site-specific soil/septic evaluation or site/geotechnical review. Severe mapped limitations trigger review, not an automatic declaration that the parcel is unbuildable. Owner signals cannot improve soil ratings.
+
+**Verify, unit and static.**
+
+- [ ] Through public fetching/assessment surfaces, use captured USDA responses and local HTTP fixtures for mixed components, multiple uses, missing reasons/keys, not-rated values, unknown domains, bad schema, partial batches, HTTP failure, and cancellation. Default tests never call USDA or the county.
+- [ ] Run `go test -race ./... -count=1`, `go vet ./...`, and `go build ./...`. Database-tagged integration tests run separately on migrated local PostGIS.
+
+**Verify, live and integration.** Follow the boot recipe. Capture query parameters, source responses, and assessment output; these checks are future work, not claimed evidence.
+
+- [ ] Lane 1. Read-only USDA queries for Union keys verify septic/dwelling rule identities, rating domains, reasons, and aggregation against Web Soil Survey where comparable. Record AOI, settings, revisions, and explain differences.
+- [ ] Lane 2. Verify drainage/wetness, ponding/flooding, slope, shrink–swell, restrictive-layer, and agricultural-capability values and units against captured USDA responses; record genuine unavailable fields.
+- [ ] Lane 3. A 70/30-area fixture returns expected per-use mapped shares/reasons through the typed read surface, without an approval/confidence percentage.
+- [ ] Lane 4. Mixed components preserve percentages, aggregation identity, and unrated share without claiming component locations or surveyed component acreage.
+- [ ] Lane 5. Uncovered/unrated area and missing/zero-area parcel geometry produce explicit gaps/unavailable results, never not limited by default.
+- [ ] Lane 6. Duplicate coverage, conflicting map units, multiple polygons sharing a key, and edge-only contact do not inflate area; partitions reconcile within tolerance.
+- [ ] Lane 7. Repeated refresh preserves stable IDs and updates reasons/ratings. Geometry/revision changes stale prior assessments; retired polygons and old soil-4 joins do not enter newly calculated results.
+- [ ] Lane 8. Failure after a successful USDA batch or cancellation during persistence publishes no partial current set; prior evidence and failed-refresh status remain distinguishable.
+- [ ] Lane 9. Mismatched survey revisions and unknown dates produce evidence warnings. Successful HTTP retrieval never upgrades mapped evidence to site verified.
+- [ ] Lane 10. End-to-end fixture import persists geometry, interpretations, and readable assessments for vacant and improved parcels. Owner-name/address changes do not change ratings. Required screening failure prevents a clean whole-run success.
+
+**Verify, perf.**
+
+- [ ] Measure requests, bytes, elapsed time, peak Go heap, and SQL assessment time for many parcels sharing keys. USDA requests scale with distinct keys and bounded batches, not parcels. Compare initial and unchanged refresh.
+- [ ] Record new USDA/assessment cost separately from soil-4's geometry-only request/time estimates. Measure the full run against the existing 10-minute deadline before release. If it does not fit, resolve explicit staged execution/deadline changes with the operator; do not silently raise concurrency or timeout.
+- [ ] Capture `EXPLAIN ANALYZE`, indexes, row counts, elapsed time, and acreage reconciliation on an approved local dataset. Do not invent a performance ratio against a baseline without screening.
+
+**Merge and release.**
+
+- [ ] Clean verdict at the exact head SHA, Bugbot triage complete, and parent verification under the existing PR protocol.
+- [ ] The operator lands soil-5 after soil-4. The soil layer is release-complete only when both geometry and screening pass their checks.
 
 ## Close the program
 
-- [ ] Every box above is checked with its evidence.
+- [ ] Every box above, including soil-5, is checked with its evidence. Use-specific ratings, reasons, affected acreage, coverage gaps, and provenance are available through the typed assessment read surface. A geometry-only release does not satisfy this plan.
 - [ ] Reply to the operator with each PR id, its verdict, and the head SHA. Do not claim a merge.
 
 ## Appendix A. Prototype evidence and layer findings
