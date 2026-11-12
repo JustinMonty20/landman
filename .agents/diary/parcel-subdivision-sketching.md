@@ -1,0 +1,1 @@
+- **Scope tangent:** Saved sketch persistence, ordinance-derived minimum lot sizing, and advanced curved-line tools are unresolved product choices; kept the brainstorm plan focused on conceptual interactive sketching and area/count rather than expanding into legal feasibility or saved project management.

@@ -97,7 +97,7 @@ Soil screening can help buyers reject unsuitable parcels, but is not a prerequis
 
 ## Data reliability and user trust
 
-Use repeatable source imports, stable parcel identities, visible freshness, and operational failure reporting. Preserve personal notes, status history, and list membership independently of source refreshes.
+Use repeatable source imports, stable parcel identities, visible freshness, and operational failure reporting. Preserve personal notes, status history, and list membership independently of source refreshes. For file-delivered sources, retain exact raw files as immutable, versioned artifacts in shared durable object storage outside Git and application-instance memory. Record source/version, URL, publication and retrieval dates, size, checksum, and validation status, and link each normalized import generation to its artifact reference/hash so past imports can be reproduced and compared; normalized query data remains in PostGIS. Source jobs own artifact handling; the scheduler/runner remains storage-agnostic. Choose the provider, retention, and access-control policy before implementation.
 
 Unknown or conflicting source information stays visible. Source updates are not necessarily newly occurring events; a GIS ownership update must not be described as a newly recorded deed.
 
