@@ -3,6 +3,7 @@ package union
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -10,6 +11,9 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/twpayne/go-geom"
+	"github.com/twpayne/go-geom/xy"
+	"github.com/twpayne/go-geom/xy/lineintersector"
+	"github.com/twpayne/go-geom/xy/location"
 )
 
 const unionGISSourceSRID = 3857
@@ -323,18 +327,87 @@ func geometryShape(raw map[string]interface{}) *geom.T {
 		return nil
 	}
 
-	flatCoords := make([]float64, 0)
-	ends := make([]int, 0, len(rings))
-	for _, ring := range rings {
-		for _, point := range ring {
-			flatCoords = append(flatCoords, point[0], point[1])
-		}
-		ends = append(ends, len(flatCoords))
+	// ArcGIS rings are clockwise shells and counter-clockwise holes. A feature
+	// can have several shells; flattening them into one Polygon invents holes.
+	type shell struct {
+		flat    []float64
+		area    float64
+		polygon *geom.Polygon
 	}
-
-	poly := geom.NewPolygonFlat(geom.XY, flatCoords, ends).SetSRID(unionGISSourceSRID)
-	var g geom.T = poly
+	var shells []shell
+	var holes [][]float64
+	for _, ring := range rings {
+		if len(ring) < 4 || ring[0] != ring[len(ring)-1] {
+			return nil
+		}
+		flat := make([]float64, 0, len(ring)*2)
+		var twiceArea float64
+		for i, point := range ring {
+			flat = append(flat, point[0], point[1])
+			if i > 0 {
+				previous := ring[i-1]
+				twiceArea += previous[0]*point[1] - point[0]*previous[1]
+			}
+		}
+		if xy.IsRingCounterClockwise(geom.XY, flat) {
+			holes = append(holes, flat)
+		} else {
+			shells = append(shells, shell{flat: flat, area: math.Abs(twiceArea), polygon: geom.NewPolygonFlat(geom.XY, flat, []int{len(flat)}).SetSRID(unionGISSourceSRID)})
+		}
+	}
+	if len(shells) == 0 {
+		return nil
+	}
+	for _, hole := range holes {
+		owner := -1
+		for i, candidate := range shells {
+			if ringInsideShell(hole, candidate.flat) && (owner < 0 || candidate.area < shells[owner].area) {
+				owner = i
+			}
+		}
+		if owner < 0 {
+			// An uncontained counterclockwise ring is still a parcel part.
+			// Keeping it as an exterior avoids inventing an invalid hole.
+			polygon := geom.NewPolygonFlat(geom.XY, hole, []int{len(hole)}).SetSRID(unionGISSourceSRID)
+			shells = append(shells, shell{flat: hole, area: math.Abs(polygon.Area()) * 2, polygon: polygon})
+			continue
+		}
+		polygon := shells[owner].polygon
+		coords := append(append([]float64(nil), polygon.FlatCoords()...), hole...)
+		ends := append(append([]int(nil), polygon.Ends()...), len(coords))
+		shells[owner].polygon = geom.NewPolygonFlat(geom.XY, coords, ends).SetSRID(unionGISSourceSRID)
+	}
+	if len(shells) == 1 {
+		var g geom.T = shells[0].polygon
+		return &g
+	}
+	multi := geom.NewMultiPolygon(geom.XY).SetSRID(unionGISSourceSRID)
+	for _, shell := range shells {
+		if err := multi.Push(shell.polygon); err != nil {
+			return nil
+		}
+	}
+	var g geom.T = multi
 	return &g
+}
+
+// A hole must be strictly inside its shell; interior vertices alone do not
+// prove containment when an edge crosses a concave shell boundary.
+func ringInsideShell(ring, shell []float64) bool {
+	for i := 0; i < len(ring)-2; i += 2 {
+		if xy.LocatePointInRing(geom.XY, geom.Coord(ring[i:i+2]), shell) != location.Interior {
+			return false
+		}
+		for j := 0; j < len(shell)-2; j += 2 {
+			intersection := lineintersector.LineIntersectsLine(lineintersector.RobustLineIntersector{},
+				geom.Coord(ring[i:i+2]), geom.Coord(ring[i+2:i+4]),
+				geom.Coord(shell[j:j+2]), geom.Coord(shell[j+2:j+4]))
+			if intersection.HasIntersection() {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func rings(value interface{}) ([][][2]float64, bool) {
@@ -346,24 +419,22 @@ func rings(value interface{}) ([][][2]float64, bool) {
 	for _, rawRing := range rawRings {
 		rawPoints, ok := rawRing.([]interface{})
 		if !ok || len(rawPoints) == 0 {
-			continue
+			return nil, false
 		}
 		ring := make([][2]float64, 0, len(rawPoints))
 		for _, rawPoint := range rawPoints {
 			rawCoords, ok := rawPoint.([]interface{})
 			if !ok || len(rawCoords) < 2 {
-				continue
+				return nil, false
 			}
 			x, okX := floatValue(rawCoords[0])
 			y, okY := floatValue(rawCoords[1])
 			if !okX || !okY {
-				continue
+				return nil, false
 			}
 			ring = append(ring, [2]float64{x, y})
 		}
-		if len(ring) > 0 {
-			out = append(out, ring)
-		}
+		out = append(out, ring)
 	}
 	return out, len(out) > 0
 }

@@ -34,6 +34,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 ## Code
 
 - Prefer simplicity over cleverness.
+- When assigning polygon rings to shells, verify full boundary containment, including edges crossing concave shells; one interior vertex is not sufficient.
 - Prefer composition over conditional branches.
 - Abstract on shared intent, not surface similarity.
 - Avoid nested conditionals; extract functions that narrow the branching surface.
