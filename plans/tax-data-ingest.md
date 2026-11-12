@@ -469,7 +469,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 **Build.**
 
 - [ ] Add `taxRunConfig` in `main.go` with `Enabled bool`, `Period time.Duration`, and `PipelineURL string`. The zero value of `Enabled` is false. The zero value of `PipelineURL` is empty. When `Enabled` is false, `main` does what trunk does. It does not download a county file. Do not add `func init`. Do not read `PipelineURL` from the environment.
-- [ ] When `Enabled` is true and `Period` is zero, use 180 days. 180 days is a chosen stand-in for about twice a year. It is not a measured county cadence. The operator changes `Period` in this struct. Do not read the period from the environment. Do not add a cron entry, and do not sleep for the period. The process still exits when the run finishes.
+- [ ] When `Enabled` is true and `Period` is zero, use 180 days. This is an automatically applied default, not a county-published or measured cadence and not evidence that the CSV updates every 180 days. It is a stand-in for checking about twice a year; the operator changes `Period` in this struct when observed file hashes establish a different cadence. Do not read the period from the environment. Do not add a cron entry, and do not sleep for the period. The process still exits when the run finishes.
 - [ ] When `Enabled` is true, call `Latest` for `tax_delinquent_balances`, then `tax_bills`, then `tax_foreclosure_cases`, then `tax_foreclosure_pipeline`. If the returned time is inside `Period`, skip that file. Otherwise call `Read` and the matching save. One file at a time. No worker pool. A canceled context stops the next file. An error from a file is returned. Do not log it and return nil. Print the saved count and the skip counts from each save, including the foreclosure join count, the pipeline saved count, and the unmatched count. The pipeline `Read` discovers its URL from the auction page unless that page has no anchor, in which case it uses `PipelineURL`.
 - [ ] Do not insert parcels. Do not call `IsLikelyVacantGISRecord` from the tax functions. Do not write `likely_vacant`. Do not import `internal/taxsource` from `main` if `main` only calls the union parsers and the taxstore functions.
 
@@ -647,7 +647,7 @@ The foreclosure list is prose, not a CSV. A county edit that keeps the PIN label
 
 A `TBD` case that later receives a case number becomes a second row. The old null-number row stays. The operator confirmed that. A later pass that matches the two rows by legal description and parcel set, then removes the stale row, is out of scope.
 
-The 180 day period is a chosen default. A real county cadence that is not about twice a year is a config change in `taxRunConfig.Period`, not a code change in the parsers.
+The 180 day period is an automatically applied, chosen default—not a measured or county-published cadence. A real cadence established from changed retained-file hashes is a config change in `taxRunConfig.Period`, not a code change in the parsers.
 
 Headless Chrome and `curl` both got Akamai 403 for the pipeline document. Headed Chrome got the PDF. tax-7 uses the same `Get` as the other county files. A 403 is an error, not a pass, and it is not a prompt for the operator to type PINs.
 
@@ -678,7 +678,7 @@ The operator said the devnetwedge tax site is out, and said he does not want a r
 
 On the open questions he said, "Don't worry about the schedule yet because we are still building that should just be configurable somewhere down the line. Probably should store likely-vacant somewhere. don't think we care about the personal property not sure where that is coming from and idk about renamed columns just yet."
 
-The schedule is config. tax-6 keeps the run off unless `Enabled` is set. The production period is about twice a year. The chosen default is 180 days, and the process does not loop. A later runner can read `Period`. This plan does not add cron.
+The schedule is config. tax-6 keeps the run off unless `Enabled` is set. The automatically applied 180-day default checks about twice a year; it is not a claim about the county's publication schedule. The process does not loop. A later runner can read `Period`. This plan does not add cron.
 
 Likely-vacant is `parcels.likely_vacant`, written by persist-1, not by this program. Delinquent, billing, foreclosure, and pipeline rows are stored for every matched parcel. `tax_owed` sums `balance_due` where that flag is true and is the likely-seller flag. The operator confirmed dropping the write-time gate. A house on the foreclosure list can join its balance. The view still hides that balance from the seller flag until the parcel is likely vacant.
 
