@@ -57,11 +57,56 @@ func (s *postgresStore) recordOverlap(ctx context.Context, jobID string) error {
 }
 
 func (s *postgresStore) recoverInterrupted(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT job_id
+		FROM job_attempts
+		WHERE outcome = 'running'`)
+	if err != nil {
+		return err
+	}
+	var jobIDs []string
+	for rows.Next() {
+		var jobID string
+		if err := rows.Scan(&jobID); err != nil {
+			rows.Close()
+			return err
+		}
+		jobIDs = append(jobIDs, jobID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, jobID := range jobIDs {
+		if err := s.recoverJob(ctx, jobID); err != nil {
+			return fmt.Errorf("recover job %q: %w", jobID, err)
+		}
+	}
+	return nil
+}
+
+func (s *postgresStore) recoverJob(ctx context.Context, jobID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var claimed bool
+	if err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock(hashtext($1))", jobID).Scan(&claimed); err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
+	_, err = tx.Exec(ctx, `
 		UPDATE job_attempts
 		SET outcome = 'interrupted', finished_at = now(), error_text = 'process ended before attempt completed'
-		WHERE outcome = 'running'`)
-	return err
+		WHERE job_id = $1 AND outcome = 'running'`, jobID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // LastCleanSuccess returns the latest attempt that completed without quarantine.
