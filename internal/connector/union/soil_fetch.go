@@ -63,6 +63,9 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 			break
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if len(polygons) != int(count) {
 		return nil, nil, fmt.Errorf("soil count mismatch: fetched %d want %d", len(polygons), count)
 	}

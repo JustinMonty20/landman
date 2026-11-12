@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -912,6 +913,63 @@ func TestFetchSoilPolygonsErrors(t *testing.T) {
 				t.Errorf("cancelled request sent %d times", calls)
 			}
 		})
+	}
+}
+
+type soilRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f soilRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type soilCancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b soilCancelOnClose) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
+func TestFetchSoilPolygons_CancelAfterFinalPageResponse(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/soil/layer197-page.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("returnCountOnly") == "true" {
+			fmt.Fprint(w, `{"count":1}`)
+			return
+		}
+		pageRequests++
+		w.Write(fixture)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := server.Client()
+	transport := client.Transport
+	client.Transport = soilRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp, err := transport.RoundTrip(req)
+		if err == nil && req.URL.Query().Get("returnCountOnly") != "true" {
+			resp.Body = soilCancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+		}
+		return resp, err
+	})
+	cfg := DefaultGISSourceConfig()
+	cfg.SoilQueryURL = server.URL
+	source, err := NewGISSource(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.httpClient = httpclient.NewRateLimitedClient(client, 10)
+	polygons, units, err := source.FetchSoilPolygons(ctx)
+	if !errors.Is(err, context.Canceled) || polygons != nil || units != nil || pageRequests != 1 {
+		t.Fatalf("polygons = %v, units = %v, error = %v, page requests = %d; want nil results, cancellation, one page", polygons, units, err, pageRequests)
 	}
 }
 
