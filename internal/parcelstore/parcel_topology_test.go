@@ -29,6 +29,7 @@ func TestShapeWriterLiveMultipleShells(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parcel.Identity.SourceParcelID = "topology-test-" + t.Name()
 	multi, ok := (*parcel.Geometry.Shape).(*geom.MultiPolygon)
 	if !ok || multi.NumPolygons() != 2 {
 		t.Fatalf("expected two shells, got %T", *parcel.Geometry.Shape)
@@ -55,14 +56,14 @@ func TestShapeWriterLiveMultipleShells(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		defer conn.Close(ctx)
-		_, err := conn.Exec(ctx, `DELETE FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id='03042001A'`)
+		_, err := conn.Exec(ctx, `DELETE FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, parcel.Identity.SourceParcelID)
 		if err != nil {
 			t.Error(err)
 		}
 	})
 	var valid bool
 	var count int
-	if err := conn.QueryRow(ctx, `SELECT ST_IsValid(shape), ST_NumGeometries(shape) FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id='03042001A'`).Scan(&valid, &count); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT ST_IsValid(shape), ST_NumGeometries(shape) FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, parcel.Identity.SourceParcelID).Scan(&valid, &count); err != nil {
 		t.Fatal(err)
 	}
 	if !valid || count != 2 {
