@@ -169,6 +169,61 @@ func TestShapeWriterUnionAndRetry(t *testing.T) {
 	}
 }
 
+func TestShapeWriterPersistsNumericZeroVacancy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		year *int64
+		sqft *float64
+	}{
+		{name: "YEARBLT=0", year: func() *int64 { v := int64(0); return &v }()},
+		{name: "SQFT=0", sqft: func() *float64 { v := 0.0; return &v }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dsn := os.Getenv("DATABASE_URL")
+			if dsn == "" {
+				t.Fatal("DATABASE_URL is empty")
+			}
+			parcel := unionParcel(t)
+			shape := square(0)
+			parcel.Geometry.Shape = &shape
+			parcel.Geometry.SRID = 3857
+			parcel.Building.YearBuilt = tc.year
+			parcel.Building.SqFt = tc.sqft
+			writer, err := parcelstore.NewShapeWriter(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			if err := writer.SavePart(ctx, parcel, true); err != nil {
+				t.Fatalf("save numeric-zero parcel: %v", err)
+			}
+			if err := writer.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			conn, err := pgx.Connect(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				defer conn.Close(ctx)
+				if _, err := conn.Exec(ctx, `DELETE FROM parcels WHERE county_id=$1 AND source_name=$2 AND source_parcel_id=$3`, parcel.Identity.CountyID, parcel.Identity.SourceName, parcel.Identity.SourceParcelID); err != nil {
+					t.Error(err)
+				}
+			})
+			var year *int64
+			var sqft *float64
+			var vacant bool
+			if err := conn.QueryRow(ctx, `SELECT year_built, sqft, likely_vacant FROM parcels WHERE county_id=$1 AND source_name=$2 AND source_parcel_id=$3`, parcel.Identity.CountyID, parcel.Identity.SourceName, parcel.Identity.SourceParcelID).Scan(&year, &sqft, &vacant); err != nil {
+				t.Fatal(err)
+			}
+			if !vacant || (tc.year != nil && (year == nil || *year != 0)) || (tc.sqft != nil && (sqft == nil || *sqft != 0)) {
+				t.Fatalf("year=%v sqft=%v likely_vacant=%v", year, sqft, vacant)
+			}
+		})
+	}
+}
+
 func TestShapeWriterRejectsMissingShapeAndRollsBack(t *testing.T) {
 	ctx := context.Background()
 	dsn := os.Getenv("DATABASE_URL")
