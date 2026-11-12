@@ -13,6 +13,8 @@ type Scheduler struct {
 	runner      *Runner
 	definitions map[string]Definition
 	cron        *cron.Cron
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // NewScheduler validates all definitions before registering any schedule. Schedules
@@ -35,16 +37,20 @@ func NewScheduler(runner *Runner, definitions []Definition) (*Scheduler, error) 
 		byID[definition.ID] = definition
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	scheduler := &Scheduler{
 		runner:      runner,
 		definitions: byID,
 		cron:        cron.New(),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	for _, definition := range definitions {
 		definition := definition
 		if _, err := scheduler.cron.AddFunc(definition.Schedule, func() {
-			_, _, _ = scheduler.runner.Run(context.Background(), definition)
+			_, _, _ = scheduler.runner.Run(scheduler.ctx, definition)
 		}); err != nil {
+			cancel()
 			return nil, fmt.Errorf("jobs: definition %q schedule: %w", definition.ID, err)
 		}
 	}
@@ -58,6 +64,7 @@ func (s *Scheduler) Start() {
 
 // Stop prevents new dispatches. The returned context completes after cron workers stop.
 func (s *Scheduler) Stop() context.Context {
+	s.cancel()
 	return s.cron.Stop()
 }
 
