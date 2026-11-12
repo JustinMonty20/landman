@@ -3,6 +3,7 @@ package union
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/JustinMonty20/landman/internal/soil"
 	"github.com/tidwall/gjson"
@@ -27,9 +28,10 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 	if arcErr := gjson.GetBytes(body, "error"); arcErr.Exists() {
 		return nil, nil, fmt.Errorf("soil count ArcGIS error: %s", arcErr.Raw)
 	}
-	count := gjson.GetBytes(body, "count")
-	if !count.Exists() || count.Type != gjson.Number || count.Int() < 0 || count.Float() != float64(count.Int()) {
-		return nil, nil, fmt.Errorf("soil response missing numeric count")
+	countValue := gjson.GetBytes(body, "count")
+	count, err := strconv.ParseInt(countValue.Raw, 10, 64)
+	if !countValue.Exists() || countValue.Type != gjson.Number || err != nil || count < 0 || int64(int(count)) != count {
+		return nil, nil, fmt.Errorf("soil response missing non-negative integer count")
 	}
 
 	var polygons []soil.Polygon
@@ -38,7 +40,7 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 		Where: "1=1", ReturnGeometry: true, ResultRecordCount: soilPageSize,
 		OrderByFields: "OBJECTID_1", OutFields: "OBJECTID_1,AREASYMBOL,SPATIALVER,MUSYM,MUKEY", Format: "json",
 	}
-	for offset := 0; offset < int(count.Int()); offset += soilPageSize {
+	for offset := 0; offset < int(count); offset += soilPageSize {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -61,8 +63,8 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 			break
 		}
 	}
-	if len(polygons) != int(count.Int()) {
-		return nil, nil, fmt.Errorf("soil count mismatch: fetched %d want %d", len(polygons), count.Int())
+	if len(polygons) != int(count) {
+		return nil, nil, fmt.Errorf("soil count mismatch: fetched %d want %d", len(polygons), count)
 	}
 	return polygons, units, nil
 }

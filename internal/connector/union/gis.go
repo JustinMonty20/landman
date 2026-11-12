@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
@@ -69,6 +70,10 @@ func NewGISSource(config GISSourceConfig) (*GISSource, error) {
 	}
 	if err := validateURL(config.SoilQueryURL); err != nil {
 		return nil, fmt.Errorf("invalid soil query URL: %w", err)
+	}
+	soilURL, _ := url.Parse(config.SoilQueryURL)
+	if soilURL.RawQuery != "" || soilURL.ForceQuery || strings.Contains(config.SoilQueryURL, "#") {
+		return nil, fmt.Errorf("invalid soil query URL: query and fragment are not allowed")
 	}
 
 	if config.BatchSize <= 0 {

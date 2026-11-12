@@ -71,6 +71,26 @@ func TestNewGISSource(t *testing.T) {
 			errMsg:  "invalid soil query URL",
 		},
 		{
+			name:    "soil URL with query",
+			config:  GISSourceConfig{BaseURL: "https://example.com/api", SoilQueryURL: "https://example.com/197/query?token=abc"},
+			wantErr: true, errMsg: "query and fragment are not allowed",
+		},
+		{
+			name:    "soil URL with empty query",
+			config:  GISSourceConfig{BaseURL: "https://example.com/api", SoilQueryURL: "https://example.com/197/query?"},
+			wantErr: true, errMsg: "query and fragment are not allowed",
+		},
+		{
+			name:    "soil URL with fragment",
+			config:  GISSourceConfig{BaseURL: "https://example.com/api", SoilQueryURL: "https://example.com/197/query#section"},
+			wantErr: true, errMsg: "query and fragment are not allowed",
+		},
+		{
+			name:    "soil URL with empty fragment",
+			config:  GISSourceConfig{BaseURL: "https://example.com/api", SoilQueryURL: "https://example.com/197/query#"},
+			wantErr: true, errMsg: "query and fragment are not allowed",
+		},
+		{
 			name: "zero batch size uses default",
 			config: GISSourceConfig{
 				BaseURL:   "https://example.com/api",
@@ -849,6 +869,10 @@ func TestFetchSoilPolygonsErrors(t *testing.T) {
 	}{
 		{name: "missing count", count: `{}`, want: "count"},
 		{name: "nonnumeric count", count: `{"count":"1"}`, want: "count"},
+		{name: "fractional count", count: `{"count":1.5}`, want: "count"},
+		{name: "precision-rounding fractional count", count: `{"count":1.0000000000000001}`, want: "count"},
+		{name: "large fractional count", count: `{"count":9007199254740992.5}`, want: "count"},
+		{name: "negative count", count: `{"count":-1}`, want: "count"},
 		{name: "ArcGIS count error", count: `{"error":{"message":"denied"}}`, want: "denied"},
 		{name: "HTTP status", count: `{"count":1}`, status: 500, want: "500"},
 		{name: "ArcGIS page error", count: `{"count":1}`, page: `{"error":{"message":"denied"}}`, want: "denied"},
