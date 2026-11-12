@@ -10,8 +10,76 @@ import (
 
 	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twpayne/go-geom/encoding/ewkb"
 )
+
+// ShapeWriter stores all pages in one transaction so failed imports leave no partial rows.
+type ShapeWriter struct {
+	pool *pgxpool.Pool
+	tx   pgx.Tx
+}
+
+// NewShapeWriter opens one import transaction from the supplied connection string.
+func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter, error) {
+	pool, err := pgxpool.New(ctx, connectionString)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	_, err = tx.Exec(ctx, `CREATE TEMP TABLE parcel_shape_parts (
+		source_parcel_id TEXT NOT NULL, shape GEOMETRY(Geometry, 3857) NOT NULL,
+		likely_vacant BOOLEAN NOT NULL
+	) ON COMMIT DROP`)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		pool.Close()
+		return nil, err
+	}
+	return &ShapeWriter{pool: pool, tx: tx}, nil
+}
+
+// SavePart stores a mapped parcel and its original shape on the same transaction.
+func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, likelyVacant bool) error {
+	shape, _, err := encodeShape(parcel.Geometry)
+	if err != nil {
+		return err
+	}
+	if len(shape) == 0 {
+		return fmt.Errorf("parcelstore: %s has no rings", parcel.Identity.SourceParcelID)
+	}
+	if _, err := SaveParcel(ctx, w.tx, parcel, likelyVacant); err != nil {
+		return err
+	}
+	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)
+		VALUES ($1, ST_GeomFromEWKB($2), $3)`, parcel.Identity.SourceParcelID, shape, likelyVacant)
+	return err
+}
+
+// Commit combines parts across pages and replaces the shape and vacancy flag.
+func (w *ShapeWriter) Commit(ctx context.Context) error {
+	_, err := w.tx.Exec(ctx, `UPDATE parcels AS p SET shape = parts.shape,
+		likely_vacant = parts.likely_vacant, updated_at = now()
+		FROM (SELECT source_parcel_id, ST_Multi(ST_Union(shape)) AS shape,
+			bool_or(likely_vacant) AS likely_vacant
+			FROM parcel_shape_parts GROUP BY source_parcel_id) AS parts
+		WHERE p.county_id = 'union' AND p.source_name = 'union_county_gis'
+		AND p.source_parcel_id = parts.source_parcel_id`)
+	if err != nil {
+		return err
+	}
+	return w.tx.Commit(ctx)
+}
+
+// Close releases the connection and rolls back an unfinished import.
+func (w *ShapeWriter) Close() {
+	_ = w.tx.Rollback(context.Background())
+	w.pool.Close()
+}
 
 // ErrMissingNaturalKey is returned when TrimSpace of CountyID, SourceName,
 // or SourceParcelID is empty. CountyCode is not part of this check.
@@ -40,7 +108,7 @@ const defaultStorageSRID = 3857
 //
 // The caller owns tx. SaveParcel does not begin or commit a transaction.
 // An error leaves tx aborted. The caller rolls it back.
-func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel) (models.ParcelID, error) {
+func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel, likelyVacant ...bool) (models.ParcelID, error) {
 	if err := identityKey(parcel.Identity); err != nil {
 		return "", err
 	}
@@ -53,6 +121,10 @@ func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel) (models
 		extras = json.RawMessage(`{}`)
 	}
 
+	vacant := false
+	if len(likelyVacant) > 0 {
+		vacant = likelyVacant[0]
+	}
 	var id models.ParcelID
 	err = tx.QueryRow(ctx, saveParcelSQL,
 		parcel.Identity.CountyID,
@@ -107,6 +179,7 @@ func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel) (models
 		parcel.Geometry.SourceArea,
 		parcel.Geometry.SourceLength,
 		extras,
+		vacant,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("parcelstore: save parcel: %w", err)
@@ -211,7 +284,8 @@ INSERT INTO parcels (
 	source_srid,
 	source_area,
 	source_length,
-	source_extras
+	source_extras,
+	likely_vacant
 ) VALUES (
 	$1, $2, $3, $4, $5, $6, $7,
 	$8, $9, $10, $11, $12, $13,
@@ -224,7 +298,8 @@ INSERT INTO parcels (
 	ST_GeomFromEWKB($47),
 	$48,
 	$49, $50, $51,
-	COALESCE($52::jsonb, '{}'::jsonb)
+	COALESCE($52::jsonb, '{}'::jsonb),
+	$53
 )
 ON CONFLICT (county_id, source_name, source_parcel_id)
 DO UPDATE SET
@@ -277,6 +352,7 @@ DO UPDATE SET
 	source_area = EXCLUDED.source_area,
 	source_length = EXCLUDED.source_length,
 	source_extras = EXCLUDED.source_extras,
+	likely_vacant = EXCLUDED.likely_vacant,
 	updated_at = now()
 RETURNING id
 `
