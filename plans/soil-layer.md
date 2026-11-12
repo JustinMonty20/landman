@@ -394,7 +394,7 @@ CREATE INDEX soil_polygon_parcels_parcel_id_idx ON soil_polygon_parcels (parcel_
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] No new Go test. `go test -race ./...` still passes with no database running. Run `rg -n "source_extras|union_soil|CREATE TYPE|parcel_soils|source_parcel_id|area_share" db/migrations/<prefix>_soil.sql` and require no matches. Run `rg -n "soil_map_units|gen_random_uuid|GIST" db/migrations/<prefix>_soil.sql` and require a match for each. Run `rg -n "CHECK \\(county_id IN"` on that file and require the quoted list to equal `county.All` as strings, in order.
+- [ ] Run `go test -race ./... -count=1` with no database running. Against an already migrated PostGIS database, run `go test -race -tags=postgres ./internal/soil -run TestSoilPolygonSRIDConstraint -count=1` to verify SRID 0 and 4326 fail with `soil_polygons_srid_check` (SQLSTATE 23514) and SRID 3857 is stored. Run `rg -n "source_extras|union_soil|CREATE TYPE|parcel_soils|source_parcel_id|area_share" db/migrations/<prefix>_soil.sql` and require no matches. Run `rg -n "soil_map_units|gen_random_uuid|GIST" db/migrations/<prefix>_soil.sql` and require a match for each. Run `rg -n "CHECK \\(county_id IN"` on that file and require the quoted list to equal `county.All` as strings, in order.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
