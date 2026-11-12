@@ -17,7 +17,7 @@ CREATE TABLE soil_polygons (
     map_unit_key TEXT NOT NULL REFERENCES soil_map_units (map_unit_key),
     spatial_version DOUBLE PRECISION,
     survey_saved_on DATE,
-    shape GEOMETRY(Geometry, 3857) NOT NULL,
+    shape GEOMETRY(Geometry) NOT NULL,
     fetched_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT soil_polygons_source_unique UNIQUE (county_id, source_name, object_id),
     CONSTRAINT soil_polygons_county_check CHECK (county_id IN ('union')),

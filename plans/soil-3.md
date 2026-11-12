@@ -6,7 +6,8 @@ Implement the shared storage schema from [soil-layer.md](soil-layer.md#add-the-s
 ## Acceptance checks
 - Goose up creates all three tables, the three specified indexes, UUID defaults, unique source and pair keys, Union county and EPSG:3857 shape checks, positive numeric overlap acres, and cascading join foreign keys.
 - A repeated source polygon or polygon/parcel upsert can preserve its UUID; distinct polygons sharing a map-unit key remain distinct.
-- Zero-acre overlaps, incorrect county, and incorrect SRID are rejected; deleting either referenced row removes only the join row.
+- Zero-acre overlaps and incorrect county are rejected; deleting either referenced row removes only the join row.
+- Soil polygon `shape` uses unconstrained `GEOMETRY(Geometry)` intentionally: PostGIS coerces SRID 0 to 3857 when the column has a 3857 typmod, before a CHECK can inspect it. The `soil_polygons_srid_check` validates the original input SRID instead. Insert shapes with SRID 0 and 4326 and confirm both are rejected; insert a shape with SRID 3857 and confirm it is accepted.
 - Goose down removes the join table first, then polygons, then map units. Run required static searches, `go test -race ./...`, and, when PostGIS is available, migrate up/down and exercise a half-square overlap fixture in EPSG:2264.
 
 ## Exclusions
