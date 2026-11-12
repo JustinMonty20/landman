@@ -3,7 +3,9 @@ package jobs
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestNewSchedulerValidatesDefinitions(t *testing.T) {
@@ -25,6 +27,61 @@ func TestNewSchedulerValidatesDefinitions(t *testing.T) {
 				t.Fatalf("NewScheduler() error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestSchedulerStopCancelsScheduledJob(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce, cancelledOnce sync.Once
+	store := &fakeStore{claimed: true}
+	scheduler, err := NewScheduler(newRunner(store), []Definition{{
+		ID:       "scheduled.test",
+		Schedule: "CRON_TZ=UTC @every 10ms",
+		Run: func(ctx context.Context) (Result, error) {
+			startedOnce.Do(func() { close(started) })
+			select {
+			case <-ctx.Done():
+				cancelledOnce.Do(func() { close(cancelled) })
+				return Result{}, ctx.Err()
+			case <-release:
+				return Result{}, nil
+			}
+		},
+	}})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+	var stopped context.Context
+	defer func() {
+		close(release)
+		if stopped != nil {
+			select {
+			case <-stopped.Done():
+			case <-time.After(2 * time.Second):
+				t.Error("scheduled job did not exit after release")
+			}
+		}
+	}()
+
+	scheduler.Start()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scheduled job did not start")
+	}
+
+	stopped = scheduler.Stop()
+	select {
+	case <-stopped.Done():
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Stop() did not finish after cancelling the scheduled job")
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("scheduled job did not receive cancellation")
 	}
 }
 
