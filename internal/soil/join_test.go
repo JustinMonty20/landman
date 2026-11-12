@@ -223,4 +223,34 @@ func TestSoilJoinPersistence(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT m.map_unit_name,s.survey_saved_on FROM soil_map_units m JOIN soil_polygons s ON s.map_unit_key=m.map_unit_key WHERE s.source_name=$1 AND s.object_id='half'`, source).Scan(&name, &survey); err != nil || name == nil || *name != "Local name" || survey.Format("2006-01-02") != "2026-09-03" {
 		t.Fatalf("enriched: %v %v %v", name, survey, err)
 	}
+	missingSource := source + "-missing-name"
+	missingKey := key + "-missing-name"
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, missingSource)
+		_, _ = db.Exec(ctx, `DELETE FROM soil_map_units WHERE map_unit_key=$1`, missingKey)
+	}()
+	missingPolygon := Polygon{County: county.Union, SourceName: missingSource, ObjectID: "missing", MapUnitKey: missingKey, Shape: polygons[0].Shape}
+	lookups := 0
+	missingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lookups++
+		if lookups == 1 {
+			_, _ = fmt.Fprintf(w, `{"Table":[[%q,"Test",null,"NC179","Union County",null]]}`, missingKey)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"Table":[[%q,"Test","Available name","NC179","Union County",null]]}`, missingKey)
+	}))
+	defer missingServer.Close()
+	missingUnits := []MapUnit{{MapUnitKey: missingKey, MapUnitSymbol: "Test", AreaSymbol: "NC179"}}
+	if err := store(ctx, db, county.Union, missingSource, []Polygon{missingPolygon}, missingUnits, missingServer.Client(), missingServer.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT map_unit_name FROM soil_map_units WHERE map_unit_key=$1`, missingKey).Scan(&name); err != nil || name != nil {
+		t.Fatalf("missing name must remain null: %v %v", name, err)
+	}
+	if err := store(ctx, db, county.Union, missingSource, []Polygon{missingPolygon}, missingUnits, missingServer.Client(), missingServer.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT map_unit_name FROM soil_map_units WHERE map_unit_key=$1`, missingKey).Scan(&name); err != nil || name == nil || *name != "Available name" || lookups != 2 {
+		t.Fatalf("missing name retry: %v lookups=%d err=%v", name, lookups, err)
+	}
 }

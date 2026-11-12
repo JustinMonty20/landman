@@ -77,7 +77,7 @@ func store(ctx context.Context, db beginner, countyID county.ID, source string, 
 			if _, ok := distinct[key]; !ok {
 				continue
 			}
-			if _, err = tx.Exec(ctx, `UPDATE soil_map_units SET map_unit_name=$2, map_unit_symbol=$3, area_symbol=$4, area_name=$5, fetched_at=now() WHERE map_unit_key=$1`, key, result.name, result.symbol, result.areaSymbol, result.areaName); err != nil {
+			if _, err = tx.Exec(ctx, `UPDATE soil_map_units SET map_unit_name=NULLIF($2, ''), map_unit_symbol=$3, area_symbol=$4, area_name=$5, fetched_at=now() WHERE map_unit_key=$1`, key, result.name, result.symbol, result.areaSymbol, result.areaName); err != nil {
 				return err
 			}
 		}
