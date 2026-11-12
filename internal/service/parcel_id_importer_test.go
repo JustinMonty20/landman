@@ -207,6 +207,43 @@ func TestParcelIDImportService_Run_Filter_FallbackFetch(t *testing.T) {
 	}
 }
 
+func TestParcelIDImportService_RecordHookBeforeIDs(t *testing.T) {
+	src := &fakeBatchSource{batches: [][]connector.RawRecord{{
+		{ParcelID: "HOUSE", RawData: map[string]interface{}{"geometry": "house-rings"}},
+		{ParcelID: "ZERO", RawData: map[string]interface{}{"geometry": "zero-rings"}},
+		{RawData: map[string]interface{}{"geometry": "null-pid-rings"}},
+	}}}
+	var called bool
+	svc := NewParcelIDImportService(src, 2000, WithParcelRecordHook(func(_ context.Context, records []connector.RawRecord) error {
+		called = true
+		if len(records) != 3 || records[0].RawData["geometry"] != "house-rings" || records[1].RawData["geometry"] != "zero-rings" || records[2].RawData["geometry"] != "null-pid-rings" {
+			t.Fatalf("records lost geometry: %+v", records)
+		}
+		return nil
+	}))
+	err := svc.Run(context.Background(), func(_ context.Context, _ int, ids []string) error {
+		if !called || !equalStrings(ids, []string{"HOUSE", "ZERO"}) {
+			t.Fatalf("ID hook before record hook or incorrect IDs: %v", ids)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParcelIDImportService_RecordHookErrorStopsPage(t *testing.T) {
+	src := &fakeBatchSource{batches: [][]connector.RawRecord{{{ParcelID: "P1"}}}}
+	want := errors.New("invalid rings")
+	svc := NewParcelIDImportService(src, 2000, WithParcelRecordHook(func(context.Context, []connector.RawRecord) error { return want }))
+	if err := svc.Run(context.Background(), func(context.Context, int, []string) error {
+		t.Fatal("ID hook ran after save failed")
+		return nil
+	}); !errors.Is(err, want) {
+		t.Fatalf("Run error = %v", err)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

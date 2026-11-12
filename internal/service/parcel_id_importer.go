@@ -14,15 +14,19 @@ type ParcelIDBatchHook func(ctx context.Context, batchIndex int, parcelIDs []str
 // ParcelRecordFilter returns true when a record should be included.
 type ParcelRecordFilter func(record connector.RawRecord) bool
 
+// ParcelRecordHook receives full page records before ID extraction.
+type ParcelRecordHook func(ctx context.Context, records []connector.RawRecord) error
+
 // ParcelIDImportOption customizes ParcelIDImportService behavior.
 type ParcelIDImportOption func(*ParcelIDImportService)
 
 // ParcelIDImportService streams parcel IDs from a source in batches.
 // It prefers batch-capable sources and falls back to Fetch + chunking.
 type ParcelIDImportService struct {
-	source    connector.DataSource
-	batchSize int
-	filter    ParcelRecordFilter
+	source     connector.DataSource
+	batchSize  int
+	filter     ParcelRecordFilter
+	recordHook ParcelRecordHook
 }
 
 // NewParcelIDImportService creates a new importer.
@@ -51,6 +55,11 @@ func WithParcelRecordFilter(filter ParcelRecordFilter) ParcelIDImportOption {
 	}
 }
 
+// WithParcelRecordHook configures page persistence before ID extraction.
+func WithParcelRecordHook(hook ParcelRecordHook) ParcelIDImportOption {
+	return func(s *ParcelIDImportService) { s.recordHook = hook }
+}
+
 // Run emits parcel ID batches via the hook.
 func (s *ParcelIDImportService) Run(ctx context.Context, onBatch ParcelIDBatchHook) error {
 	if s.source == nil {
@@ -64,6 +73,11 @@ func (s *ParcelIDImportService) Run(ctx context.Context, onBatch ParcelIDBatchHo
 		batchIndex := 0
 		return batchSource.FetchBatches(ctx, func(batch []connector.RawRecord) error {
 			batchIndex++
+			if s.recordHook != nil {
+				if err := s.recordHook(ctx, batch); err != nil {
+					return err
+				}
+			}
 			ids := extractParcelIDs(batch, s.filter)
 			if len(ids) == 0 {
 				return nil
@@ -81,6 +95,11 @@ func (s *ParcelIDImportService) Run(ctx context.Context, onBatch ParcelIDBatchHo
 }
 
 func (s *ParcelIDImportService) emitBatches(ctx context.Context, records []connector.RawRecord, onBatch ParcelIDBatchHook) error {
+	if s.recordHook != nil {
+		if err := s.recordHook(ctx, records); err != nil {
+			return err
+		}
+	}
 	ids := extractParcelIDs(records, s.filter)
 	if len(ids) == 0 {
 		return nil

@@ -11,6 +11,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/JustinMonty20/landman/internal/parcelstore"
 	"github.com/jackc/pgx/v5"
+	"github.com/twpayne/go-geom"
 )
 
 func TestSaveParcelKeepsID(t *testing.T) {
@@ -100,6 +101,114 @@ func TestSaveParcelKeepsID(t *testing.T) {
 	if gotTotal != total {
 		t.Fatalf("valuation_total %v", gotTotal)
 	}
+}
+
+func TestShapeWriterUnionAndRetry(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL is empty")
+	}
+	parcel := unionParcel(t)
+	parcel.Identity.SourceParcelID = "shape-" + t.Name()
+	first := square(0)
+	parcel.Geometry.Shape = &first
+	parcel.Geometry.SRID = 3857
+	w, err := parcelstore.NewShapeWriter(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.SavePart(ctx, parcel, false); err != nil {
+		t.Fatal(err)
+	}
+	second := square(2)
+	parcel.Geometry.Shape = &second
+	if err := w.SavePart(ctx, parcel, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var id string
+	var area float64
+	var vacant bool
+	query := `SELECT id, ST_Area(shape), likely_vacant FROM parcels WHERE source_parcel_id=$1`
+	if err := conn.QueryRow(ctx, query, parcel.Identity.SourceParcelID).Scan(&id, &area, &vacant); err != nil {
+		t.Fatal(err)
+	}
+	if id == "" || area != 2 || !vacant {
+		t.Fatalf("id=%q area=%v vacant=%v", id, area, vacant)
+	}
+	again, err := parcelstore.NewShapeWriter(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	parcel.Geometry.Shape = &first
+	if err := again.SavePart(ctx, parcel, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := again.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var newID string
+	if err := conn.QueryRow(ctx, query, parcel.Identity.SourceParcelID).Scan(&newID, &area, &vacant); err != nil {
+		t.Fatal(err)
+	}
+	if newID != id || area != 1 || vacant {
+		t.Fatalf("retry id=%q area=%v vacant=%v", newID, area, vacant)
+	}
+	if _, err := conn.Exec(ctx, `DELETE FROM parcels WHERE source_parcel_id=$1`, parcel.Identity.SourceParcelID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShapeWriterRejectsMissingShapeAndRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL is empty")
+	}
+	parcel := unionParcel(t)
+	parcel.Identity.SourceParcelID = "rollback-" + t.Name()
+	shape := square(0)
+	parcel.Geometry.Shape = &shape
+	parcel.Geometry.SRID = 3857
+	writer, err := parcelstore.NewShapeWriter(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.SavePart(ctx, parcel, true); err != nil {
+		t.Fatal(err)
+	}
+	parcel.Geometry.Shape = nil
+	if err := writer.SavePart(ctx, parcel, false); err == nil {
+		t.Fatal("missing rings saved")
+	}
+	writer.Close()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var count int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM parcels WHERE source_parcel_id=$1`, parcel.Identity.SourceParcelID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("partial import committed %d rows", count)
+	}
+}
+
+func square(x float64) geom.T {
+	var g geom.T = geom.NewPolygonFlat(geom.XY, []float64{x, 0, x + 1, 0, x + 1, 1, x, 1, x, 0}, []int{10}).SetSRID(3857)
+	return g
 }
 
 func testTx(t *testing.T) (context.Context, pgx.Tx) {
