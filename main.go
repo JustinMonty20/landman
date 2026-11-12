@@ -4,44 +4,61 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/parcelstore"
 	"github.com/JustinMonty20/landman/internal/service"
 )
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-
-	gisSource, err := union.NewGISSource(union.DefaultGISSourceConfig())
+	config := union.DefaultGISSourceConfig()
+	config.BatchSize = 2000
+	gisSource, err := union.NewGISSource(config)
 	if err != nil {
-		log.Fatalf("Failed to create GIS source: %v", err)
+		log.Fatalf("Create GIS source: %v", err)
 	}
-
-	fmt.Println("Streaming parcel IDs from Union County GIS...")
-	importer := service.NewParcelIDImportService(
-		gisSource,
-		50,
+	writer, err := parcelstore.NewShapeWriter(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		log.Fatalf("Create parcel writer: %v", err)
+	}
+	defer writer.Close()
+	translator := union.NewGISTranslator()
+	importer := service.NewParcelIDImportService(gisSource, 2000,
+		service.WithParcelRecordHook(func(ctx context.Context, records []connector.RawRecord) error {
+			for _, record := range records {
+				vacant := union.IsLikelyVacantGISRecord(record)
+				attrs, _ := record.RawData["attributes"].(map[string]interface{})
+				pid, _ := attrs["PID"].(string)
+				if pid == "" {
+					vacant = false
+				}
+				parcel, err := translator.Translate(record)
+				if err != nil {
+					return err
+				}
+				if err := writer.SavePart(ctx, *parcel, vacant); err != nil {
+					return err
+				}
+			}
+			return nil
+		}),
 		service.WithParcelRecordFilter(union.IsLikelyVacantGISRecord),
 	)
-
 	var totalIDs int
-	err = importer.Run(ctx, func(ctx context.Context, batchIndex int, parcelIDs []string) error {
-		totalIDs += len(parcelIDs)
-
-		sampleSize := min(3, len(parcelIDs))
-
-		fmt.Printf("Batch %d: %d parcel IDs", batchIndex, len(parcelIDs))
-		if sampleSize > 0 {
-			fmt.Printf(" (sample: %v)", parcelIDs[:sampleSize])
-		}
-		fmt.Println()
+	err = importer.Run(ctx, func(_ context.Context, _ int, ids []string) error {
+		totalIDs += len(ids)
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("Failed to stream parcel IDs: %v", err)
+		log.Fatalf("Import parcels: %v", err)
 	}
-
-	fmt.Printf("Total likely-vacant parcel IDs streamed: %d\n", totalIDs)
+	if err := writer.Commit(ctx); err != nil {
+		log.Fatalf("Commit parcels: %v", err)
+	}
+	fmt.Printf("Imported parcels, %d likely-vacant feature IDs\n", totalIDs)
 }
