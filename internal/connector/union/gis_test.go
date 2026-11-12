@@ -526,6 +526,82 @@ func TestGISSource_FetchBatches_CountMismatch(t *testing.T) {
 	}
 }
 
+func TestGISSource_NullPIDUsesObjectID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("returnCountOnly") == "true" {
+			fmt.Fprint(w, `{"count":2}`)
+			return
+		}
+		fmt.Fprint(w, `{"features":[{"attributes":{"PID":null,"OBJECTID":119062,"YEARBLT":null,"SQFT":null},"geometry":{"rings":[[[0,0],[1,0],[1,1],[0,0]]]}},{"attributes":{"PID":"P2","OBJECTID":119063},"geometry":{"rings":[[[0,0],[1,0],[1,1],[0,0]]]}}]}`)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL, BatchSize: 2000, RateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 1000)
+	if err := source.FetchBatches(context.Background(), func(records []connector.RawRecord) error {
+		if records[0].ParcelID != "119062" || records[1].ParcelID != "P2" || records[0].RawData["geometry"] == nil {
+			t.Errorf("records: %+v", records)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGISSource_ImportPagesAllFeatures(t *testing.T) {
+	const total = 4500
+	var requests []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		requests = append(requests, q)
+		if q.Get("returnCountOnly") == "true" {
+			fmt.Fprint(w, `{"count":4500}`)
+			return
+		}
+		offset, _ := strconv.Atoi(q.Get("resultOffset"))
+		limit, _ := strconv.Atoi(q.Get("resultRecordCount"))
+		if limit != 2000 || q.Get("where") != "1=1" || q.Get("orderByFields") != "OBJECTID" {
+			t.Errorf("feature request: %v", q)
+		}
+		n := min(limit, total-offset)
+		fmt.Fprint(w, `{"features":[`)
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				fmt.Fprint(w, ",")
+			}
+			fmt.Fprintf(w, `{"attributes":{"PID":"P%d"},"geometry":{"rings":[[[0,0],[1,0],[1,1],[0,0]]]}}`, offset+i)
+		}
+		fmt.Fprint(w, `]}`)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL, BatchSize: 2000, RateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.httpClient = httpclient.NewRateLimitedClient(server.Client(), 1000)
+	var pages, fetched int
+	if err := source.FetchBatches(context.Background(), func(records []connector.RawRecord) error {
+		pages++
+		fetched += len(records)
+		if records[0].RawData["geometry"] == nil {
+			t.Fatal("missing geometry")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fetched != total || pages != 3 || len(requests) != 4 {
+		t.Fatalf("fetched %d pages %d requests %d", fetched, pages, len(requests))
+	}
+	for i, offset := range []string{"", "2000", "4000"} {
+		if got := requests[i+1].Get("resultOffset"); got != offset {
+			t.Errorf("page %d offset %q", i, got)
+		}
+	}
+}
+
 func newTestGISSource(t *testing.T, server *httptest.Server) *GISSource {
 	t.Helper()
 	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL, RateLimit: 100, BatchSize: 50})

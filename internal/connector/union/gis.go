@@ -167,6 +167,9 @@ func (s *GISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHoo
 		}
 	}
 
+	if totalFetched != int(totalCount) {
+		return fmt.Errorf("count mismatch: fetched %d want %d", totalFetched, totalCount)
+	}
 	log.Printf("[%s] Fetch complete: %d total records in %v", s.Name(), totalFetched, time.Since(fetchedAt))
 	return nil
 }
@@ -183,7 +186,7 @@ func (s *GISSource) queryTotalParcels(ctx context.Context, params ArcGISParams) 
 	}
 
 	count := gjson.Get(string(body), "count")
-	if !count.Exists() {
+	if !count.Exists() || count.Type != gjson.Number || count.Int() < 0 {
 		return 0, fmt.Errorf("union county gis response missing count")
 	}
 	return count.Int(), nil
@@ -200,11 +203,25 @@ func (s *GISSource) fetchBatch(ctx context.Context, params ArcGISParams, fetched
 		return nil, err
 	}
 
-	features := gjson.Get(string(body), "features").Array()
+	if arcErr := gjson.Get(string(body), "error"); arcErr.Exists() {
+		return nil, fmt.Errorf("union county gis error: %s", arcErr.Raw)
+	}
+	features := gjson.Get(string(body), "features")
+	if !features.IsArray() {
+		return nil, fmt.Errorf("union county gis response missing features")
+	}
+	featureList := features.Array()
 
-	records := make([]connector.RawRecord, 0, len(features))
-	for _, feature := range features {
+	records := make([]connector.RawRecord, 0, len(featureList))
+	for _, feature := range featureList {
 		parcelID := feature.Get("attributes.PID").String()
+		if parcelID == "" {
+			objectID := feature.Get("attributes.OBJECTID")
+			if objectID.Type != gjson.Number {
+				return nil, fmt.Errorf("union county gis feature missing PID and OBJECTID")
+			}
+			parcelID = objectID.Raw
+		}
 
 		rawData := make(map[string]interface{})
 		feature.ForEach(func(key, value gjson.Result) bool {
