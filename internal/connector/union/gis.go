@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
@@ -16,9 +17,10 @@ import (
 
 // GISSourceConfig holds configuration for GISSource.
 type GISSourceConfig struct {
-	BaseURL   string
-	RateLimit int // requests per second
-	BatchSize int // number of records to fetch per request
+	BaseURL      string
+	SoilQueryURL string
+	RateLimit    int // requests per second
+	BatchSize    int // number of records to fetch per request
 }
 
 const defaultGISBatchSize = 500
@@ -26,17 +28,19 @@ const defaultGISBatchSize = 500
 // DefaultGISSourceConfig returns the default configuration for Union County GIS.
 func DefaultGISSourceConfig() GISSourceConfig {
 	return GISSourceConfig{
-		BaseURL:   "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query",
-		RateLimit: 1,
-		BatchSize: defaultGISBatchSize,
+		BaseURL:      "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query",
+		SoilQueryURL: "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197/query",
+		RateLimit:    1,
+		BatchSize:    defaultGISBatchSize,
 	}
 }
 
 // GISSource fetches parcel data from Union County's ArcGIS REST API.
 type GISSource struct {
-	baseURL    string
-	httpClient *httpclient.RateLimitedClient
-	batchSize  int
+	baseURL      string
+	soilQueryURL string
+	httpClient   *httpclient.RateLimitedClient
+	batchSize    int
 }
 
 // ArcGISParams represents Union County's ArcGIS query parameters.
@@ -61,6 +65,17 @@ func NewGISSource(config GISSourceConfig) (*GISSource, error) {
 		return nil, err
 	}
 
+	if config.SoilQueryURL == "" {
+		config.SoilQueryURL = DefaultGISSourceConfig().SoilQueryURL
+	}
+	if err := validateURL(config.SoilQueryURL); err != nil {
+		return nil, fmt.Errorf("invalid soil query URL: %w", err)
+	}
+	soilURL, _ := url.Parse(config.SoilQueryURL)
+	if soilURL.RawQuery != "" || soilURL.ForceQuery || strings.Contains(config.SoilQueryURL, "#") {
+		return nil, fmt.Errorf("invalid soil query URL: query and fragment are not allowed")
+	}
+
 	if config.BatchSize <= 0 {
 		config.BatchSize = defaultGISBatchSize
 	}
@@ -73,9 +88,10 @@ func NewGISSource(config GISSourceConfig) (*GISSource, error) {
 	rateLimitedClient := httpclient.NewRateLimitedClient(httpClient, config.RateLimit)
 
 	return &GISSource{
-		baseURL:    config.BaseURL,
-		httpClient: rateLimitedClient,
-		batchSize:  config.BatchSize,
+		baseURL:      config.BaseURL,
+		soilQueryURL: config.SoilQueryURL,
+		httpClient:   rateLimitedClient,
+		batchSize:    config.BatchSize,
 	}, nil
 }
 
