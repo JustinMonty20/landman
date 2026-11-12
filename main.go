@@ -9,8 +9,10 @@ import (
 
 	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/parcelstore"
 	"github.com/JustinMonty20/landman/internal/service"
+	"github.com/JustinMonty20/landman/internal/soil"
 )
 
 func main() {
@@ -21,6 +23,10 @@ func main() {
 	gisSource, err := union.NewGISSource(config)
 	if err != nil {
 		log.Fatalf("Create GIS source: %v", err)
+	}
+	polygons, units, err := gisSource.FetchSoilPolygons(ctx)
+	if err != nil {
+		log.Fatalf("Fetch soil polygons: %v", err)
 	}
 	writer, err := parcelstore.NewShapeWriter(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
@@ -59,6 +65,9 @@ func main() {
 	}
 	if err := writer.Commit(ctx); err != nil {
 		log.Fatalf("Commit parcels: %v", err)
+	}
+	if err := soil.Store(ctx, os.Getenv("DATABASE_URL"), county.Union, gisSource.Name(), polygons, units); err != nil {
+		log.Fatalf("Join soil polygons: %v", err)
 	}
 	fmt.Printf("Imported parcels, %d likely-vacant feature IDs\n", totalIDs)
 }
