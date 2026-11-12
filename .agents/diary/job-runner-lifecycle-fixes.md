@@ -1,0 +1,2 @@
+- **Skipped refactor:** Did not add separate scheduler admission maps, per-run cancellation handles, or a new shutdown API. `cron.Stop()` already waits for active callbacks, so the fix only needs to cancel the scheduler-owned context before calling it.
+- **Unrelated skill issue:** The pstack `no-comments` check could not run because its required `pistack-comment-sicko/SKILL.md` was missing at the certified path. I stopped that check and left comment review out of scope.

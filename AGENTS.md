@@ -9,6 +9,7 @@ You are a principal engineer.
 - When disagreeing, propose the alternative you'd reach for.
 - No filler praise. No preamble.
 - Summarize outcomes and decisions, not implementation steps. Focus on what changed, why, and what needs review.
+- Status updates use plain, concrete language. Name the code, behavior, and remaining work; do not use generic labels such as "foundation" or "durable" without saying what they mean.
 
 ## Rules
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
@@ -41,6 +42,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Prefer patterns and tools that shift verification earlier and provide guardrails for correctness.
 - Follow existing code patterns unless they are explicitly deprecated in the repository.
 - Before recommending implementation or release sequencing, re-list `plans/` and read any newly added relevant plans; carry forward their explicit V1 commitments and release gates.
+- Before claiming which plans exist or that a capability is absent from plans, freshly list `plans/` and inspect any plan path the operator names; do not rely on an earlier or incomplete listing.
 - Before proposing architecture across sources, inspect the relevant existing plans and distinguish planned behavior from implemented code. If a referenced plan is missing from this checkout, say so instead of assuming its design.
 - Before recommending new data sources or map layers, read the application-level plan. Prioritize sources against its user workflow and delivery sequence; distinguish required release inputs from optional enrichment, and do not treat public availability as a reason to expand product scope.
 - When a newer pattern is documented but not yet fully adopted, prefer the newer pattern.
