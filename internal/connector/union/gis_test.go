@@ -3,10 +3,12 @@ package union
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -61,6 +63,12 @@ func TestNewGISSource(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "must include host",
+		},
+		{
+			name:    "invalid soil query URL",
+			config:  GISSourceConfig{BaseURL: "https://example.com/api", SoilQueryURL: "not-a-url"},
+			wantErr: true,
+			errMsg:  "invalid soil query URL",
 		},
 		{
 			name: "zero batch size uses default",
@@ -129,6 +137,10 @@ func TestDefaultGISSourceConfig(t *testing.T) {
 	expectedURL := "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query"
 	if config.BaseURL != expectedURL {
 		t.Errorf("BaseURL = %q, want %q", config.BaseURL, expectedURL)
+	}
+
+	if want := "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197/query"; config.SoilQueryURL != want {
+		t.Errorf("SoilQueryURL = %q, want %q", config.SoilQueryURL, want)
 	}
 
 	if config.RateLimit != 1 {
@@ -753,5 +765,173 @@ func TestGISSource_buildURL(t *testing.T) {
 	}
 	if !strings.Contains(rawURL, "where=1%3D1") {
 		t.Errorf("URL should contain encoded where param, got: %s", rawURL)
+	}
+}
+
+func TestFetchSoilPolygons(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/soil/layer197-page.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Features []json.RawMessage `json:"features"`
+		Exceeded bool              `json:"exceededTransferLimit"`
+	}
+	if err := json.Unmarshal(fixture, &captured); err != nil || len(captured.Features) != 1 || !captured.Exceeded {
+		t.Fatalf("invalid captured page: %v, %+v", err, captured)
+	}
+	feature := captured.Features[0]
+	var requests []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/197/query" || r.Header.Get("User-Agent") != "ParcelDataCollection/0.0.1" {
+			t.Errorf("unexpected soil request: %s, user agent %q", r.URL.Path, r.Header.Get("User-Agent"))
+		}
+		q := r.URL.Query()
+		requests = append(requests, q)
+		if q.Get("returnCountOnly") == "true" {
+			fmt.Fprint(w, `{"count":3250}`)
+			return
+		}
+		n := 2000
+		if q.Get("resultOffset") == "2000" {
+			n = 1250
+		}
+		features := make([]json.RawMessage, n)
+		for i := range features {
+			features[i] = feature
+		}
+		json.NewEncoder(w).Encode(struct {
+			Features []json.RawMessage `json:"features"`
+			Exceeded bool              `json:"exceededTransferLimit"`
+		}{features, true})
+	}))
+	defer server.Close()
+	cfg := DefaultGISSourceConfig()
+	cfg.SoilQueryURL = server.URL + "/197/query"
+	cfg.BaseURL = server.URL + "/215/query"
+	cfg.BatchSize = 50
+	source, err := NewGISSource(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	polygons, units, err := source.FetchSoilPolygons(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(polygons) != 3250 || len(units) != 3250 || polygons[0].ObjectID != "1" || units[0].MapUnitSymbol != "ChA" {
+		t.Fatalf("unexpected translation: %d polygons, %d units", len(polygons), len(units))
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want count + two pages", len(requests))
+	}
+	for i, q := range requests {
+		if q.Get("where") != "1=1" || q.Get("f") != "json" {
+			t.Errorf("request %d: %v", i, q)
+		}
+		if i == 0 {
+			continue
+		}
+		if q.Get("resultOffset") != []string{"", "", "2000"}[i] || q.Get("resultRecordCount") != "2000" || q.Get("orderByFields") != "OBJECTID_1" || q.Get("returnGeometry") != "true" || q.Get("outFields") != "OBJECTID_1,AREASYMBOL,SPATIALVER,MUSYM,MUKEY" {
+			t.Errorf("page %d: %v", i, q)
+		}
+	}
+}
+
+func TestFetchSoilPolygonsErrors(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/soil/layer197-page.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, count, page, want string
+		status                  int
+		cancel                  bool
+	}{
+		{name: "missing count", count: `{}`, want: "count"},
+		{name: "nonnumeric count", count: `{"count":"1"}`, want: "count"},
+		{name: "ArcGIS count error", count: `{"error":{"message":"denied"}}`, want: "denied"},
+		{name: "HTTP status", count: `{"count":1}`, status: 500, want: "500"},
+		{name: "ArcGIS page error", count: `{"count":1}`, page: `{"error":{"message":"denied"}}`, want: "denied"},
+		{name: "short count", count: `{"count":2}`, page: string(fixture), want: "count mismatch"},
+		{name: "cancel before count", cancel: true, want: "context canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Query().Get("returnCountOnly") == "true" {
+					fmt.Fprint(w, tc.count)
+					return
+				}
+				if tc.status != 0 {
+					w.WriteHeader(tc.status)
+				}
+				fmt.Fprint(w, tc.page)
+			}))
+			defer server.Close()
+			cfg := DefaultGISSourceConfig()
+			cfg.SoilQueryURL = server.URL
+			source, err := NewGISSource(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			polygons, units, err := source.FetchSoilPolygons(ctx)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || polygons != nil || units != nil {
+				t.Fatalf("got %d polygons, %d units, err %v; want %q", len(polygons), len(units), err, tc.want)
+			}
+			if tc.cancel && calls != 0 {
+				t.Errorf("cancelled request sent %d times", calls)
+			}
+		})
+	}
+}
+
+func TestFetchSoilPolygons_CancelBeforeNextPage(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/soil/layer197-page.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Features []json.RawMessage `json:"features"`
+	}
+	if err := json.Unmarshal(fixture, &response); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pageRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("returnCountOnly") == "true" {
+			fmt.Fprint(w, `{"count":2001}`)
+			return
+		}
+		pageRequests++
+		if pageRequests > 1 {
+			t.Error("requested another page after cancellation")
+		}
+		features := make([]json.RawMessage, 2000)
+		for i := range features {
+			features[i] = response.Features[0]
+		}
+		json.NewEncoder(w).Encode(struct {
+			Features []json.RawMessage `json:"features"`
+		}{features})
+		cancel()
+	}))
+	defer server.Close()
+	cfg := DefaultGISSourceConfig()
+	cfg.SoilQueryURL = server.URL
+	source, err := NewGISSource(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = source.FetchSoilPolygons(ctx)
+	if !errors.Is(err, context.Canceled) || pageRequests != 1 {
+		t.Fatalf("error = %v, page requests = %d", err, pageRequests)
 	}
 }
