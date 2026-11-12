@@ -1,0 +1,1 @@
+- **Unrelated bug or code smell:** The complete isolated Union import commits, but `ST_IsValid` reports 28 stored parcels with self-touching source rings (not the free-hole topology defect). Repairing source self-intersections or changing persistence validity policy is outside this fix and would require geometry semantics and a separate decision.

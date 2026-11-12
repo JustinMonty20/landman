@@ -2,11 +2,13 @@ package union
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
+	"github.com/twpayne/go-geom"
 )
 
 // compile-time interface check
@@ -277,7 +279,7 @@ func TestGISTranslator_TranslateGeometry(t *testing.T) {
 				"rings": []interface{}{
 					[]interface{}{
 						[]interface{}{0.0, 0.0},
-						[]interface{}{1.0, 0.0},
+						[]interface{}{0.0, 1.0},
 						[]interface{}{1.0, 1.0},
 						[]interface{}{0.0, 0.0},
 					},
@@ -304,7 +306,7 @@ func TestGISTranslator_TranslateGeometry(t *testing.T) {
 	if shape.SRID() != 3857 {
 		t.Errorf("shape.SRID = %d, want 3857", shape.SRID())
 	}
-	if got := shape.FlatCoords(); len(got) != 8 || got[0] != 0 || got[2] != 1 || got[5] != 1 {
+	if got := shape.FlatCoords(); len(got) != 8 || got[0] != 0 || got[2] != 0 || got[5] != 1 {
 		t.Fatalf("shape.FlatCoords() = %v, want parsed ring coordinates", got)
 	}
 }
@@ -421,5 +423,67 @@ func assertFloat(t *testing.T, got *float64, want float64, field string) {
 	t.Helper()
 	if got == nil || *got != want {
 		t.Fatalf("%s = %v, want %f", field, got, want)
+	}
+}
+
+func TestGISTranslatorLiveMultipleShells(t *testing.T) {
+	data, err := os.ReadFile("testdata/parcel-multiple-shells.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var feature map[string]interface{}
+	if err := json.Unmarshal(data, &feature); err != nil {
+		t.Fatal(err)
+	}
+	parcel, err := NewGISTranslator().Translate(connector.RawRecord{SourceName: "union_county_gis", ParcelID: "03042001A", RawData: feature})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parcel.Geometry.Shape == nil {
+		t.Fatal("live parcel shape is nil")
+	}
+	multi, ok := (*parcel.Geometry.Shape).(*geom.MultiPolygon)
+	if !ok || multi.NumPolygons() != 2 {
+		t.Fatalf("expected both exterior rings, got %T", *parcel.Geometry.Shape)
+	}
+	for i := 0; i < 2; i++ {
+		if multi.Polygon(i).NumLinearRings() != 1 {
+			t.Fatalf("shell %d has a false hole", i)
+		}
+	}
+}
+
+func TestGISTranslatorAssociatesHoleWithContainingShell(t *testing.T) {
+	ring := func(points ...[]float64) []interface{} {
+		out := make([]interface{}, len(points))
+		for i, p := range points {
+			out[i] = []interface{}{p[0], p[1]}
+		}
+		return out
+	}
+	translate := func(rings ...interface{}) *geom.T {
+		t.Helper()
+		parcel, err := NewGISTranslator().Translate(connector.RawRecord{SourceName: "union_county_gis", ParcelID: "hole-test", RawData: map[string]interface{}{"geometry": map[string]interface{}{"rings": rings}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parcel.Geometry.Shape
+	}
+	outerA := ring([]float64{0, 0}, []float64{0, 10}, []float64{10, 10}, []float64{10, 0}, []float64{0, 0})
+	outerB := ring([]float64{20, 0}, []float64{20, 10}, []float64{30, 10}, []float64{30, 0}, []float64{20, 0})
+	hole := ring([]float64{1, 1}, []float64{3, 1}, []float64{3, 3}, []float64{1, 3}, []float64{1, 1})
+	shape := translate(outerA, outerB, hole)
+	if shape == nil {
+		t.Fatal("valid shells and hole have no shape")
+	}
+	multi, ok := (*shape).(*geom.MultiPolygon)
+	if !ok || multi.NumPolygons() != 2 || multi.Polygon(0).NumLinearRings() != 2 || multi.Polygon(1).NumLinearRings() != 1 {
+		t.Fatalf("hole assigned to wrong shell: %T", *shape)
+	}
+	if translate(hole) != nil {
+		t.Fatal("unassigned hole accepted")
+	}
+	if translate(outerA, []interface{}{[]interface{}{1.0}}) != nil {
+		t.Fatal("malformed second ring was silently discarded")
 	}
 }
