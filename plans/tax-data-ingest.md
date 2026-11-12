@@ -6,6 +6,10 @@ The county-neutral source reads four Union files. They are the billing file, the
 
 Run tax-1 first. Run tax-2 after persist-1. Run tax-3, tax-4, tax-5, and tax-7 after tax-1 and tax-2. Run tax-6 after those four. The production run is about twice a year, and the period is config.
 
+## Raw file artifact storage
+
+All downloaded tax source files are retained as exact, immutable versions in shared durable object storage before parsing. Keep artifacts outside Git and application-instance memory; large files must be processed with bounded memory using streaming and/or temporary disk. Record source identity, discovered publication/version, URL, retrieval time, byte size, SHA-256, object reference, and validation result, linked to the resulting dataset import, so an import can be reproduced or compared with a later file. Typed tax tables remain the query surface; the raw artifacts are retained evidence, not a replacement database. The file-source code owns staging and artifact references; the job runner does not know about the store. Provider, retention duration, and access controls remain implementation decisions.
+
 ## How to read this
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.

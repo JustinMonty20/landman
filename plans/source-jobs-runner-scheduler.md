@@ -2,7 +2,7 @@
 
 ## Goal and current constraints
 
-Define jobs in Go, one county source per job with its own calendar schedule. The scheduler triggers jobs; the runner owns exclusion and attempt history; the source job owns fetching, normalization, quarantine policy, and its database transaction boundaries. An interrupted full scan starts from page one. Already committed rows, where a job commits before completion, are safely upserted again. No page cursor or mid-scan resume in v1.
+Define jobs in Go, one county source per job with its own calendar schedule. The scheduler triggers jobs; the runner owns exclusion and attempt history; the source job owns fetching, normalization, quarantine policy, and its database transaction boundaries. For file-delivered sources, the source job also owns discovery, immutable artifact staging/validation, and parsing; the runner has no object-store knowledge or artifact lifecycle responsibilities. The shared artifact store is configured at composition time, outside the runner contract. An interrupted full scan starts from page one. Already committed rows, where a job commits before completion, are safely upserted again. No page cursor or mid-scan resume in v1.
 
 This is a plan, not authorization to implement. Branch `plan/source-jobs-runner-scheduler` and PR title `[plan:source-jobs-runner-scheduler] ...` follow `AGENTS.md`.
 
