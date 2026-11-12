@@ -4,7 +4,7 @@ You want each soil polygon stored as its own geography, with its own id, so a la
 
 Union County is the first adapter. It reads MapServer layer 197. A polygon is not keyed by a parcel. The join table stores a polygon UUID, `parcels.id`, and the overlap acres. A second run upserts and keeps those UUIDs.
 
-Stored map geometry stays `GEOMETRY(Geometry, 3857)`. Overlap acres are computed in EPSG:2264. Soil never inserts a parcel. The PRs are filter-1, soil-1, persist-1, soil-2, soil-3, soil-4, and soil-5. The operator lands each one.
+Stored soil geometry uses `GEOMETRY(Geometry)` with a `ST_SRID(shape) = 3857` check, so unknown input SRIDs reject instead of being silently relabelled by a 3857 typmod. Overlap acres are computed in EPSG:2264. Soil never inserts a parcel. The PRs are filter-1, soil-1, persist-1, soil-2, soil-3, soil-4, and soil-5. The operator lands each one.
 
 The county ingest uses one HTTP client at one request per second. It downloads every layer 215 parcel, pages 2000 rows, and writes each page in that loop. `likely_vacant` is a column on the parcel. The overlap insert is one SQL statement over every stored shape.
 
@@ -342,7 +342,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no map UI 
 - [ ] `soil_polygons.id` and `soil_polygon_parcels.id` are `UUID PRIMARY KEY DEFAULT gen_random_uuid()`. Do not add `pgcrypto`. `000001` already creates it. The application id is that UUID. The upsert key for a polygon is `(county_id, source_name, object_id)`. The upsert key for a join row is `(soil_polygon_id, parcel_id)`.
 - [ ] `county_id` on `soil_polygons` is `TEXT NOT NULL`, the same type as `parcels.county_id`. The `CHECK` list is the `String` values of `county.All`, in that order. On trunk that list is `('union')`. A later county PR drops and re-adds the check. This PR does not add a county.
 - [ ] `soil_map_units` is keyed only by `map_unit_key`. It has no county column. `MUKEY` is national.
-- [ ] `soil_polygons.shape` is `GEOMETRY(Geometry, 3857) NOT NULL`, with a SRID check and a GiST index. The GiST index is what a later map uses to find polygons in a view. Do not add tiles in this PR.
+- [ ] `soil_polygons.shape` is `GEOMETRY(Geometry) NOT NULL`, with a `ST_SRID(shape) = 3857` check and a GiST index. Do not use a 3857 typmod: it silently relabels SRID 0 before the check can reject it. The GiST index is what a later map uses to find polygons in a view. Do not add tiles in this PR.
 - [ ] `overlap_acres` is `NUMERIC(14, 6) NOT NULL` with `CHECK (overlap_acres > 0)`. Do not add `area_share`, `intersection_area_sq_m`, `source_parcel_id`, or a unique key on `(parcel_id, map_unit_key)`.
 - [ ] Do not add a JSON document column. Do not write these rows into `parcels.source_extras`. Do not name any table with a `union_` prefix. Do not create `parcel_soils`.
 
@@ -365,7 +365,7 @@ CREATE TABLE soil_polygons (
     map_unit_key TEXT NOT NULL REFERENCES soil_map_units (map_unit_key),
     spatial_version DOUBLE PRECISION,
     survey_saved_on DATE,
-    shape GEOMETRY(Geometry, 3857) NOT NULL,
+    shape GEOMETRY(Geometry) NOT NULL,
     fetched_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT soil_polygons_source_unique UNIQUE (county_id, source_name, object_id),
     CONSTRAINT soil_polygons_county_check CHECK (county_id IN ('union')),
