@@ -11,6 +11,7 @@ import (
 )
 
 const soilDataAccessURL = "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest"
+const nameLookupTimeout = 5 * time.Second
 
 type nameResult struct {
 	key, symbol, name, areaSymbol, areaName string
@@ -28,7 +29,9 @@ func fetchNames(ctx context.Context, client *http.Client, endpoint string, keys 
 	}
 	query := fmt.Sprintf(`SELECT m.mukey, m.musym, m.muname, l.areasymbol, s.areaname, s.saverest FROM mapunit AS m JOIN legend AS l ON m.lkey = l.lkey LEFT JOIN sacatalog AS s ON l.areasymbol = s.areasymbol WHERE m.mukey IN (%s)`, strings.Join(quoted, ","))
 	form := url.Values{"query": {query}, "format": {"JSON"}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	lookupCtx, cancel := context.WithTimeout(ctx, nameLookupTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(lookupCtx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}

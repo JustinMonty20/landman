@@ -2,10 +2,12 @@ package soil
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSoilNamesBatchAndSurveyDate(t *testing.T) {
@@ -25,6 +27,30 @@ func TestSoilNamesBatchAndSurveyDate(t *testing.T) {
 	}
 	if names["115341"].name != "Chewacla silt loam" || names["115341"].surveyDate.Format("2006-01-02") != "2026-09-03" {
 		t.Fatal(names["115341"])
+	}
+}
+
+func TestSoilNamesTimeoutAndCallerCancellation(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	start := time.Now()
+	if _, err := fetchNames(context.Background(), server.Client(), server.URL, []string{"1"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled lookup: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > nameLookupTimeout+3*time.Second {
+		t.Fatalf("optional lookup exceeded bound: %s", elapsed)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := fetchNames(ctx, server.Client(), server.URL, []string{"1"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller cancellation: %v", err)
 	}
 }
 

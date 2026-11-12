@@ -1,0 +1,1 @@
+[Out-of-scope decision] Final-page cancellation in `FetchSoilPolygons` belongs to soil-2, not soil-4. It will not be changed in this PR so the soil-4 file boundary remains intact; it needs a separate fix.

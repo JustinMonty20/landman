@@ -19,7 +19,7 @@ import (
 )
 
 func TestSoilJoinStatement(t *testing.T) {
-	for _, part := range []string{"ST_Transform", "2264", "soil_polygons", "soil_polygon_parcels", "ST_Intersection", "overlap_acres > 0", "p.shape IS NOT NULL", "ON CONFLICT (soil_polygon_id, parcel_id)"} {
+	for _, part := range []string{"ST_Transform", "2264", "soil_polygons", "soil_polygon_parcels", "ST_Intersection", "overlap_acres > 0", "p.shape IS NOT NULL", "s.source_name = p.source_name", "ON CONFLICT (soil_polygon_id, parcel_id)"} {
 		if !strings.Contains(overlapInsert, part) {
 			t.Errorf("missing %s", part)
 		}
@@ -137,9 +137,49 @@ func TestSoilJoinPersistence(t *testing.T) {
 	if err := store(ctx, db, county.Union, emptySource, []Polygon{emptyPolygon}, units, server.Client(), server.URL); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, emptySource)
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM soil_polygon_parcels WHERE soil_polygon_id IN (SELECT id FROM soil_polygons WHERE source_name=$1)`, emptySource)
+		_, _ = db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, emptySource)
+	}()
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN soil_polygons s ON s.id=j.soil_polygon_id WHERE s.source_name=$1`, emptySource).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("empty join: %d %v", count, err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygons WHERE source_name=$1`, emptySource).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("second-source polygon: %d %v", count, err)
+	}
+	// The second-source polygon overlaps both stored parcels, but importing the first
+	// source must not attach either parcel to it.
+	run(polygons[:1])
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN soil_polygons s ON s.id=j.soil_polygon_id WHERE s.source_name=$1`, emptySource).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("cross-source joins: %d %v", count, err)
+	}
+	// An unresponsive optional name service is bounded; the geometry and stub still commit.
+	release := make(chan struct{})
+	stallServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer stallServer.Close()
+	defer close(release)
+	stallSource := source + "-stall"
+	stallKey := key + "-stall"
+	stallPolygon := Polygon{County: county.Union, SourceName: stallSource, ObjectID: "stall", MapUnitKey: stallKey, Shape: polygons[0].Shape}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, stallSource)
+		_, _ = db.Exec(ctx, `DELETE FROM soil_map_units WHERE map_unit_key=$1`, stallKey)
+	}()
+	start := time.Now()
+	if err := store(ctx, db, county.Union, stallSource, []Polygon{stallPolygon}, []MapUnit{{MapUnitKey: stallKey}}, stallServer.Client(), stallServer.URL); err != nil {
+		t.Fatalf("stalled names prevented geometry: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > nameLookupTimeout+3*time.Second {
+		t.Fatalf("optional names blocked geometry for %s", elapsed)
+	}
+	var stubName *string
+	if err := db.QueryRow(ctx, `SELECT m.map_unit_name FROM soil_polygons s JOIN soil_map_units m ON m.map_unit_key=s.map_unit_key WHERE s.source_name=$1`, stallSource).Scan(&stubName); err != nil || stubName != nil {
+		t.Fatalf("stalled names stub: %v %v", stubName, err)
 	}
 	// A failure after the stub insert cannot publish a partial snapshot.
 	badSource := source + "-bad"

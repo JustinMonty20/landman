@@ -16,7 +16,8 @@ const overlapInsert = `WITH hit AS (
  SELECT s.id AS soil_polygon_id, p.id AS parcel_id,
  ST_Area(ST_Transform(ST_Intersection(p.shape, s.shape), 2264)) / 43560 AS overlap_acres
  FROM parcels AS p JOIN soil_polygons AS s
- ON s.county_id = p.county_id AND ST_Intersects(p.shape, s.shape)
+ ON s.county_id = p.county_id AND s.source_name = p.source_name
+ AND ST_Intersects(p.shape, s.shape)
  WHERE p.county_id = $1 AND p.source_name = $2 AND p.shape IS NOT NULL
 )
 INSERT INTO soil_polygon_parcels (soil_polygon_id, parcel_id, overlap_acres)
