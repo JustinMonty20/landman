@@ -16,6 +16,8 @@ func NewRunner(pool *pgxpool.Pool) (*Runner, error) {
 	return newRunner(&postgresStore{pool: pool}), nil
 }
 
+const quarantinePayloadLimit = 64 * 1024
+
 type postgresStore struct {
 	pool *pgxpool.Pool
 }
@@ -46,7 +48,7 @@ func (s *postgresStore) claim(ctx context.Context, jobID string) (attempt, bool,
 		conn.Release()
 		return nil, false, err
 	}
-	return &postgresAttempt{conn: conn, id: id, jobID: jobID}, true, nil
+	return &postgresAttempt{conn: conn, attemptID: id, jobID: jobID}, true, nil
 }
 
 func (s *postgresStore) recordOverlap(ctx context.Context, jobID string) error {
@@ -128,10 +130,12 @@ func (s *postgresStore) LastCleanSuccess(ctx context.Context, jobID string) (Las
 }
 
 type postgresAttempt struct {
-	conn  *pgxpool.Conn
-	id    string
-	jobID string
+	conn      *pgxpool.Conn
+	attemptID string
+	jobID     string
 }
+
+func (a *postgresAttempt) id() string { return a.attemptID }
 
 func (a *postgresAttempt) finish(ctx context.Context, outcome Outcome, result Result, runErr error) error {
 	defer a.conn.Release()
@@ -145,7 +149,7 @@ func (a *postgresAttempt) finish(ctx context.Context, outcome Outcome, result Re
 	_, err := a.conn.Exec(ctx, `
 		UPDATE job_attempts
 		SET finished_at = now(), outcome = $2, processed_count = $3, quarantined_count = $4, error_text = $5
-		WHERE id = $1`, a.id, outcome, result.Processed, result.Quarantined, errorText)
+		WHERE id = $1`, a.attemptID, outcome, result.Processed, result.Quarantined, errorText)
 	return err
 }
 
@@ -168,16 +172,32 @@ func (s *postgresStore) Quarantine(ctx context.Context, record QuarantineRecord)
 	if len(record.Payload) == 0 && record.PayloadReference == "" {
 		return fmt.Errorf("jobs: quarantine payload or reference is required")
 	}
+	if len(record.Payload) > quarantinePayloadLimit {
+		return fmt.Errorf("jobs: quarantine payload exceeds %d bytes", quarantinePayloadLimit)
+	}
+	attemptID, ok := ctx.Value(attemptIDKey{}).(string)
+	if !ok || attemptID == "" {
+		return fmt.Errorf("jobs: quarantine requires an active attempt")
+	}
 	var payload *string
 	if len(record.Payload) > 0 {
 		text := string(record.Payload)
 		payload = &text
 	}
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO quarantined_records (job_id, county_id, source_name, raw_record_key, payload, payload_reference, reason)
-		VALUES ($1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7)
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO quarantined_records (job_id, county_id, source_name, raw_record_key, payload, payload_reference, reason, attempt_id)
+		SELECT $1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7, id
+		FROM job_attempts
+		WHERE id = $8::uuid AND job_id = $1 AND outcome = 'running'
 		ON CONFLICT (job_id, raw_record_key, reason) DO UPDATE
-		SET last_seen_at = now(), occurrence_count = quarantined_records.occurrence_count + 1`,
-		record.JobID, record.CountyID, record.SourceName, record.RawRecordKey, payload, record.PayloadReference, record.Reason)
-	return err
+		SET attempt_id = EXCLUDED.attempt_id,
+		    last_seen_at = now(), occurrence_count = quarantined_records.occurrence_count + 1`,
+		record.JobID, record.CountyID, record.SourceName, record.RawRecordKey, payload, record.PayloadReference, record.Reason, attemptID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("jobs: no active attempt found for quarantine record")
+	}
+	return nil
 }

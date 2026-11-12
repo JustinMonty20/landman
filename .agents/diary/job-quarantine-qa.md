@@ -1,0 +1,1 @@
+- **Out-of-scope decision:** Did not expand source-job signatures or introduce a public recorder API. The runner passes its claimed attempt ID in the execution context so `Quarantine()` cannot mistake an orphaned `running` row for the current run; the scoped DB regression test proves that case.

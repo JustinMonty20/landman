@@ -31,6 +31,8 @@ func (s *fakeStore) recoverInterrupted(context.Context) error {
 
 type fakeAttempt struct{ s *fakeStore }
 
+func (a fakeAttempt) id() string { return "test-attempt" }
+
 func (a fakeAttempt) finish(_ context.Context, outcome Outcome, result Result, err error) error {
 	a.s.finished = outcome
 	a.s.result = result

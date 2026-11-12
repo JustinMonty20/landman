@@ -38,8 +38,11 @@ type attemptStore interface {
 }
 
 type attempt interface {
+	id() string
 	finish(context.Context, Outcome, Result, error) error
 }
+
+type attemptIDKey struct{}
 
 // Runner serializes executions of a job ID across processes and persists outcomes.
 type Runner struct {
@@ -78,7 +81,7 @@ func (r *Runner) Run(ctx context.Context, definition Definition) (Outcome, Resul
 		return OutcomeSkippedOverlap, Result{}, nil
 	}
 
-	result, runErr := definition.Run(ctx)
+	result, runErr := definition.Run(context.WithValue(ctx, attemptIDKey{}, attempt.id()))
 	if resultErr := validResult(result); resultErr != nil && runErr == nil {
 		runErr = resultErr
 	}
