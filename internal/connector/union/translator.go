@@ -3,6 +3,7 @@ package union
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/xy"
+	"github.com/twpayne/go-geom/xy/lineintersector"
+	"github.com/twpayne/go-geom/xy/location"
 )
 
 const unionGISSourceSRID = 3857
@@ -349,7 +352,7 @@ func geometryShape(raw map[string]interface{}) *geom.T {
 		if xy.IsRingCounterClockwise(geom.XY, flat) {
 			holes = append(holes, flat)
 		} else {
-			shells = append(shells, shell{flat: flat, area: -twiceArea, polygon: geom.NewPolygonFlat(geom.XY, flat, []int{len(flat)}).SetSRID(unionGISSourceSRID)})
+			shells = append(shells, shell{flat: flat, area: math.Abs(twiceArea), polygon: geom.NewPolygonFlat(geom.XY, flat, []int{len(flat)}).SetSRID(unionGISSourceSRID)})
 		}
 	}
 	if len(shells) == 0 {
@@ -358,12 +361,16 @@ func geometryShape(raw map[string]interface{}) *geom.T {
 	for _, hole := range holes {
 		owner := -1
 		for i, candidate := range shells {
-			if xy.IsPointInRing(geom.XY, geom.Coord(hole[:2]), candidate.flat) && (owner < 0 || candidate.area < shells[owner].area) {
+			if ringInsideShell(hole, candidate.flat) && (owner < 0 || candidate.area < shells[owner].area) {
 				owner = i
 			}
 		}
 		if owner < 0 {
-			return nil
+			// An uncontained counterclockwise ring is still a parcel part.
+			// Keeping it as an exterior avoids inventing an invalid hole.
+			polygon := geom.NewPolygonFlat(geom.XY, hole, []int{len(hole)}).SetSRID(unionGISSourceSRID)
+			shells = append(shells, shell{flat: hole, area: math.Abs(polygon.Area()) * 2, polygon: polygon})
+			continue
 		}
 		polygon := shells[owner].polygon
 		coords := append(append([]float64(nil), polygon.FlatCoords()...), hole...)
@@ -382,6 +389,25 @@ func geometryShape(raw map[string]interface{}) *geom.T {
 	}
 	var g geom.T = multi
 	return &g
+}
+
+// A hole must be strictly inside its shell; interior vertices alone do not
+// prove containment when an edge crosses a concave shell boundary.
+func ringInsideShell(ring, shell []float64) bool {
+	for i := 0; i < len(ring)-2; i += 2 {
+		if xy.LocatePointInRing(geom.XY, geom.Coord(ring[i:i+2]), shell) != location.Interior {
+			return false
+		}
+		for j := 0; j < len(shell)-2; j += 2 {
+			intersection := lineintersector.LineIntersectsLine(lineintersector.RobustLineIntersector{},
+				geom.Coord(ring[i:i+2]), geom.Coord(ring[i+2:i+4]),
+				geom.Coord(shell[j:j+2]), geom.Coord(shell[j+2:j+4]))
+			if intersection.HasIntersection() {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func rings(value interface{}) ([][][2]float64, bool) {

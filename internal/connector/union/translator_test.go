@@ -486,4 +486,18 @@ func TestGISTranslatorAssociatesHoleWithContainingShell(t *testing.T) {
 	if translate(outerA, []interface{}{[]interface{}{1.0}}) != nil {
 		t.Fatal("malformed second ring was silently discarded")
 	}
+	crossing := ring([]float64{2, 2}, []float64{12, 2}, []float64{12, 4}, []float64{2, 4}, []float64{2, 2})
+	crossed := translate(outerA, crossing)
+	crossedMulti, ok := (*crossed).(*geom.MultiPolygon)
+	if !ok || crossedMulti.NumPolygons() != 2 || crossedMulti.Polygon(0).NumLinearRings() != 1 || crossedMulti.Polygon(1).NumLinearRings() != 1 {
+		t.Fatalf("boundary-crossing counterclockwise ring became a hole: %T", *crossed)
+	}
+	// Every vertex is inside the concave shell, but the upper edge crosses its notch.
+	concave := ring([]float64{0, 0}, []float64{0, 10}, []float64{3, 10}, []float64{3, 3}, []float64{7, 3}, []float64{7, 10}, []float64{10, 10}, []float64{10, 0}, []float64{0, 0})
+	acrossNotch := ring([]float64{2, 2}, []float64{8, 2}, []float64{8, 5}, []float64{2, 5}, []float64{2, 2})
+	crossed = translate(concave, acrossNotch)
+	crossedMulti, ok = (*crossed).(*geom.MultiPolygon)
+	if !ok || crossedMulti.NumPolygons() != 2 || crossedMulti.Polygon(0).NumLinearRings() != 1 {
+		t.Fatalf("edge crossing concave boundary became a hole: %T", *crossed)
+	}
 }

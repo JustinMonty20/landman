@@ -44,6 +44,18 @@ func TestShapeWriterLiveMultipleShells(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer writer.Close()
+	t.Cleanup(func() {
+		cleanupCtx := context.Background()
+		cleanupConn, err := pgx.Connect(cleanupCtx, dsn)
+		if err != nil {
+			t.Errorf("connect to clean up parcel: %v", err)
+			return
+		}
+		defer cleanupConn.Close(cleanupCtx)
+		if _, err := cleanupConn.Exec(cleanupCtx, `DELETE FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, parcel.Identity.SourceParcelID); err != nil {
+			t.Errorf("clean up parcel: %v", err)
+		}
+	})
 	if err := writer.SavePart(ctx, *parcel, false); err != nil {
 		t.Fatal(err)
 	}
@@ -54,13 +66,7 @@ func TestShapeWriterLiveMultipleShells(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		defer conn.Close(ctx)
-		_, err := conn.Exec(ctx, `DELETE FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, parcel.Identity.SourceParcelID)
-		if err != nil {
-			t.Error(err)
-		}
-	})
+	defer conn.Close(ctx)
 	var valid bool
 	var count int
 	if err := conn.QueryRow(ctx, `SELECT ST_IsValid(shape), ST_NumGeometries(shape) FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, parcel.Identity.SourceParcelID).Scan(&valid, &count); err != nil {
