@@ -8,92 +8,39 @@ import (
 
 func TestIsLikelyVacantGISRecord(t *testing.T) {
 	tests := []struct {
-		name   string
-		record connector.RawRecord
-		want   bool
+		name       string
+		attributes map[string]interface{}
+		want       bool
 	}{
-		{
-			name: "YEARBLT zero",
-			record: connector.RawRecord{
-				RawData: map[string]interface{}{
-					"attributes": map[string]interface{}{
-						"YEARBLT": 0,
-					},
-				},
-			},
-			want: true,
-		},
-		{
-			name: "SQFT zero",
-			record: connector.RawRecord{
-				RawData: map[string]interface{}{
-					"attributes": map[string]interface{}{
-						"SQFT": 0,
-					},
-				},
-			},
-			want: true,
-		},
-		{
-			name: "FMV_IMPRV zero as currency string",
-			record: connector.RawRecord{
-				RawData: map[string]interface{}{
-					"attributes": map[string]interface{}{
-						"FMV_IMPRV": "$0",
-					},
-				},
-			},
-			want: true,
-		},
-		{
-			name: "LAND_TYPE indicator match",
-			record: connector.RawRecord{
-				RawData: map[string]interface{}{
-					"attributes": map[string]interface{}{
-						"LAND_TYPE": "Rural acreage tract",
-					},
-				},
-			},
-			want: true,
-		},
-		{
-			name: "non-vacant values",
-			record: connector.RawRecord{
-				RawData: map[string]interface{}{
-					"attributes": map[string]interface{}{
-						"YEARBLT":   1998,
-						"SQFT":      1800,
-						"FMV_IMPRV": "$150,000",
-						"LAND_TYPE": "Residential",
-					},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "missing attributes",
-			record: connector.RawRecord{
-				RawData: map[string]interface{}{},
-			},
-			want: false,
-		},
-		{
-			name: "case-insensitive fields",
-			record: connector.RawRecord{
-				RawData: map[string]interface{}{
-					"attributes": map[string]interface{}{
-						"yearblt": 0,
-					},
-				},
-			},
-			want: true,
-		},
+		{name: "YEARBLT zero", attributes: map[string]interface{}{"YEARBLT": 0}, want: true},
+		{name: "SQFT zero", attributes: map[string]interface{}{"SQFT": 0}, want: true},
+		{name: "float YEARBLT zero", attributes: map[string]interface{}{"YEARBLT": float64(0)}, want: true},
+		{name: "numeric FMV_IMPRV zero on a house", attributes: map[string]interface{}{
+			"FMV_IMPRV": 0, "YEARBLT": 2025, "SQFT": 3391,
+		}, want: false},
+		{name: "RURAL ACRES house", attributes: map[string]interface{}{
+			"LAND_TYPE": "RURAL ACRES", "YEARBLT": 1997, "SQFT": 22797,
+		}, want: false},
+		{name: "RURAL ACRES with zero year", attributes: map[string]interface{}{
+			"LAND_TYPE": "RURAL ACRES", "YEARBLT": 0, "SQFT": 22797,
+		}, want: true},
+		{name: "RURAL ACRES with zero year and area", attributes: map[string]interface{}{
+			"LAND_TYPE": "RURAL ACRES", "YEARBLT": 0, "SQFT": 0,
+		}, want: true},
+		{name: "currency string alone", attributes: map[string]interface{}{"FMV_IMPRV": "$0"}, want: false},
+		{name: "old land type phrase alone", attributes: map[string]interface{}{"LAND_TYPE": "Rural acreage tract"}, want: false},
+		{name: "non-vacant values", attributes: map[string]interface{}{
+			"YEARBLT": 1998, "SQFT": 1800, "FMV_IMPRV": "$150,000", "LAND_TYPE": "Residential",
+		}, want: false},
+		{name: "missing attributes", want: false},
+		{name: "null values", attributes: map[string]interface{}{"YEARBLT": nil, "SQFT": nil}, want: false},
+		{name: "numeric-looking string", attributes: map[string]interface{}{"YEARBLT": "0"}, want: false},
+		{name: "case-insensitive fields", attributes: map[string]interface{}{"yearblt": 0}, want: true},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := IsLikelyVacantGISRecord(tt.record)
-			if got != tt.want {
+			record := connector.RawRecord{RawData: map[string]interface{}{"attributes": tt.attributes}}
+			if got := IsLikelyVacantGISRecord(record); got != tt.want {
 				t.Fatalf("IsLikelyVacantGISRecord() = %v, want %v", got, tt.want)
 			}
 		})

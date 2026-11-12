@@ -9,56 +9,21 @@ import (
 // ucZeroNumericFields are GIS attribute keys where a zero value indicates no structure.
 var ucZeroNumericFields = []string{"YEARBLT", "SQFT"}
 
-// ucZeroCurrencyFields are GIS attribute keys where a zero currency value indicates no structure value.
-var ucZeroCurrencyFields = []string{"FMV_IMPRV"}
-
-// ucVacantLandTypes are LAND_TYPE substrings (uppercased) that indicate vacant land.
-var ucVacantLandTypes = []string{"RURAL ACREAGE TRACT"}
-
 // IsLikelyVacantGISRecord returns true when the GIS attributes indicate
-// a likely vacant-land parcel for Union County.
-//
-// Rules (any match → vacant):
-//   - YEARBLT or SQFT is zero
-//   - FMV_IMPRV parses to zero currency
-//   - LAND_TYPE contains a known vacant-land descriptor
-//
-// Field lookup is case-insensitive.
+// a likely vacant-land parcel for Union County. Only numeric zero in
+// YEARBLT or SQFT marks a parcel as likely vacant. Field lookup is case-insensitive.
 func IsLikelyVacantGISRecord(record connector.RawRecord) bool {
 	fields := extractGISAttributes(record.RawData)
 	if len(fields) == 0 {
 		return false
 	}
 
-	// Normalize all keys to uppercase for case-insensitive lookup.
 	normalized := normalizeKeys(fields)
-
 	for _, key := range ucZeroNumericFields {
-		if value, ok := normalized[key]; ok {
-			if isZeroNumeric(value) {
-				return true
-			}
+		if value, ok := normalized[key]; ok && isZeroNumeric(value) {
+			return true
 		}
 	}
-
-	for _, key := range ucZeroCurrencyFields {
-		if value, ok := normalized[key]; ok {
-			if isZeroCurrency(value) {
-				return true
-			}
-		}
-	}
-
-	if value, ok := normalized["LAND_TYPE"]; ok {
-		if str, ok := asString(value); ok {
-			for _, indicator := range ucVacantLandTypes {
-				if strings.Contains(str, indicator) {
-					return true
-				}
-			}
-		}
-	}
-
 	return false
 }
 
@@ -82,16 +47,6 @@ func isZeroNumeric(value interface{}) bool {
 	return false
 }
 
-func isZeroCurrency(value interface{}) bool {
-	str, ok := asString(value)
-	if !ok {
-		return false
-	}
-	str = strings.TrimPrefix(str, "$")
-	str = strings.TrimSpace(str)
-	return str == "0"
-}
-
 func extractGISAttributes(raw map[string]interface{}) map[string]interface{} {
 	if len(raw) == 0 {
 		return nil
@@ -104,16 +59,6 @@ func extractGISAttributes(raw map[string]interface{}) map[string]interface{} {
 	}
 
 	return raw
-}
-
-func asString(value interface{}) (string, bool) {
-	switch typed := value.(type) {
-	case string:
-		return strings.ToUpper(typed), true
-	case []byte:
-		return strings.ToUpper(string(typed)), true
-	}
-	return "", false
 }
 
 func toStringAnyMap(value interface{}) map[string]interface{} {
