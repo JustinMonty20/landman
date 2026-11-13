@@ -82,6 +82,10 @@ func TestSoilJoinPersistence(t *testing.T) {
 	for i, vacant := range []bool{true, false} {
 		shapeValue := shape(parcel)
 		record := models.GISParcel{Identity: models.ParcelIdentity{CountyID: "union", CountyCode: "179", SourceName: source, SourceParcelID: fmt.Sprint(i)}, Geometry: models.GISGeometry{Shape: shapeValue, SRID: 3857}}
+		if !vacant {
+			year := int64(1998)
+			record.Building.YearBuilt = &year
+		}
 		tx, err := db.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -117,6 +121,18 @@ func TestSoilJoinPersistence(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN soil_polygons s ON j.soil_polygon_id=s.id WHERE s.source_name=$1`, source).Scan(&count); err != nil || count != 4 {
 		t.Fatalf("overlaps: %d %v", count, err)
 	}
+	for objectID, want := range map[string]int{"half": 2, "sliver": 2, "edge": 0} {
+		if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN soil_polygons s ON j.soil_polygon_id=s.id WHERE s.source_name=$1 AND s.object_id=$2`, source, objectID).Scan(&count); err != nil || count != want {
+			t.Fatalf("%s joins: %d want %d: %v", objectID, count, want, err)
+		}
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN parcels p ON j.parcel_id=p.id WHERE p.source_name=$1 AND p.source_parcel_id='1' AND p.year_built=1998 AND NOT p.likely_vacant`, source).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("house joins: %d %v", count, err)
+	}
+	var retiredID string
+	if err := db.QueryRow(ctx, `SELECT s.id::text FROM soil_polygons s WHERE s.source_name=$1 AND s.object_id='sliver'`, source).Scan(&retiredID); err != nil {
+		t.Fatal(err)
+	}
 	err = db.QueryRow(ctx, `SELECT j.overlap_acres FROM soil_polygon_parcels j JOIN soil_polygons s ON j.soil_polygon_id=s.id WHERE s.source_name=$1 AND s.object_id='sliver' LIMIT 1`, source).Scan(&acres)
 	if err != nil || acres < 0.0045 || acres > 0.0047 {
 		t.Fatalf("sliver: %.6f %v", acres, err)
@@ -130,6 +146,9 @@ func TestSoilJoinPersistence(t *testing.T) {
 	}
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN soil_polygons s ON j.soil_polygon_id=s.id WHERE s.source_name=$1`, source).Scan(&count); err != nil || count != 4 {
 		t.Fatalf("retired rows: %d %v", count, err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygons s JOIN soil_polygon_parcels j ON j.soil_polygon_id=s.id WHERE s.id::text=$1`, retiredID).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("retired polygon joins: %d %v", count, err)
 	}
 	// An empty source still persists geometry without inventing parcel links.
 	emptySource := source + "-empty"
