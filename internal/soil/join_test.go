@@ -19,7 +19,7 @@ import (
 )
 
 func TestSoilJoinStatement(t *testing.T) {
-	for _, part := range []string{"ST_Transform", "2264", "soil_polygons", "soil_polygon_parcels", "ST_Intersection", "overlap_acres > 0", "p.shape IS NOT NULL", "s.source_name = p.source_name", "ON CONFLICT (soil_polygon_id, parcel_id)"} {
+	for _, part := range []string{"ST_Transform", "2264", "soil_polygons", "soil_polygon_parcels", "ST_Intersection", "overlap_acres > 0", "p.shape IS NOT NULL", "p.source_name = s.source_name", "CROSS JOIN LATERAL", "p.shape && s.shape", "OFFSET 0", "ON CONFLICT (soil_polygon_id, parcel_id)"} {
 		if !strings.Contains(overlapInsert, part) {
 			t.Errorf("missing %s", part)
 		}
