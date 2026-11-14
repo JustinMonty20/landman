@@ -43,7 +43,10 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 	return &ShapeWriter{pool: pool, tx: tx}, nil
 }
 
-// SavePart stores a mapped parcel and its original shape on the same transaction.
+// SavePart stores a mapped parcel, replaces its sale slots, and keeps the
+// original shape on the same transaction. The parcel row is written first.
+// Sales for sequences missing from parcel.Sales are deleted. An empty Sales
+// slice deletes every sale for that parcel. A sale error aborts the transaction.
 func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, likelyVacant bool) error {
 	shape, _, err := encodeShape(parcel.Geometry)
 	if err != nil {
@@ -52,7 +55,14 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 	if len(shape) == 0 {
 		return fmt.Errorf("parcelstore: %s has no rings", parcel.Identity.SourceParcelID)
 	}
-	if _, err := SaveParcel(ctx, w.tx, parcel, likelyVacant); err != nil {
+	parcelID, err := SaveParcel(ctx, w.tx, parcel, likelyVacant)
+	if err != nil {
+		return err
+	}
+	if _, err := SaveSales(ctx, w.tx, parcel.Identity, parcel.Sales); err != nil {
+		return err
+	}
+	if err := deleteOmittedSales(ctx, w.tx, parcelID, parcel.Sales); err != nil {
 		return err
 	}
 	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)

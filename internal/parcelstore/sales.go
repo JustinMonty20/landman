@@ -76,6 +76,23 @@ func SaveSales(ctx context.Context, tx pgx.Tx, identity models.ParcelIdentity, s
 	return ids, nil
 }
 
+// deleteOmittedSales drops sequences this save did not send.
+// SaveSales leaves those rows so a caller can update one slot.
+// The import sends the whole slot set, and an empty slot must not remain.
+func deleteOmittedSales(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID, sales []models.ParcelSale) error {
+	seqs := make([]int16, 0, len(sales))
+	for _, sale := range sales {
+		seqs = append(seqs, int16(sale.Sequence))
+	}
+	_, err := tx.Exec(ctx, `DELETE FROM parcel_sales
+		WHERE parcel_id = $1
+		  AND NOT (sequence = ANY($2::smallint[]))`, parcelID, seqs)
+	if err != nil {
+		return fmt.Errorf("parcelstore: delete omitted sales: %w", err)
+	}
+	return nil
+}
+
 // A nil t returns an invalid Date, which binds as NULL.
 func saleCalendarDate(t *time.Time) pgtype.Date {
 	if t == nil {
