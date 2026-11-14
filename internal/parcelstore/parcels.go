@@ -44,9 +44,9 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 }
 
 // SavePart stores a mapped parcel, replaces its sale slots, and keeps the
-// original shape on the same transaction. The parcel row is written first.
-// Sales for sequences missing from parcel.Sales are deleted. An empty Sales
-// slice deletes every sale for that parcel. A sale error aborts the transaction.
+// original shape on the same transaction. Sequences missing from parcel.Sales
+// are deleted. An empty Sales slice deletes every sale for that parcel. A sale
+// error aborts the transaction.
 func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, likelyVacant bool) error {
 	shape, _, err := encodeShape(parcel.Geometry)
 	if err != nil {
@@ -62,8 +62,14 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 	if _, err := SaveSales(ctx, w.tx, parcel.Identity, parcel.Sales); err != nil {
 		return err
 	}
-	if err := deleteOmittedSales(ctx, w.tx, parcelID, parcel.Sales); err != nil {
-		return err
+	seqs := make([]int16, 0, len(parcel.Sales))
+	for _, sale := range parcel.Sales {
+		seqs = append(seqs, int16(sale.Sequence))
+	}
+	if _, err := w.tx.Exec(ctx, `DELETE FROM parcel_sales
+		WHERE parcel_id = $1
+		  AND NOT (sequence = ANY($2::smallint[]))`, parcelID, seqs); err != nil {
+		return fmt.Errorf("parcelstore: delete omitted sales: %w", err)
 	}
 	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)
 		VALUES ($1, ST_GeomFromEWKB($2), $3)`, parcel.Identity.SourceParcelID, shape, likelyVacant)
