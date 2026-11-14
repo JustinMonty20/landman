@@ -16,6 +16,7 @@ You are a principal engineer.
 ## Rules
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
 - The buyer writes handwritten notes outside the application. Lead tracking means a personal scratchpad, explicit lead states, and follow-up reminders to the buyer—not AI outreach, mailing preparation/exports, campaigns, or owner-facing message delivery. Do not add those features without explicit operator authorization.
+- Route every new Union County ingestion entry point through `jobs.Runner.Run` with a stable job ID. Keep fetch, storage, and source-specific order inside the job definition or an explicit ordered caller. Do not call source ingestion directly from an executable or scheduler.
 
 ## Agent Diary
 
@@ -93,6 +94,7 @@ When the operator corrects you ("wrong," "no, do X," restated intent), classify:
 
 - Don't expand scope. Log tangents to the diary (what, why, where).
 - When the operator asks for a PR with the current updates, include every current working-tree change unless the operator excludes it explicitly.
+- When the operator asks for Poteto mode on a code change, finish the Opening a PR step before reporting the change complete. If a PR cannot be created, name the exact blocker; do not report local tests as a PR handoff.
 
 ## Git Hygiene
 
