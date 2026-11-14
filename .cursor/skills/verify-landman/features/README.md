@@ -1,30 +1,28 @@
 # landman verification map
 
-This directory is the maintained source for verifying the user-facing behavior of landman. Read the index before driving the app, then use the matching feature file as the recipe.
+This directory is the maintained source for verifying the user-facing behavior of landman. Read the index before driving the app, then use the matching feature file as the recipe. The journey sequences those features. It is not a feature file, and it does not use the four-section feature contract.
 
 ## Baseline preconditions
 
 - Build the CLI with `make build` so `./landman` exists at the repo root.
-- Run the CLI doctor in `.cursor/skills/verify-landman/SKILL.md` before a stream drive.
-- A stream drive needs outbound HTTPS to `atlas.unioncountync.gov`. It does not need Postgres.
-- Database features need Docker, a `.env` copied from `.env.example` if missing, and a healthy `landman-postgis` container. Run the database doctor before those drives.
-- The default PostGIS service is a shared singleton (container `landman-postgis`, host port `5432`, volume `landman-postgis-data`). Do not start a second instance. Do not `make db-drop` or `make migrate-down` on a database this run did not create.
-- Do not drive a `./landman` process or a PostGIS container this run did not start, except for additive database checks (`make db-create`, `make migrate-up`, read-only `psql` / `migrate-version`) against an already-healthy instance after doctor passes.
+- Run the doctors in `.cursor/skills/verify-landman/SKILL.md` before a drive.
+- Every database command uses container `landman-verify-postgis`, goose URL `GOOSE_DATABASE_URL`, and host URL `HOST_DATABASE_URL` from `SKILL.md`.
+- Leave any container named `landman-postgis` untouched. Do not `docker compose` and do not source `.env`.
+- An import needs outbound HTTPS to `atlas.unioncountync.gov` and to the USDA Soil Data Access tabular endpoint.
 - Put evidence in `artifacts/verify/$RUN_ID/` and leave it there after cleanup.
 
 ## Driving conventions
 
-- Start every recipe from the baseline state unless its preconditions say otherwise.
+- Start every recipe from the verify database launch unless its preconditions say otherwise.
 - Treat every command as literal. Keep quoted names and flags unchanged.
-- Drive the CLI as `./landman` (or `make run`). Drive the database with `make` and `docker exec landman-postgis psql`.
-- Restore nothing after a stream drive; it has no local writable state besides process output.
+- Drive the CLI as `DATABASE_URL="$HOST_DATABASE_URL" ./landman`. Drive the database with `make` overrides and `docker exec`.
 - Do not remove proof artifacts during cleanup.
 
 ## Proof and skip reporting
 
 - Capture the user action and the resulting state, not only the last line.
 - CLI proof includes the command, stdout, stderr, and exit code.
-- Database mutation proof includes a later read (`make migrate-version`, `make migrate-status`, or `\d parcels`).
+- Database mutation proof includes a later read (`make migrate-version`, `make migrate-status`, or `psql`).
 - Record the feature ID and entry point used with every artifact.
 - Report an unreachable path with the attempted command and the unmet precondition.
 - Do not report a skipped entry point as verified through a different path.
@@ -41,8 +39,15 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 Keep implementation details out of the map. Name only user paths, stable handles, required state, commands, and observable proof.
 
-## Features
+## Database
 
-- [Stream vacant parcel IDs](./stream-vacant-parcel-ids.md) covers building the CLI and streaming likely-vacant Union County parcel IDs from the live GIS layer.
-- [Bootstrap the local database](./local-database-bootstrap.md) covers starting PostGIS, creating the `landman` database, and applying goose migrations.
-- [Check migration status](./migration-status.md) covers `make migrate-version` and `make migrate-status` after the database exists.
+- [Bootstrap the verify database](./local-database-bootstrap.md) covers the verify container, the `landman` database, goose migrations, and the seed row.
+- [Check migration status](./migration-status.md) covers `make migrate-version` and `make migrate-status` after that database exists.
+
+## CLI import
+
+- [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman` writing parcels, joining soil, and running screening against the verify database.
+
+## Journey
+
+- [Import journey](./import-journey.md) runs reset, migrate, seed, import, and the SQL proof in that order.
