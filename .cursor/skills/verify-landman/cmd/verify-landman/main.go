@@ -13,7 +13,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: verify-landman check-schema|check-loaded|probe|classify")
+		fmt.Fprintln(os.Stderr, "usage: verify-landman check-schema|check-loaded|probe|classify|capture-seed")
 		return 2
 	}
 	switch args[0] {
@@ -25,6 +25,8 @@ func run(args []string) int {
 		return cmdProbe(args[1:])
 	case "classify":
 		return cmdClassify(args[1:])
+	case "capture-seed":
+		return cmdCapture(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %s\n", args[0])
 		return 2
@@ -88,6 +90,31 @@ func cmdClassify(args []string) int {
 		return 2
 	}
 	text, code := runClassify(*container, *gooseURL, *seedPath, *evidence, classifyDeps{query: dockerPsql, get: httpGet})
+	if text != "" {
+		fmt.Fprint(os.Stdout, text)
+	}
+	return code
+}
+
+func cmdCapture(args []string) int {
+	fs := flag.NewFlagSet("capture-seed", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	container := fs.String("container", "", "verify container name")
+	postgresURL := fs.String("postgres-url", "", "postgres URL inside the container")
+	seedPath := fs.String("seed", "", "path to seed.sql")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "capture: %v\n", err)
+		return 2
+	}
+	if *container == "" || *postgresURL == "" || *seedPath == "" {
+		fmt.Fprintln(os.Stderr, "capture: container, postgres-url, and seed are required")
+		return 2
+	}
+	text, code := runCapture(*container, *postgresURL, *seedPath, captureDeps{
+		get:   httpGet,
+		exec:  dockerExec,
+		query: dockerPsqlInput,
+	})
 	if text != "" {
 		fmt.Fprint(os.Stdout, text)
 	}

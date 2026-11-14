@@ -170,7 +170,7 @@ func maxRecordCount(body []byte) (int, error) {
 		return 0, err
 	}
 	if meta.MaxRecordCount <= 0 {
-		return 0, fmt.Errorf("parcel metadata missing maxRecordCount")
+		return 0, fmt.Errorf("layer metadata missing maxRecordCount")
 	}
 	return meta.MaxRecordCount, nil
 }

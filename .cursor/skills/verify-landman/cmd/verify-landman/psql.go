@@ -19,14 +19,36 @@ func refuseContainer(name string) error {
 	return nil
 }
 
-// dockerPsql runs psql inside the verify container.
+func dockerExec(ctx context.Context, container, databaseURL, sql string) error {
+	_, err := dockerPsqlInput(ctx, container, databaseURL, sql)
+	return err
+}
+
+// dockerPsql runs a short query inside the verify container.
 // It refuses any other container before it starts Docker.
 func dockerPsql(ctx context.Context, container, databaseURL, sql string) (string, error) {
 	if err := refuseContainer(container); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", container,
-		"psql", databaseURL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", "\t", "-c", sql)
+	return runPsql(ctx, container, databaseURL, sql, true)
+}
+
+func dockerPsqlInput(ctx context.Context, container, databaseURL, sql string) (string, error) {
+	if err := refuseContainer(container); err != nil {
+		return "", err
+	}
+	return runPsql(ctx, container, databaseURL, sql, false)
+}
+
+func runPsql(ctx context.Context, container, databaseURL, sql string, commandArg bool) (string, error) {
+	args := []string{"exec", "-i", container, "psql", databaseURL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", "\t"}
+	if commandArg {
+		args = append(args, "-c", sql)
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if !commandArg {
+		cmd.Stdin = strings.NewReader(sql)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
