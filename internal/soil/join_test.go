@@ -57,6 +57,7 @@ func TestSoilJoinPersistence(t *testing.T) {
 	source := fmt.Sprintf("soil-test-%d", time.Now().UnixNano())
 	key := source
 	defer func() {
+		removePolygonSetsForTest(t, ctx, db, source)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_polygon_parcels WHERE soil_polygon_id IN (SELECT id FROM soil_polygons WHERE source_name=$1) OR parcel_id IN (SELECT id FROM parcels WHERE source_name=$1)`, source)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, source)
 		_, _ = db.Exec(ctx, `DELETE FROM parcels WHERE source_name=$1`, source)
@@ -157,6 +158,7 @@ func TestSoilJoinPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
+		removePolygonSetsForTest(t, ctx, db, emptySource)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_polygon_parcels WHERE soil_polygon_id IN (SELECT id FROM soil_polygons WHERE source_name=$1)`, emptySource)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, emptySource)
 	}()
@@ -186,6 +188,7 @@ func TestSoilJoinPersistence(t *testing.T) {
 	stallKey := key + "-stall"
 	stallPolygon := Polygon{County: county.Union, SourceName: stallSource, ObjectID: "stall", MapUnitKey: stallKey, Shape: polygons[0].Shape}
 	defer func() {
+		removePolygonSetsForTest(t, ctx, db, stallSource)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, stallSource)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_map_units WHERE map_unit_key=$1`, stallKey)
 	}()
@@ -245,6 +248,7 @@ func TestSoilJoinPersistence(t *testing.T) {
 	missingSource := source + "-missing-name"
 	missingKey := key + "-missing-name"
 	defer func() {
+		removePolygonSetsForTest(t, ctx, db, missingSource)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_polygons WHERE source_name=$1`, missingSource)
 		_, _ = db.Exec(ctx, `DELETE FROM soil_map_units WHERE map_unit_key=$1`, missingKey)
 	}()
@@ -271,5 +275,18 @@ func TestSoilJoinPersistence(t *testing.T) {
 	}
 	if err := db.QueryRow(ctx, `SELECT map_unit_name FROM soil_map_units WHERE map_unit_key=$1`, missingKey).Scan(&name); err != nil || name == nil || *name != "Available name" || lookups != 2 {
 		t.Fatalf("missing name retry: %v lookups=%d err=%v", name, lookups, err)
+	}
+}
+
+func removePolygonSetsForTest(t *testing.T, ctx context.Context, db *pgxpool.Pool, source string) {
+	t.Helper()
+	for _, sql := range []string{
+		`DELETE FROM soil_polygon_set_heads WHERE source_name=$1`,
+		`DELETE FROM soil_polygon_set_members WHERE set_id IN (SELECT id FROM soil_polygon_sets WHERE source_name=$1)`,
+		`DELETE FROM soil_polygon_sets WHERE source_name=$1`,
+	} {
+		if _, err := db.Exec(ctx, sql, source); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
 	}
 }

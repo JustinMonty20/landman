@@ -1,0 +1,305 @@
+Timing is on.
+Receipt: disposable database soil5_arena_cold_20261113_234401; published set 77f8c170-8162-41b7-a25a-9ab4ea44156c.
+Method: Run EXPLAIN (ANALYZE, BUFFERS) on each changed-data SQL phase in one transaction. Use the phased SQL in internal/soil/assessment_phases.go. Roll back the transaction. The test omits the assessment-key insert. The result is not a complete application-run trace.
+
+BEGIN
+Time: 0.096 ms
+SET
+Time: 0.053 ms
+INSERT 0 1
+Time: 1.511 ms
+phase=soil
+                                                                    QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..69563.07 rows=11271 width=1560) (actual time=15.035..38.899 rows=11250.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=2275 read=9107
+   ->  Parallel Seq Scan on soil_polygon_set_members  (cost=0.00..67435.97 rows=4696 width=1560) (actual time=16.782..84.260 rows=3750.00 loops=3)
+         Filter: (set_id = '77f8c170-8162-41b7-a25a-9ab4ea44156c'::uuid)
+         Rows Removed by Filter: 15000
+         Buffers: shared hit=2275 read=9107
+ Planning:
+   Buffers: shared hit=91 read=27 dirtied=1
+ Planning Time: 0.447 ms
+ Execution Time: 231.091 ms
+(12 rows)
+
+Time: 231.944 ms
+phase=soil-index
+CREATE INDEX
+Time: 9.337 ms
+phase=soil-analyze
+ANALYZE
+Time: 42.246 ms
+phase=parcels
+                                                              QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..696364.63 rows=117995 width=321) (actual time=103.543..240.574 rows=117985.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=1604 read=55905
+   ->  Parallel Seq Scan on parcels  (cost=0.00..683565.13 rows=49165 width=321) (actual time=114.823..263.443 rows=39328.33 loops=3)
+         Filter: ((county_id = 'union'::text) AND (source_name = 'union_county_gis'::text))
+         Buffers: shared hit=1604 read=55905
+ Planning:
+   Buffers: shared hit=171 read=15
+ Planning Time: 0.544 ms
+ JIT:
+   Functions: 12
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 1.635 ms (Deform 1.110 ms), Inlining 85.298 ms, Optimization 132.359 ms, Emission 102.682 ms, Total 321.974 ms
+ Execution Time: 338.468 ms
+(15 rows)
+
+Time: 339.541 ms
+phase=parcel-index
+CREATE INDEX
+Time: 38.428 ms
+phase=parcel-shape-index
+CREATE INDEX
+Time: 113.874 ms
+phase=parcel-analyze
+ANALYZE
+Time: 132.602 ms
+phase=pairs
+                                                                              QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.28..378426.25 rows=11250 width=40) (actual time=3.705..3076.537 rows=205642.00 loops=1)
+   Buffers: local hit=428673 read=497425 written=1788
+   ->  Seq Scan on soil_assess_soil s  (cost=0.00..3632.50 rows=11250 width=1550) (actual time=0.013..6.610 rows=11250.00 loops=1)
+         Buffers: local read=3520 written=24
+   ->  Index Scan using soil_assess_parcels_shape_idx on soil_assess_parcels p  (cost=0.28..20.80 rows=1 width=257) (actual time=0.030..0.200 rows=18.28 loops=11250)
+         Index Cond: ((shape_3857 && s.shape_3857) AND (shape_3857 IS NOT NULL) AND (shape_3857 && s.shape_3857))
+         Filter: st_intersects(shape_3857, s.shape_3857)
+         Rows Removed by Filter: 34
+         Index Searches: 11250
+         Buffers: local hit=148965 read=492794 written=1760
+ Planning:
+   Buffers: shared hit=121 read=4, local read=2
+ Planning Time: 0.547 ms
+ JIT:
+   Functions: 10
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 0.367 ms (Deform 0.128 ms), Inlining 0.000 ms, Optimization 0.176 ms, Emission 3.250 ms, Total 3.792 ms
+ Execution Time: 3116.953 ms
+(18 rows)
+
+Time: 3117.989 ms (00:03.118)
+phase=pairs-index
+CREATE INDEX
+Time: 43.423 ms
+phase=pairs-analyze
+ANALYZE
+Time: 30.369 ms
+phase=hits
+                                                                              QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=26673.83..910684.75 rows=68547 width=71) (actual time=136.270..20851.698 rows=205642.00 loops=1)
+   Buffers: local hit=1001332 read=41647 written=6768, temp read=6449 written=6449
+   ->  Hash Join  (cost=26673.54..35722.79 rows=68547 width=281) (actual time=136.187..290.932 rows=205642.00 loops=1)
+         Hash Cond: (pr.parcel_id = p.id)
+         Buffers: local hit=37 read=10490 written=277, temp read=6449 written=6449
+         ->  Seq Scan on soil_assess_pairs pr  (cost=0.00..3912.42 rows=205642 width=40) (actual time=90.021..103.320 rows=205642.00 loops=1)
+               Buffers: local read=1856 written=277
+         ->  Hash  (cost=24798.94..24798.94 rows=39328 width=257) (actual time=46.050..46.051 rows=117985.00 loops=1)
+               Buckets: 32768 (originally 32768)  Batches: 8 (originally 2)  Memory Usage: 7937kB
+               Buffers: local hit=37 read=8634, temp written=3443
+               ->  Seq Scan on soil_assess_parcels p  (cost=0.00..24798.94 rows=39328 width=257) (actual time=0.057..25.453 rows=117985.00 loops=1)
+                     Filter: (st_area(geom) > '0'::double precision)
+                     Buffers: local hit=37 read=8634
+   ->  Memoize  (cost=0.30..0.38 rows=1 width=1543) (actual time=0.001..0.001 rows=1.00 loops=205642)
+         Cache Key: pr.polygon_id
+         Cache Mode: logical
+         Hits: 160817  Misses: 44825  Evictions: 39455  Overflows: 0  Memory Usage: 8200kB
+         Buffers: local hit=109321 read=25154 written=5247
+         ->  Index Scan using soil_assess_soil_polygon_idx on soil_assess_soil s  (cost=0.29..0.37 rows=1 width=1543) (actual time=0.002..0.002 rows=1.00 loops=44825)
+               Index Cond: (polygon_id = pr.polygon_id)
+               Index Searches: 44825
+               Buffers: local hit=109321 read=25154 written=5247
+ Planning:
+   Buffers: shared hit=130, local hit=5 read=18
+ Planning Time: 0.668 ms
+ JIT:
+   Functions: 22
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 0.697 ms (Deform 0.281 ms), Inlining 8.590 ms, Optimization 48.390 ms, Emission 33.069 ms, Total 90.746 ms
+ Execution Time: 20946.049 ms
+(30 rows)
+
+Time: 20947.439 ms (00:20.947)
+phase=hits-analyze
+ANALYZE
+Time: 80.272 ms
+phase=keys
+                                                                QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=52455.75..761136.95 rows=53239 width=87) (actual time=255.608..1357.540 rows=196834.00 loops=1)
+   Group Key: parcel_id, map_unit_key
+   Buffers: local hit=55 read=8909 written=42, temp read=16018 written=16036
+   ->  Sort  (cost=52455.75..52627.11 rows=68547 width=310) (actual time=255.434..283.204 rows=205642.00 loops=1)
+         Sort Key: parcel_id, map_unit_key, polygon_id
+         Sort Method: external merge  Disk: 64104kB
+         Buffers: local hit=33 read=8865, temp read=16018 written=16036
+         ->  Seq Scan on soil_assess_hits  (cost=0.00..37107.78 rows=68547 width=310) (actual time=80.791..124.712 rows=205642.00 loops=1)
+               Filter: (st_area(geom) > '0'::double precision)
+               Buffers: local hit=33 read=8865
+ Planning:
+   Buffers: shared hit=66 read=1
+ Planning Time: 0.274 ms
+ JIT:
+   Functions: 9
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 0.473 ms (Deform 0.156 ms), Inlining 13.198 ms, Optimization 43.480 ms, Emission 24.140 ms, Total 81.291 ms
+ Execution Time: 1466.789 ms
+(18 rows)
+
+Time: 1467.615 ms (00:01.468)
+phase=key-index
+CREATE INDEX
+Time: 34.958 ms
+phase=key-analyze
+ANALYZE
+Time: 92.048 ms
+phase=conflicts
+                                                                                  QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=0.84..5068479.84 rows=1 width=48) (actual time=73.635..6344.269 rows=52676.00 loops=1)
+   Group Key: a.parcel_id
+   Buffers: local hit=809209 read=9931 written=1052
+   ->  Nested Loop  (cost=0.84..5068454.08 rows=1 width=578) (actual time=73.468..807.233 rows=94883.00 loops=1)
+         Buffers: local hit=807711 read=9931 written=1052
+         ->  Index Scan using soil_assess_key_parcel_idx on soil_assess_key a  (cost=0.42..14611.93 rows=196834 width=304) (actual time=0.007..29.410 rows=196834.00 loops=1)
+               Index Searches: 1
+               Buffers: local hit=4503 read=5348 written=563
+         ->  Index Scan using soil_assess_key_parcel_idx on soil_assess_key b  (cost=0.42..25.67 rows=1 width=304) (actual time=0.002..0.003 rows=0.48 loops=196834)
+               Index Cond: (parcel_id = a.parcel_id)
+               Filter: ((a.map_unit_key < map_unit_key) AND (a.geom && geom) AND st_intersects(a.geom, geom))
+               Rows Removed by Filter: 2
+               Index Searches: 196834
+               Buffers: local hit=803208 read=4583 written=489
+ Planning:
+   Buffers: shared hit=42 read=1, local hit=10 read=7
+ Planning Time: 1.169 ms
+ JIT:
+   Functions: 11
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 0.414 ms (Deform 0.134 ms), Inlining 13.404 ms, Optimization 39.179 ms, Emission 20.782 ms, Total 73.779 ms
+ Execution Time: 6442.944 ms
+(22 rows)
+
+Time: 6444.478 ms (00:06.444)
+phase=conflicts-analyze
+ANALYZE
+Time: 49.544 ms
+phase=coverage
+                                                                              QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=0.42..1241665.84 rows=91508 width=48) (actual time=42.937..4008.546 rows=117948.00 loops=1)
+   Group Key: parcel_id
+   Buffers: local hit=111 read=9944 written=3679
+   ->  Index Scan using soil_assess_key_parcel_idx on soil_assess_key  (cost=0.42..14611.93 rows=196834 width=297) (actual time=0.021..45.655 rows=196834.00 loops=1)
+         Index Searches: 1
+         Buffers: local read=9851 written=3622
+ Planning Time: 0.082 ms
+ JIT:
+   Functions: 5
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 0.311 ms (Deform 0.092 ms), Inlining 8.374 ms, Optimization 23.891 ms, Emission 10.469 ms, Total 43.045 ms
+ Execution Time: 4053.818 ms
+(12 rows)
+
+Time: 4054.163 ms (00:04.054)
+phase=coverage-analyze
+ANALYZE
+Time: 65.936 ms
+phase=insert-assessments
+                                                                        QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Insert on soil_parcel_assessments  (cost=23236.87..1599164.96 rows=0 width=0) (actual time=6096.929..6096.933 rows=0.00 loops=1)
+   Buffers: shared hit=830637 read=1325 dirtied=4356 written=3032, local hit=5920 read=16292, temp read=15619 written=15619
+   ->  Hash Left Join  (cost=23236.87..1599164.96 rows=117985 width=96) (actual time=129.453..5634.182 rows=117985.00 loops=1)
+         Hash Cond: (p.id = a.parcel_id)
+         Buffers: local hit=444 read=16128, temp read=15619 written=15619
+         ->  Hash Right Join  (cost=15839.66..35235.77 rows=117985 width=546) (actual time=115.414..210.759 rows=117985.00 loops=1)
+               Hash Cond: (c.parcel_id = p.id)
+               Buffers: local read=13120, temp read=7602 written=7602
+               ->  Seq Scan on soil_assess_coverage c  (cost=0.00..5723.48 rows=117948 width=273) (actual time=0.039..16.555 rows=117948.00 loops=1)
+                     Buffers: local read=4544
+               ->  Hash  (cost=9755.85..9755.85 rows=117985 width=289) (actual time=115.322..115.323 rows=117985.00 loops=1)
+                     Buckets: 32768  Batches: 8  Memory Usage: 4945kB
+                     Buffers: local read=8576, temp written=3924
+                     ->  Seq Scan on soil_assess_parcels p  (cost=0.00..9755.85 rows=117985 width=289) (actual time=78.956..95.762 rows=117985.00 loops=1)
+                           Buffers: local read=8576
+         ->  Hash  (cost=3342.76..3342.76 rows=52676 width=500) (actual time=13.738..13.738 rows=52676.00 loops=1)
+               Buckets: 16384  Batches: 4  Memory Usage: 5460kB
+               Buffers: local read=2816, temp written=1911
+               ->  Seq Scan on soil_assess_conflicts a  (cost=0.00..3342.76 rows=52676 width=500) (actual time=0.010..5.227 rows=52676.00 loops=1)
+                     Buffers: local read=2816
+ Planning:
+   Buffers: shared hit=69, local hit=9 read=7
+ Planning Time: 0.438 ms
+ Trigger for constraint soil_parcel_assessments_run_id_fkey: time=632.985 calls=117985
+ Trigger for constraint soil_parcel_assessments_parcel_id_fkey: time=1300.658 calls=117985
+ JIT:
+   Functions: 18
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 0.706 ms (Deform 0.225 ms), Inlining 8.632 ms, Optimization 40.626 ms, Emission 29.728 ms, Total 79.692 ms
+ Execution Time: 8039.783 ms
+(30 rows)
+
+Time: 8040.837 ms (00:08.041)
+phase=insert-units
+                                                                                  QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Insert on soil_assessment_map_units  (cost=19360.30..2546912.80 rows=0 width=0) (actual time=7731.919..7731.921 rows=0.00 loops=1)
+   Buffers: shared hit=798556 read=14 dirtied=5605 written=7264, local hit=7594 read=12871, temp read=2491 written=2496
+   ->  Merge Left Join  (cost=19360.30..2546912.80 rows=196834 width=92) (actual time=71.642..7338.447 rows=196834.00 loops=1)
+         Merge Cond: (k.parcel_id = a.parcel_id)
+         Buffers: local hit=3133 read=12847, temp read=2491 written=2496
+         ->  Index Scan using soil_assess_key_parcel_idx on soil_assess_key k  (cost=0.42..14611.93 rows=196834 width=341) (actual time=0.011..44.789 rows=196834.00 loops=1)
+               Index Searches: 1
+               Buffers: local hit=4 read=9847
+         ->  Materialize  (cost=19359.84..19623.22 rows=52676 width=500) (actual time=20.712..43.748 rows=131554.00 loops=1)
+               Storage: Memory  Maximum Storage: 26kB
+               Buffers: local read=2816, temp read=2491 written=2496
+               ->  Sort  (cost=19359.84..19491.53 rows=52676 width=500) (actual time=20.705..32.784 rows=52676.00 loops=1)
+                     Sort Key: a.parcel_id
+                     Sort Method: external merge  Disk: 19928kB
+                     Buffers: local read=2816, temp read=2491 written=2496
+                     ->  Seq Scan on soil_assess_conflicts a  (cost=0.00..3342.76 rows=52676 width=500) (actual time=0.045..6.208 rows=52676.00 loops=1)
+                           Buffers: local read=2816
+ Planning:
+   Buffers: shared hit=8 read=9 written=8, local hit=1 read=7
+ Planning Time: 0.306 ms
+ Trigger for constraint soil_assessment_map_units_map_unit_key_fkey: time=592.127 calls=196834
+ Trigger for constraint soil_assessment_map_units_run_id_parcel_id_fkey: time=1111.812 calls=196834
+ JIT:
+   Functions: 9
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 0.462 ms (Deform 0.203 ms), Inlining 7.816 ms, Optimization 26.030 ms, Emission 16.913 ms, Total 51.222 ms
+ Execution Time: 9449.068 ms
+(27 rows)
+
+Time: 9449.953 ms (00:09.450)
+phase=diff
+  ?column?   | count
+-------------+-------
+ parcel_diff |     0
+(1 row)
+
+Time: 147.281 ms
+   ?column?   | count
+--------------+-------
+ mapunit_diff |     0
+(1 row)
+
+Time: 248.233 ms
+ ?column? | count  | count
+----------+--------+--------
+ rows     | 117985 | 196834
+(1 row)
+
+Time: 32.266 ms
+ROLLBACK
+Time: 15.106 ms
