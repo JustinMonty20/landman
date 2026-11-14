@@ -106,8 +106,6 @@ func captureSeed(ctx context.Context, container, postgresURL, seedPath string, d
 	return publishCapturedSeed(tmp, seedPath, previous.parcelIDs())
 }
 
-// publishCapturedSeed renames the temp seed over seed.sql only when the temp
-// file parses back to the same parcel ids. Any other result deletes the temp file.
 func publishCapturedSeed(tmpPath, seedPath string, wantIDs []string) error {
 	text, err := os.ReadFile(tmpPath)
 	if err != nil {
@@ -148,7 +146,6 @@ func sameIDs(got, want []string) bool {
 	return true
 }
 
-// parcelLikelyVacant follows the Union vacant filter, then forces false for an empty PID.
 func parcelLikelyVacant(record connector.RawRecord) bool {
 	vacant := union.IsLikelyVacantGISRecord(record)
 	attrs, _ := record.RawData["attributes"].(map[string]any)

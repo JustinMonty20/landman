@@ -67,15 +67,15 @@ func TestClassifyRejectsSlowVerdictWithoutFastMetadataOrSlowPage(t *testing.T) {
 	}
 }
 
-func TestClassifyIgnoresGapThatEndsAtBatchOne(t *testing.T) {
+func TestClassifyCountsGapThatEndsAtBatchOne(t *testing.T) {
 	start := time.Date(2026, 11, 14, 17, 0, 0, 0, time.UTC)
 	logText := fmt.Sprintf("%s [union_county_gis] Total parcels to fetch: 4000\n%s [union_county_gis] Batch 1/2 complete: fetched 2000 records (total so far: 2000)\n%s [union_county_gis] Batch 2/2 complete: fetched 2000 records (total so far: 4000)\ncontext deadline exceeded\n",
 		start.Format("2006/01/02 15:04:05"),
 		start.Add(40*time.Second).Format("2006/01/02 15:04:05"),
 		start.Add(42*time.Second).Format("2006/01/02 15:04:05"))
 	out := classify(classifyInput{stderr: logText, probe: fastMetadataProbe(2 * time.Second)})
-	if out.Verdict == verdictCountySlow {
-		t.Fatal("gap ending at batch 1 counted as county-source-slow")
+	if out.Verdict != verdictCountySlow {
+		t.Fatalf("verdict %q, want county-source-slow", out.Verdict)
 	}
 }
 

@@ -25,3 +25,7 @@ The live `./landman` import hit the 10 minute deadline at batch 29/60 with `impo
 ## Out-of-scope decision
 
 `go run` turns a helper exit of 2 into shell exit 1. The skill now says to read the verdict line. This pass does not add a wrapper binary. `control-cli` and `cursor-team-kit` `deslop` are not installed here.
+
+## Out-of-scope decision
+
+Comment review asked to bind sale ids through `database/sql` and to delete the `seed.sql` header. The header is the capture record, and `psql -c` is the helper's query path. Neither change landed. The batch-1 gap skip did land as a behavior fix: `FetchSoilPolygons` returns before `Total parcels to fetch`, so that gap is the first parcel page.

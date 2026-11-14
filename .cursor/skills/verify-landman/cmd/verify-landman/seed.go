@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// seedSnapshot is the parcel ids, insert columns, and census parsed from seed.sql.
 type seedSnapshot struct {
 	columns  map[string][]string
 	known    map[string]map[string]struct{}

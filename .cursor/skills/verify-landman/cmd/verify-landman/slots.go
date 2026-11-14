@@ -26,9 +26,6 @@ type slotKey struct {
 	seq int
 }
 
-// expectedSaleSlots keeps the s1, s2, and s3 rows a writer must store.
-// A zero amount with a date or a deed stays. An empty slot is dropped.
-// It does not use the importer's sale builder.
 func expectedSaleSlots(sourceParcelID string, attrs map[string]any) []saleSlot {
 	prefixes := []string{"s1", "s2", "s3"}
 	slots := make([]saleSlot, 0, len(prefixes))
@@ -203,7 +200,6 @@ func slotFieldsEqual(want, got saleSlot) bool {
 	return want.DeedBook == got.DeedBook && want.DeedPage == got.DeedPage
 }
 
-// decimalsEqual compares numeric sale amounts. Empty text is SQL NULL, not zero.
 func decimalsEqual(want, got string) bool {
 	want = strings.TrimSpace(want)
 	got = strings.TrimSpace(got)

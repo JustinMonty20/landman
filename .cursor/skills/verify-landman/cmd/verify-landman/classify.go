@@ -11,7 +11,6 @@ const (
 	commitLine        = "Imported parcels,"
 )
 
-// verdict is the drive result an agent reads.
 type verdict string
 
 const (
@@ -20,7 +19,6 @@ const (
 	verdictCountySlow verdict = "inconclusive: county-source-slow"
 )
 
-// tier is how far one part of the drive got.
 type tier string
 
 const (
@@ -57,7 +55,6 @@ type timedCall struct {
 	Error      string `json:"error,omitempty"`
 }
 
-// pageTimings is the probe file classify reads. Classify does not time another page.
 type pageTimings struct {
 	ParcelMetadata timedCall `json:"parcelMetadata"`
 	SoilMetadata   timedCall `json:"soilMetadata"`
@@ -65,7 +62,6 @@ type pageTimings struct {
 	SoilPage       timedCall `json:"soilPage"`
 }
 
-// postImport holds the exit-0 reads. Classify does not run the SQL.
 type postImport struct {
 	CountyParcels         int
 	SeedParcels           int
@@ -89,8 +85,6 @@ func (p postImport) matches() bool {
 		p.Assessments == p.CountyParcels
 }
 
-// classifyInput is evidence already loaded. The command reads sales
-// before it calls classify, and only after the commit line is present.
 type classifyInput struct {
 	stdout      string
 	stderr      string
@@ -102,7 +96,6 @@ type classifyInput struct {
 	post        *postImport
 }
 
-// classify decides the drive verdict. It does not read the network or the database.
 func classify(in classifyInput) driveOutcome {
 	logText := in.stdout + "\n" + in.stderr
 	didCommit := strings.Contains(in.stdout, commitLine) || strings.Contains(in.stderr, commitLine)

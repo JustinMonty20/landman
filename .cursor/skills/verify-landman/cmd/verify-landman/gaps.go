@@ -12,14 +12,12 @@ var (
 	fetchAnchorPattern   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) \[union_county_gis\] (?:Total parcels to fetch:|Batch size:)`)
 )
 
-// laterBatchGapSlow reports a parcel batch gap of at least 15 seconds.
-// The gap that ends at batch 1 includes the silent soil fetch, so it does not count.
 func laterBatchGapSlow(logText string) bool {
 	var prev time.Time
 	var havePrev bool
 	for _, line := range strings.Split(logText, "\n") {
-		if when, batch, ok := parseBatchComplete(line); ok {
-			if havePrev && batch != 1 && when.Sub(prev) >= slowPageLimit {
+		if when, _, ok := parseBatchComplete(line); ok {
+			if havePrev && when.Sub(prev) >= slowPageLimit {
 				return true
 			}
 			prev = when

@@ -14,7 +14,6 @@ FROM information_schema.columns
 WHERE table_schema = 'public'
 ORDER BY table_name, column_name`
 
-// liveColumn is one catalog column the seed may insert.
 type liveColumn struct {
 	nullable   bool
 	hasDefault bool

@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-// sampleParcelIDs are the two parcels the skill reads by id.
-// Vacancy and situs still come from seed.sql.
 var sampleParcelIDs = []string{"07102010", "07102051"}
 
 const loadedSQL = `

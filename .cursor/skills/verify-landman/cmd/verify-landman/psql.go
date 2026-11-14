@@ -24,8 +24,6 @@ func dockerExec(ctx context.Context, container, databaseURL, sql string) error {
 	return err
 }
 
-// dockerPsql runs a short query inside the verify container.
-// It refuses any other container before it starts Docker.
 func dockerPsql(ctx context.Context, container, databaseURL, sql string) (string, error) {
 	if err := refuseContainer(container); err != nil {
 		return "", err
