@@ -93,6 +93,14 @@ func (s *seedSnapshot) addColumns(table string, cols []string) {
 	}
 }
 
+func (s seedSnapshot) parcelIDs() []string {
+	ids := make([]string, len(s.parcels))
+	for i, parcel := range s.parcels {
+		ids[i] = parcel.SourceParcelID
+	}
+	return ids
+}
+
 func (s seedSnapshot) parcel(id string) (seedParcel, bool) {
 	for _, parcel := range s.parcels {
 		if parcel.SourceParcelID == id {
