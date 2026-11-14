@@ -97,14 +97,14 @@ func newAssessmentFixture(t *testing.T) *assessmentFixture {
 					continue
 				}
 				if file == "union-catalog-raw.json" {
-					if f.mode.Load() == 3 {
+					if f.mode.Load() == 3 || f.mode.Load() == 5 {
 						row[2] = "29"
 					}
 					if f.mode.Load() == 4 {
 						row[2] = nil
 					}
 				}
-				if f.mode.Load() == 1 && file == "union-muaggatt-raw.json" && row[0] == "115330" {
+				if (f.mode.Load() == 1 || f.mode.Load() == 5) && file == "union-muaggatt-raw.json" && row[0] == "115330" {
 					row[1] = nil
 					row[2] = "Not rated"
 				}
@@ -517,6 +517,81 @@ func TestPostgresAssessmentChangedInputCancellationIsAtomic(t *testing.T) {
 	if !f.read(added).Available {
 		t.Fatal("successful changed-input refresh missed the new parcel")
 	}
+}
+
+func TestPostgresCurrentInterpretationsUsesOneSnapshot(t *testing.T) {
+	f := newAssessmentFixture(t)
+	polygons := []Polygon{f.polygon("a", "115330", 0, 100)}
+	f.store(polygons)
+	f.screen(polygons)
+	var oldRun, newRun string
+	if err := f.db.QueryRow(f.ctx, `SELECT run_id FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, f.source).Scan(&oldRun); err != nil {
+		t.Fatal(err)
+	}
+	f.mode.Store(5)
+	f.screen(polygons)
+	if err := f.db.QueryRow(f.ctx, `SELECT run_id FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, f.source).Scan(&newRun); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(f.ctx, `UPDATE soil_screening_heads SET run_id=$1 WHERE county_id='union' AND source_name=$2`, oldRun, f.source); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := f.db.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(f.ctx)
+	if _, err = blocker.Exec(f.ctx, `LOCK TABLE soil_screening_ratings IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	type readResult struct {
+		values []Interpretation
+		failed *time.Time
+		err    error
+	}
+	readCtx, cancel := context.WithTimeout(f.ctx, 30*time.Second)
+	defer cancel()
+	done := make(chan readResult, 1)
+	go func() {
+		values, failed, err := CurrentInterpretations(readCtx, f.db, county.Union, f.source, "115330")
+		done <- readResult{values, failed, err}
+	}()
+	deadline := time.Now().Add(15 * time.Second)
+	blocked := false
+	for time.Now().Before(deadline) {
+		if err = f.db.QueryRow(f.ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE relation='soil_screening_ratings'::regclass AND NOT granted)`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !blocked {
+		cancel()
+		_ = blocker.Rollback(f.ctx)
+		<-done
+		t.Fatal("interpretation read did not reach the blocked second query")
+	}
+	if _, err = f.db.Exec(f.ctx, `UPDATE soil_screening_heads SET run_id=$1 WHERE county_id='union' AND source_name=$2`, newRun, f.source); err != nil {
+		t.Fatal(err)
+	}
+	if err = blocker.Rollback(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	result := <-done
+	if result.err != nil || result.failed != nil {
+		t.Fatalf("read failed or saw a later failure: %v %v", result.err, result.failed)
+	}
+	for _, v := range result.values {
+		if v.Use == ConventionalSeptic {
+			if v.Rating != "Somewhat limited" {
+				t.Fatalf("read mixed a later head with the earlier snapshot: %q", v.Rating)
+			}
+			return
+		}
+	}
+	t.Fatal("read omitted the original septic rating")
 }
 
 func TestPostgresScreeningRejectsReplacedSoilSet(t *testing.T) {

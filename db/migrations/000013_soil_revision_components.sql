@@ -25,6 +25,17 @@ CREATE TABLE soil_component_facts (
         OR (sequence>0 AND availability IS NULL AND reason_key IS NOT NULL))
 );
 -- +goose Down
+-- +goose StatementBegin
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM soil_interpretation_keys
+        GROUP BY map_unit_key, rule_key, aggregation
+        HAVING count(*) > 1
+    ) THEN
+        RAISE EXCEPTION 'cannot remove revision keys while multiple revisions exist';
+    END IF;
+END $$;
+-- +goose StatementEnd
 DROP TABLE soil_component_facts;
 ALTER TABLE soil_screening_ratings DROP COLUMN interpretation_id;
 DROP INDEX soil_interpretation_keys_revision_idx;

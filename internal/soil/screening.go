@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/county"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twpayne/go-geom/encoding/ewkb"
 	"golang.org/x/time/rate"
@@ -708,11 +709,16 @@ func recordScreeningFailure(ctx context.Context, pool *pgxpool.Pool, countyID co
 // CurrentInterpretations returns only the complete published generation. Failure
 // status is independent of whether this map unit has evidence in the prior head.
 func CurrentInterpretations(ctx context.Context, pool *pgxpool.Pool, countyID county.ID, source, key string) ([]Interpretation, *time.Time, error) {
-	var failed *time.Time
-	if err := pool.QueryRow(ctx, `SELECT (SELECT failed_at FROM soil_screening_refresh_status WHERE county_id=$1 AND source_name=$2)`, countyID.String(), source).Scan(&failed); err != nil {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := pool.Query(ctx, `SELECT r.provenance,r.interpretation_id::text, (SELECT COALESCE(jsonb_agg(jsonb_build_object('sequence',c.sequence,'key',c.component_key,'name',c.name,'percent',c.percent,'availability',c.availability,'original_rating',c.original_rating,'rating',c.rating,'reason_key',c.reason_key,'reason_name',c.reason_name,'reason',c.reason,'severity',c.severity,'facts',c.facts) ORDER BY c.component_key,c.sequence),'[]'::jsonb) FROM soil_component_facts c WHERE c.run_id=r.run_id AND c.interpretation_id=r.interpretation_id), (SELECT COALESCE(jsonb_agg(m.payload ORDER BY m.component_key,m.kind,m.position),'[]'::jsonb) FROM soil_measurements m WHERE m.run_id=r.run_id AND m.interpretation_id=r.interpretation_id) FROM soil_screening_heads h JOIN soil_screening_ratings r ON r.run_id=h.run_id WHERE h.county_id=$1 AND h.source_name=$2 AND r.map_unit_key=$3 ORDER BY r.rule_key`, countyID.String(), source, key)
+	defer tx.Rollback(context.Background())
+	var failed *time.Time
+	if err := tx.QueryRow(ctx, `SELECT (SELECT failed_at FROM soil_screening_refresh_status WHERE county_id=$1 AND source_name=$2)`, countyID.String(), source).Scan(&failed); err != nil {
+		return nil, nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT r.provenance,r.interpretation_id::text, (SELECT COALESCE(jsonb_agg(jsonb_build_object('sequence',c.sequence,'key',c.component_key,'name',c.name,'percent',c.percent,'availability',c.availability,'original_rating',c.original_rating,'rating',c.rating,'reason_key',c.reason_key,'reason_name',c.reason_name,'reason',c.reason,'severity',c.severity,'facts',c.facts) ORDER BY c.component_key,c.sequence),'[]'::jsonb) FROM soil_component_facts c WHERE c.run_id=r.run_id AND c.interpretation_id=r.interpretation_id), (SELECT COALESCE(jsonb_agg(m.payload ORDER BY m.component_key,m.kind,m.position),'[]'::jsonb) FROM soil_measurements m WHERE m.run_id=r.run_id AND m.interpretation_id=r.interpretation_id) FROM soil_screening_heads h JOIN soil_screening_ratings r ON r.run_id=h.run_id WHERE h.county_id=$1 AND h.source_name=$2 AND r.map_unit_key=$3 ORDER BY r.rule_key`, countyID.String(), source, key)
 	if err != nil {
 		return nil, failed, err
 	}
@@ -737,5 +743,12 @@ func CurrentInterpretations(ctx context.Context, pool *pgxpool.Pool, countyID co
 		}
 		result = append(result, v)
 	}
-	return result, failed, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, failed, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, failed, err
+	}
+	return result, failed, nil
 }
