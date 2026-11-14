@@ -1,0 +1,12 @@
+{
+  "models": {
+    "feature": "openai-codex/gpt-6-sol:medium",
+    "refactoring": "openai-codex/gpt-6-sol:medium",
+    "bug-fix": "openai-codex/gpt-6-sol:medium",
+    "perf-issue": "openai-codex/gpt-6-sol:medium",
+    "hillclimb": "openai-codex/gpt-6-sol:medium",
+    "general": "openai-codex/gpt-6-sol:medium",
+    "judgment": "openai-codex/gpt-6-luna:high",
+    "strongest-judgment": "openai-codex/gpt-6.1-sol:xhigh"
+  }
+}
