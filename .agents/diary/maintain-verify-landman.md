@@ -14,4 +14,4 @@ The verify pass uses `docker run` for `landman-verify-postgis` and passes `DB_CO
 
 ## Out-of-scope decision
 
-`SaveSales` has no caller outside its tests. `./landman` does not write `parcel_sales`. The captured sample still loads the layer 215 sale attributes for its parcel IDs so the reset check can read them. This pass does not add a `SaveSales` caller and does not drive sales from a scratch program.
+PR 43 writes parcel sales from `SavePart`. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete. The earlier note that `SaveSales` has no caller is wrong. This pass does not change product code. `RateLimit` 1 and the 10 minute deadline stay out of scope.

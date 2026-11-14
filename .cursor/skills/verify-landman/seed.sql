@@ -3,9 +3,9 @@
 -- Parcel, soil map unit, soil polygon, and overlap rows are the rows that import committed.
 -- The sample is 18 likely-vacant parcels and 18 built parcels whose centroids fall in
 -- EPSG:3857 500 m cells (-17961, 8354) and (-17960, 8354).
--- Sale rows are the s1, s2, and s3 attributes from MapServer layer 215 for those
--- same parcel IDs, read 2026-11-14 with the import. ./landman translates those
--- attributes and does not write parcel_sales, so this file loads them.
+-- Sale rows are the kept slots for those parcel ids.
+-- SavePart calls SaveSales and then deletes omitted sequences.
+-- SaveSales alone does not delete.
 BEGIN;
 INSERT INTO soil_map_units (map_unit_key, map_unit_symbol, map_unit_name, area_symbol, area_name, fetched_at) VALUES ('115330', 'ApB', 'Appling sandy loam, 2 to 8 percent slopes', 'NC179', 'Union County, North Carolina', '2026-11-14 17:06:02.540785+00'::timestamptz);
 INSERT INTO soil_map_units (map_unit_key, map_unit_symbol, map_unit_name, area_symbol, area_name, fetched_at) VALUES ('115332', 'AuB', 'Appling-Urban land complex, 2 to 8 percent slopes', 'NC179', 'Union County, North Carolina', '2026-11-14 17:06:02.540785+00'::timestamptz);

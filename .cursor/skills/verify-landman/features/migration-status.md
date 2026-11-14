@@ -20,9 +20,9 @@ Preconditions:
 - `make db-create` has been run on that container, so the `landman` database exists.
 - This is a read of goose state. It does not apply or roll back migrations.
 
-- **Show version.** Run `make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL"`. Exit code `0`. Stderr contains `goose: version ` and the integer of the highest filename prefix in `db/migrations/` after a complete `make migrate-up`. A log timestamp precedes that line. Stdout is the Make recipe. The highest file is `000014_soil_measurements.sql` until a later migration lands. Do not expect version `4`.
-- **Show status.** Run `make migrate-status` with the same overrides. Exit code `0`. Stderr names every `db/migrations/*.sql` file. After a complete `make migrate-up`, stderr does not contain `Pending`. Stdout is the Make recipe.
-- **Proof.** Save both command transcripts under `artifacts/verify/$RUN_ID/`. The version integer and the status listing must agree with each other and with the files on disk. Do not invent a pass from `SELECT 1` alone.
+- Run `make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL"`. Exit code 0. Stderr contains `goose: version ` and the integer of the highest filename prefix in `db/migrations/` after a complete `make migrate-up`. A log timestamp precedes that line. Stdout is the Make recipe. The highest file is `000014_soil_measurements.sql` until a later migration lands. Do not expect version `4`.
+- Run `make migrate-status` with the same overrides. Exit code 0. Stderr names every `db/migrations/*.sql` file. After a complete `make migrate-up`, stderr does not contain `Pending`. Stdout is the Make recipe.
+- Save both command transcripts under `artifacts/verify/$RUN_ID/`. The version integer and the status listing must agree with each other and with the files on disk. Do not invent a pass from `SELECT 1` alone.
 
 ## Gotchas
 

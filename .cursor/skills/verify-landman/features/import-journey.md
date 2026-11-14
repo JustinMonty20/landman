@@ -1,17 +1,19 @@
 # Import journey
 
-One pass from an empty verify database to a committed import. Per-step commands live in the linked files. Baseline preconditions in [the feature map](README.md) apply.
+One pass from an empty verify database to a classified import. Per-step commands live in the linked files. Baseline preconditions in [the feature map](README.md) apply.
 
-## Reset, migrate, seed, import
+## Reset through classify
 
 1. Start `landman-verify-postgis` and wait until it is healthy. [Bootstrap the verify database](local-database-bootstrap.md).
-2. `make db-drop`, `make db-create`, and `make migrate-up` with the verify overrides. The goose version integer matches the highest prefix in `db/migrations/`.
-3. Load `seed.sql`. The reset check is 36 parcels (18 likely vacant, 18 built), 6 soil map units, 7 soil polygons, 71 overlaps, and 79 sales. `07102010` and `07102051` are present.
-4. Run database doctor, then [check migration status](migration-status.md). The version and the status listing agree.
-5. Run CLI doctor. Layer 215 and layer 197 both return HTTP 200.
-6. Run `./landman` with `HOST_DATABASE_URL`. [Import parcels and soil](import-parcels-and-soil.md).
-7. After exit 0, read `07102010` and `07102051`, the county parcels, the soil rows, `soil_parcel_assessments`, `job_attempts`, and `parcel_sales`.
+2. Run `make db-drop`, `make db-create`, and `make migrate-up` with the verify overrides. The goose version integer matches the highest prefix in `db/migrations/`.
+3. Run `check-schema`. Stdout is `schema: ok`. If it is not, stop and do not load the seed.
+4. Load `seed.sql`. Run `check-loaded`. Stdout prints the census and then `loaded: ok`. The census names `07102010` and `07102051`.
+5. Run the database doctor, then [check migration status](migration-status.md). The version and the status listing agree.
+6. Run the CLI doctor. Layer 215 and layer 197 both return HTTP 200. Those curls check reachability. They are not the page timings.
+7. Run `probe`. Exit code 0. The evidence directory contains `page-timings.json`.
+8. Run `./landman` with `HOST_DATABASE_URL`. [Import parcels and soil](import-parcels-and-soil.md).
+9. Run `classify`. Stdout is the verdict line. The evidence directory contains `drive-outcome.json`.
 
-Both seed parcel IDs are still present. County parcels, soil polygons, and soil-to-parcel rows are greater than the seed counts. Both job outcomes are `success`. `parcel_sales` is still 79. `soil_screening_heads` has the Union row. Screening and assessment do not print their own lines. The SQL read is the proof that they ran.
+On `pass`, both seed parcel ids are still present. The county parcel count is greater than the seed parcel count. Soil polygons and overlaps for `union` and `union_county_gis` are greater than the seed insert counts. Both job outcomes are `success`. `soil_screening_heads` has the Union row. `seededSales` and `fullImport` are `met`. Screening and assessment do not print their own lines. `classify` is the proof that they ran.
 
 Cleanup removes `landman-verify-postgis` and `landman-verify-data` after the evidence files are on disk. It does not remove `artifacts/verify/`.

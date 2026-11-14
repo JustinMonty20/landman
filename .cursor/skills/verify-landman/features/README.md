@@ -16,6 +16,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 - Start every recipe from the verify database launch unless its preconditions say otherwise.
 - Treat every command as literal. Keep quoted names and flags unchanged.
 - Drive the CLI as `DATABASE_URL="$HOST_DATABASE_URL" ./landman`. Drive the database with `make` overrides and `docker exec`.
+- Run `check-schema`, `check-loaded`, `probe`, and `classify` through `go run ./.cursor/skills/verify-landman/cmd/verify-landman`.
 - Do not remove proof artifacts during cleanup.
 
 ## Proof and skip reporting
@@ -34,7 +35,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 1. `Sub-features` lists short IDs with one line for each behavior.
 2. `How to get to it (user POV)` lists every user entry point.
-3. `Driving it with make and the landman binary` starts with `Preconditions:` and uses labeled bullets that pair each user action with an exact command and observable result.
+3. `Driving it with make and the landman binary` starts with `Preconditions:` and uses a bullet for each user action, with the command and the observable result.
 4. `Gotchas` lists traps that can waste or invalidate a verification run.
 
 Keep implementation details out of the map. Name only user paths, stable handles, required state, commands, and observable proof.
@@ -50,4 +51,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Journey
 
-- [Import journey](./import-journey.md) runs reset, migrate, seed, import, and the SQL proof in that order.
+- [Import journey](./import-journey.md) runs reset, migrate, `check-schema`, seed, `check-loaded`, `probe`, import, and `classify` in that order.
