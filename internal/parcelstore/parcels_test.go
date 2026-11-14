@@ -4,9 +4,11 @@ package parcelstore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/JustinMonty20/landman/internal/parcelstore"
@@ -259,6 +261,171 @@ func TestShapeWriterRejectsMissingShapeAndRollsBack(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("partial import committed %d rows", count)
 	}
+}
+
+func TestShapeWriterReplacesSales(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL is empty")
+	}
+	parcel := shapedParcel(t, "sales-replace")
+	sold := time.Date(2015, 4, 27, 0, 0, 0, 0, time.UTC)
+	amount := func(v float64) *float64 { return &v }
+	book := func(v string) *string { return &v }
+	parcel.Sales = []models.ParcelSale{
+		{Sequence: 1, Amount: amount(250000), DeedBook: book("7110")},
+		{Sequence: 2, Amount: amount(0), SaleDate: &sold, DeedBook: book("6429")},
+		{Sequence: 3, Amount: amount(70000), DeedBook: book("4232")},
+	}
+	commitPart(t, dsn, parcel)
+	conn := openConn(t, dsn)
+	defer conn.Close(ctx)
+	first := saleRows(t, ctx, conn, parcel.Identity.SourceParcelID)
+	if len(first) != 3 || first[0].amount != 250000 || first[1].amount != 0 || first[2].amount != 70000 {
+		t.Fatalf("first sales = %+v", first)
+	}
+	parcel.Sales = []models.ParcelSale{
+		{Sequence: 1, Amount: amount(250000), DeedBook: book("7110")},
+		{Sequence: 3, Amount: amount(70000), DeedBook: book("4232")},
+	}
+	commitPart(t, dsn, parcel)
+	second := saleRows(t, ctx, conn, parcel.Identity.SourceParcelID)
+	if len(second) != 2 || second[0].id != first[0].id || second[1].id != first[2].id {
+		t.Fatalf("second sales = %+v, first ids %s %s", second, first[0].id, first[2].id)
+	}
+	parcel.Sales = nil
+	commitPart(t, dsn, parcel)
+	if got := saleRows(t, ctx, conn, parcel.Identity.SourceParcelID); len(got) != 0 {
+		t.Fatalf("empty rerun left %+v", got)
+	}
+	if _, err := conn.Exec(ctx, `DELETE FROM parcels WHERE source_parcel_id=$1`, parcel.Identity.SourceParcelID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShapeWriterSaleFailureRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL is empty")
+	}
+	parcel := shapedParcel(t, "sales-negative")
+	amount := -5.0
+	parcel.Sales = []models.ParcelSale{{Sequence: 1, Amount: &amount}}
+	writer, err := parcelstore.NewShapeWriter(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.SavePart(ctx, parcel, false)
+	writer.Close()
+	if err == nil {
+		t.Fatal("negative sale amount saved")
+	}
+	conn := openConn(t, dsn)
+	defer conn.Close(ctx)
+	var parcels int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM parcels WHERE source_parcel_id=$1`, parcel.Identity.SourceParcelID).Scan(&parcels); err != nil {
+		t.Fatal(err)
+	}
+	if parcels != 0 {
+		t.Fatalf("failed sale left %d parcel rows", parcels)
+	}
+}
+
+func TestShapeWriterCountyMatchesParcel(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL is empty")
+	}
+	blank := shapedParcel(t, "sales-blank-county")
+	blank.Identity.CountyID = " "
+	writer, err := parcelstore.NewShapeWriter(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.SavePart(ctx, blank, false)
+	writer.Close()
+	if !errors.Is(err, parcelstore.ErrMissingNaturalKey) {
+		t.Fatalf("blank county error = %v", err)
+	}
+	unknown := shapedParcel(t, "sales-unknown-county")
+	unknown.Identity.CountyID = "wake"
+	writer, err = parcelstore.NewShapeWriter(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.SavePart(ctx, unknown, false)
+	writer.Close()
+	if err == nil || errors.Is(err, parcelstore.ErrParcelNotFound) {
+		t.Fatalf("unknown county error = %v", err)
+	}
+}
+
+func shapedParcel(t *testing.T, sourceParcelID string) models.GISParcel {
+	t.Helper()
+	parcel := unionParcel(t)
+	parcel.Identity.SourceParcelID = sourceParcelID
+	shape := square(0)
+	parcel.Geometry.Shape = &shape
+	parcel.Geometry.SRID = 3857
+	return parcel
+}
+
+func commitPart(t *testing.T, dsn string, parcel models.GISParcel) {
+	t.Helper()
+	writer, err := parcelstore.NewShapeWriter(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := writer.SavePart(context.Background(), parcel, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func openConn(t *testing.T, dsn string) *pgx.Conn {
+	t.Helper()
+	conn, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+type storedSale struct {
+	id       string
+	sequence int
+	amount   float64
+}
+
+func saleRows(t *testing.T, ctx context.Context, conn *pgx.Conn, sourceParcelID string) []storedSale {
+	t.Helper()
+	rows, err := conn.Query(ctx, `SELECT s.id::text, s.sequence, s.amount::float8
+		FROM parcel_sales s
+		JOIN parcels p ON p.id = s.parcel_id
+		WHERE p.source_parcel_id = $1
+		ORDER BY s.sequence`, sourceParcelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []storedSale
+	for rows.Next() {
+		var row storedSale
+		if err := rows.Scan(&row.id, &row.sequence, &row.amount); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func square(x float64) geom.T {

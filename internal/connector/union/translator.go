@@ -469,5 +469,11 @@ func buildSales(attrs map[string]interface{}) []models.ParcelSale {
 }
 
 func saleHasData(sale models.ParcelSale) bool {
-	return sale.SaleDate != nil || sale.OGSaleDate != nil || sale.Amount != nil || sale.DeedBook != nil || sale.DeedPage != nil || sale.DeedType != nil || sale.DeedQuality != nil || sale.Grantor != nil || sale.Grantor2 != nil
+	if sale.SaleDate != nil || sale.OGSaleDate != nil {
+		return true
+	}
+	if sale.Amount != nil && *sale.Amount != 0 {
+		return true
+	}
+	return sale.DeedBook != nil || sale.DeedPage != nil || sale.DeedType != nil || sale.DeedQuality != nil || sale.Grantor != nil || sale.Grantor2 != nil
 }
