@@ -27,16 +27,17 @@ ORDER BY started_at DESC;
 
 ## Change a schedule after scheduler wiring exists
 
-`internal/jobs/scheduler.go` provides `NewScheduler`, `Start`, `Stop`, and manual `Run(ctx, jobID)`. `main.go` does not call these methods. There are no active cron jobs or schedule values to edit today. To add automatic runs, add code-defined job definitions in the executable and start a long-running scheduler process. Keep the three Union stages in their required order. Do not schedule each stage independently. A time offset between independent schedules does not prove that parcel import succeeded before soil joins or that screening uses its committed set.
+`internal/jobs/scheduler.go` provides `NewScheduler`, `Start`, `Stop`, and manual `Run(ctx, jobID)`. `main.go` does not call these methods. There are no active cron jobs or schedule values to edit today. The current executable always runs all three jobs. You cannot change parcel and soil frequencies independently yet.
 
-Set a schedule on the *ordered Union import*, not on three independent stages. When a scheduler definition invokes the ordered import, give that definition a stable ID. Keep the stage IDs stable as well. Do not use the same ID for two independently active jobs. Update the schedule string in that definition, test it, deploy the new executable, and restart the scheduler process. A changed Go string cannot change a process that is already running.
+When the executable starts the scheduler, give the parcel source and the soil source separate job definitions and separate schedule strings. Do not put both sources under one combined schedule. After either source succeeds, update the derived overlaps and screening from the stored soil set. A parcel-only run must not fetch county soil polygons. A soil-only run must not fetch county parcels. A time offset between independent schedules cannot enforce these rules. The runner locks one job ID at a time. It does not coordinate two different IDs or persist the in-memory soil input that screening uses today. Implement and verify that coordination before you start independent schedules.
 
-A calendar expression has `CRON_TZ=<timezone>` followed by five fields: minute, hour, day of month, month, and day of week. `NewScheduler` rejects a definition without `CRON_TZ`, a malformed expression, and a repeated job ID. Examples of expressions for a future ordered import definition follow:
+After the scheduler is wired, update the schedule string for the source you want to change. Test the new schedule. Deploy the new executable and restart the scheduler process. A change to a Go string cannot change a process that is already running. Keep each job ID stable so its attempt history stays together.
+
+A calendar expression has `CRON_TZ=<timezone>` followed by five fields: minute, hour, day of month, month, and day of week. `NewScheduler` rejects a definition without `CRON_TZ`, a malformed expression, and a repeated job ID. These are example values for two future independent source definitions:
 
 ```text
-CRON_TZ=America/New_York 0 2 * * 0      Sunday at 02:00 local time
-CRON_TZ=America/New_York 0 2 * * 0,3    Sunday and Wednesday at 02:00 local time
-CRON_TZ=UTC 0 3 1 */3 *                First day of each third month at 03:00 UTC
+union.gis.parcels   CRON_TZ=America/New_York 0 2 * * 0,3
+union.gis.soil      CRON_TZ=UTC 0 3 1 */3 *
 ```
 
 Use `UTC` if local daylight-saving time must not change the time of a run. The scheduler starts at the next due time. It does not run immediately and does not replay times that passed while the process was stopped. A due run that overlaps a run with the same job ID is skipped and recorded. The scheduler does not retry a failed job automatically before its next due time. `@every` is accepted by the cron library, but an interval is relative to process start. Do not use it to express a calendar deadline or a 180-day source freshness rule.

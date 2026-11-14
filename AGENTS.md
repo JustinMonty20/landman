@@ -17,6 +17,7 @@ You are a principal engineer.
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
 - The buyer writes handwritten notes outside the application. Lead tracking means a personal scratchpad, explicit lead states, and follow-up reminders to the buyer—not AI outreach, mailing preparation/exports, campaigns, or owner-facing message delivery. Do not add those features without explicit operator authorization.
 - Route every new Union County ingestion entry point through `jobs.Runner.Run` with a stable job ID. Keep fetch, storage, and source-specific order inside the job definition or an explicit ordered caller. Do not call source ingestion directly from an executable or scheduler.
+- Keep independent calendar schedules for Union source jobs. When parcel or soil data changes, update derived soil overlaps and screening from the stored soil set without forcing an extra county soil fetch. Do not replace source-specific schedules with one combined import schedule.
 
 ## Agent Diary
 
