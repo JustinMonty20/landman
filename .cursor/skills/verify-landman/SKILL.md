@@ -1,136 +1,191 @@
 ---
 name: verify-landman
-description: Verify landman by driving the real CLI and local PostGIS the way an operator would — streaming vacant Union County parcel IDs from the live GIS service and applying goose migrations. Use when checking user-facing landman behavior after changes to main.go, the Union GIS client, the vacant-land filter, the parcel-ID importer, Makefile database targets, docker-compose, or db/migrations.
+description: Verify landman by driving ./landman and goose against a dedicated verify PostGIS database. The binary reads DATABASE_URL, upserts Union County parcels, joins soil from MapServer layer 197, and runs soil screening. Use after changes to main.go, the Union GIS client, the vacant-land filter, parcel or soil storage, Makefile database targets, docker-compose, or db/migrations. Never point this skill at the operator database.
 ---
 
 # Verify landman
 
-Landman is a Go CLI plus a local PostGIS database. There is no web UI, no TUI, and no HTTP server of our own. The binary has no flags or subcommands. A user builds and runs it; it queries Union County's public ArcGIS layer and prints likely-vacant parcel IDs. Separately, an operator starts PostGIS with Docker Compose and applies goose migrations through the Makefile.
+Landman is a Go CLI plus PostGIS. There is no web UI, no TUI, and no HTTP server of our own. The binary has no flags or subcommands. `./landman` reads `DATABASE_URL`, fetches Union County parcels and soil, writes those rows, runs soil screening, and prints one summary line.
 
-This skill is for the next agent. Drive the real binary and the real database. Do not treat `go test` as a substitute for those paths.
+This skill is for the next agent. Drive the real binary and a verify database this run created. Do not treat `go test` as a substitute. Do not use the operator database.
 
 ## Launch
 
-### CLI (no long-lived server)
+Launch creates the verify database, migrates it, loads the seed, and builds the binary. Each `./landman` drive is a new process against that database.
 
-Launch means build the binary once, then start each drive in its own process.
+### Names
+
+- Container `landman-verify-postgis`. This name is reserved for verification.
+- Host port `127.0.0.1:55432`. Goose does not use this port.
+- Image `postgis/postgis:18-3.6-alpine`, the same tag as `docker-compose.yml`.
+- Volume `landman-verify-data`.
+- Database name inside the container is `landman`, because `db/bootstrap/create_database.sql` always creates that name.
+
+`POSTGRES_URL` and the goose `DATABASE_URL` use `localhost:5432`. Goose joins the verify container network, so that host is Postgres inside the container. `./landman` runs on the host, so its `DATABASE_URL` uses `127.0.0.1:55432`. Do not export a single `DATABASE_URL` for both.
+
+Do not copy or source `.env`. Make loads `.env` when the file exists, and that file is the operator database. Pass `DB_CONTAINER`, `POSTGRES_URL`, and `DATABASE_URL` on the `make` command line. Command-line assignments override `.env`.
+
+```sh
+export VERIFY_CONTAINER=landman-verify-postgis
+export VERIFY_VOLUME=landman-verify-data
+export POSTGRES_URL='postgres://landman:landman@localhost:5432/postgres?sslmode=disable'
+export GOOSE_DATABASE_URL='postgres://landman:landman@localhost:5432/landman?sslmode=disable'
+export HOST_DATABASE_URL='postgres://landman:landman@127.0.0.1:55432/landman?sslmode=disable'
+```
+
+### Verify database
+
+If `landman-verify-postgis` already exists, inspect it before removing it. Remove it only when the image is `postgis/postgis:18-3.6-alpine` and the published binding is `127.0.0.1:55432`. Any other existing container with that name is a stop.
+
+```sh
+if docker inspect "$VERIFY_CONTAINER" >/dev/null 2>&1; then
+  image=$(docker inspect -f '{{.Config.Image}}' "$VERIFY_CONTAINER")
+  binding=$(docker inspect -f '{{json .HostConfig.PortBindings}}' "$VERIFY_CONTAINER")
+  case "$image" in
+    postgis/postgis:18-3.6-alpine) ;;
+    *) echo "refusing to remove $VERIFY_CONTAINER (image $image)"; exit 1 ;;
+  esac
+  case "$binding" in
+    *'"HostIp":"127.0.0.1"'*'"HostPort":"55432"'*) ;;
+    *) echo "refusing to remove $VERIFY_CONTAINER (binding $binding)"; exit 1 ;;
+  esac
+  docker rm -f "$VERIFY_CONTAINER"
+fi
+docker volume rm "$VERIFY_VOLUME" >/dev/null 2>&1 || true
+docker run -d \
+  --name "$VERIFY_CONTAINER" \
+  -e POSTGRES_USER=landman \
+  -e POSTGRES_PASSWORD=landman \
+  -e POSTGRES_DB=postgres \
+  -p 127.0.0.1:55432:5432 \
+  -v "$VERIFY_VOLUME":/var/lib/postgresql \
+  --health-cmd 'pg_isready -U landman -d postgres' \
+  --health-interval 5s \
+  --health-timeout 5s \
+  --health-retries 12 \
+  postgis/postgis:18-3.6-alpine
+```
+
+Ready for migrations means `docker inspect` reports the container running and healthy. The healthcheck is `pg_isready` against the `postgres` database. That is not a migrated `landman` database.
+
+Reset, migrate, and seed on every pass. `make db-drop` drops the database named `landman` on `DB_CONTAINER`. The explicit `DB_CONTAINER` is what keeps that drop on the verify container.
+
+```sh
+make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
+make db-create DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
+make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL"
+docker exec -i "$VERIFY_CONTAINER" \
+  psql "$GOOSE_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  < .cursor/skills/verify-landman/seed.sql
+```
+
+The seed is a captured Union County sample, not a synthetic row. On 2026-11-14 a `./landman` import into `landman-verify-postgis` started at 2026-11-14T17:03:06Z and exited 0 at 2026-11-14T17:11:39Z. The file keeps 36 parcels from that import, 18 likely vacant and 18 built, whose centroids fall in EPSG:3857 500 m cells `(-17961, 8354)` and `(-17960, 8354)`, plus the soil map units, polygons, and overlaps the import stored for those parcels. Sale rows are the layer 215 `s1`, `s2`, and `s3` attributes for the same parcel IDs, read the same day. `./landman` does not write `parcel_sales`, so the file loads those attributes. The header of `seed.sql` records the capture. Leave `landman-postgis` alone. Do not run `docker compose` for this skill. Compose publishes port `5432` and mounts the volume `landman-postgis-data`.
+
+### CLI
 
 ```sh
 make build
 ```
 
-Ready: `make build` exits 0 and `./landman` exists in the repo root. There is no listen port and no prompt. Git ignores that binary (`/landman` in `.gitignore`).
+Ready means `make build` exits 0 and `./landman` exists in the repo root. Git ignores that binary (`/landman` in `.gitignore`). There is no listen port and no prompt.
 
-Each drive starts a new process:
-
-```sh
-./landman
-```
-
-`make run` is the documented operator path and does the same thing after rebuilding. Prefer `./landman` after a single `make build` so a rebuild does not hide a stale-binary problem.
-
-The process talks to the live Union County ArcGIS query endpoint:
-
-`https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215/query`
-
-It sends a count query (`where=1=1`, `returnCountOnly=true`), then fetches every parcel in batches of 500 at about one request per second, including geometry. Each data page also sends `orderByFields=OBJECTID`. The count query does not. It prints only IDs that pass the likely-vacant filter (zero `YEARBLT` or `SQFT`, zero `FMV_IMPRV` currency, or a `LAND_TYPE` containing `RURAL ACREAGE TRACT`). The process deadline is 10 minutes. It does not read `DATABASE_URL` and does not write to Postgres.
-
-Started: stdout contains `Streaming parcel IDs from Union County GIS...`. That line is printed before any HTTP batch finishes.
-
-Usable completion: the process exits 0 and stdout contains `Total likely-vacant parcel IDs streamed: <n>`. A non-zero exit or `Failed to stream parcel IDs:` on stderr is a failed drive. When the 10-minute deadline fires first, that fatal line is followed by `context deadline exceeded` or `rate: Wait(n=1) would exceed context deadline`, and the success total line is absent.
-
-### Local PostGIS
-
-This path needs Docker. Copy `.env.example` to `.env` only when `.env` is missing. That copy is verification scaffolding so Compose names the container `landman-postgis`, which is the Makefile default. Do not commit `.env`.
-
-```sh
-test -f .env || cp .env.example .env
-docker compose up -d postgis --wait
-make db-create
-make migrate-up
-```
-
-`--wait` waits for the Compose service healthcheck (`pg_isready -U $POSTGRES_USER -d postgres`). That is not yet a usable landman database. Ready means all three of: the container is healthy, `make db-create` has run (idempotent bootstrap of the `landman` database), and `make migrate-up` has applied every file in `db/migrations/`. Confirm with `make migrate-version`. Stderr contains `goose: version <n>`, where `<n>` is the integer value of the highest filename prefix in `db/migrations/` (prefix `000004` prints as `4`).
-
-The Compose file publishes `5432:5432` and uses volume `landman-postgis-data`. `POSTGRES_PORT` in `.env` does not change the published port. Two instances cannot run side by side with the repo as written.
-
-If a `landman-postgis` container already exists and this run did not start it, do not start a second one, do not `make db-drop`, and do not `make migrate-down`. Those mutate the operator's shared database. `make db-create` and `make migrate-up` are additive and may run against an existing instance after doctor passes.
-
-### Teardown
-
-See Cleanup. Do not tear down until evidence is written.
+`make run` rebuilds and then executes with Make's environment, including `.env` when that file exists. Do not use `make run` for a verify drive.
 
 ## Doctor
 
-Run doctor before driving whenever anything looks off.
+Run doctor before the first drive, after any failed drive, and again after a fresh container. A doctor failure caused by a wrong URL, container name, or expected line in this skill is drift in this skill. Fix the skill and retry the step that failed.
+
+### Database doctor
+
+```sh
+docker inspect -f '{{.Name}} {{.Config.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$VERIFY_CONTAINER"
+docker inspect -f '{{json .HostConfig.PortBindings}}' "$VERIFY_CONTAINER"
+make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL"
+```
+
+Worth driving when all of these are true.
+
+- The name is `/landman-verify-postgis`.
+- The image is `postgis/postgis:18-3.6-alpine`.
+- The container is running and healthy.
+- The host binding is port `55432` on `127.0.0.1`.
+- `make migrate-version` exits 0. Stderr contains `goose: version ` followed by the integer of the highest filename prefix in `db/migrations/`. A log timestamp precedes that line. Stdout is the Make recipe.
+
+If a container named `landman-postgis` exists, leave it running. Do not inspect it as a substitute for the verify container.
 
 ### CLI doctor
 
 ```sh
 test -x ./landman
 go version
-curl -sS -o /tmp/landman-verify-gis-layer.json -w "%{http_code}" \
+curl -sS -o /tmp/landman-verify-layer-215.json -w "%{http_code}" \
   "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215?f=json"
+curl -sS -o /tmp/landman-verify-layer-197.json -w "%{http_code}" \
+  "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197?f=json"
 ```
 
-Worth driving when: `./landman` is executable, `go version` reports a toolchain that can build the module (see `go.mod`), and the layer metadata request returns HTTP 200 with JSON for MapServer layer 215. If curl fails or is not 200, the stream path is not worth driving from this machine.
-
-### Database doctor
-
-```sh
-docker inspect -f '{{.Name}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' landman-postgis
-make migrate-version
-```
-
-Worth driving when: the container named `landman-postgis` is running and healthy, `.env` sets `DB_CONTAINER=landman-postgis` plus `POSTGRES_URL` and `DATABASE_URL`, and `make migrate-version` can talk to Postgres. If the container is missing, the Launch PostGIS steps have not been completed. If the name is `postgis` instead of `landman-postgis`, `.env` was not loaded when Compose started (Compose defaults `container_name` to `postgis`) and the Makefile will not find it.
+Worth driving when `./landman` is executable, `go version` can build the module in `go.mod`, and both layer metadata requests return HTTP 200. Layer 215 is parcels. Layer 197 is soil. Exit 0 also calls the USDA tabular endpoint `https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest`. There is no separate metadata probe for that host. A failed USDA call fails the drive.
 
 ## Drive
 
-There is no browser harness and no `control-*` helper. Drive the CLI as a process. Drive the database with `make` and `docker exec … psql`.
+Read `features/README.md` and the matching feature file before a drive. Use that file's commands.
 
-Capture stdout, stderr, and the exit code for every command:
+Capture stdout, stderr, and the exit code for every command. `RUN_ID` identifies the pass. Evidence paths are under `artifacts/verify/$RUN_ID/`.
 
 ```sh
 RUN_ID=$(date +%Y%m%dT%H%M%S)-$$
 EVIDENCE=artifacts/verify/$RUN_ID
 mkdir -p "$EVIDENCE"
-./landman >"$EVIDENCE/stream.stdout.txt" 2>"$EVIDENCE/stream.stderr.txt"
-echo $? >"$EVIDENCE/stream.exit.txt"
+DATABASE_URL="$HOST_DATABASE_URL" ./landman \
+  >"$EVIDENCE/import.stdout.txt" \
+  2>"$EVIDENCE/import.stderr.txt"
+echo $? >"$EVIDENCE/import.exit.txt"
 ```
 
-Stable handles (do not use coordinates or line numbers as selectors):
+The process deadline is 10 minutes. It covers the soil fetch, the parcel import, soil storage (including the optional USDA name lookup), and required soil screening. Parcel pages use `BatchSize` 2000 from `main.go`. The GIS client sends about one request per second. Soil pages are also 2000. Soil fetch logs nothing. The first parcel log line appears after the soil fetch returns. The import summary is printed after parcels commit and before soil storage and screening finish. That line alone is not success.
 
-- CLI stdout: `Streaming parcel IDs from Union County GIS...`
-- CLI stdout: `Batch <n>: <count> parcel IDs` and optional `(sample: [<id> ...])`
-- CLI stdout: `Total likely-vacant parcel IDs streamed: <n>`
+Stable handles:
+
+- CLI stdout: `Imported parcels, %d likely-vacant feature IDs`
 - CLI stderr: `[union_county_gis] Total parcels to fetch: <n>`
+- CLI stderr: `[union_county_gis] Batch size: 2000, Total batches: <m>`
 - CLI stderr: `[union_county_gis] Batch <i>/<total> complete:`
-- CLI fatal: `Failed to create GIS source:` or `Failed to stream parcel IDs:`
-- Makefile targets: `make build`, `make run`, `make db-create`, `make migrate-up`, `make migrate-down`, `make migrate-version`, `make migrate-status`, `make db-drop`
-- Database name `landman`, container name `landman-postgis`
+- CLI stderr: `[union_county_gis] Fetch complete:`
+- CLI stderr fatal substrings: `create GIS source:`, `fetch soil polygons:`, `create parcel writer:`, `import parcels:`, `commit parcels:`, `store soil geometry:`, `required soil screening:`, `source import did not complete cleanly:`, `required soil screening did not complete cleanly:`, `invalid SOIL_SCREENING_MAX_AGE`
+- Makefile targets, always with the verify `DB_CONTAINER` and URL overrides: `make build`, `make db-drop`, `make db-create`, `make migrate-up`, `make migrate-version`, `make migrate-status`
+- SQL seed identities: `source_parcel_id` `07102010` (likely vacant, situs `105 CUPPED OAK DR`) and `07102051` (built, situs `203 WHITE OAK LN`), both `source_name` `union_county_gis`
 
-Read `features/README.md` and the matching feature file before a drive. Use that file's commands and proof, not an internal test or a package API.
+`log.Fatal` writes a timestamp before the error text and exits 1.
 
 ## Evidence
 
-Store proof under `artifacts/verify/$RUN_ID/` in the repo root. Cleanup must not delete this directory. Do not commit it.
+Store proof under `artifacts/verify/$RUN_ID/` in the repo root. Cleanup must not delete this directory. Do not commit it. `artifacts/verify/` is gitignored.
 
 Proof standards:
 
-- Exercise the real user path: `./landman` or `make run` for streaming; `docker compose` plus Makefile targets for the database. Do not call `GISSource.FetchBatches`, `ParcelIDImportService.Run`, or `IsLikelyVacantGISRecord` from a scratch program and call that a user-path proof.
-- Capture the action and the resulting state: the command, stdout, stderr, and exit code, plus (for the database) a follow-up read such as `make migrate-version` or `\d parcels`.
-- The CLI's side effect is printed IDs, not database rows. Do not expect `parcels` to gain rows after `./landman`.
-- The GIS HTTP API is a production county system. There is no in-repo mock or dry-run flag. A stream drive hits that endpoint for real. Do not run two stream drives at the same time against it.
+- Exercise `./landman` with `HOST_DATABASE_URL`, and exercise goose through the Makefile against `GOOSE_DATABASE_URL`. Do not call `GISSource.FetchBatches`, `ParcelIDImportService.Run`, `SaveSales`, or `IsLikelyVacantGISRecord` from a scratch program and call that a user-path proof.
+- Capture the command, stdout, stderr, and exit code. For the database, capture a later SQL read.
+- A successful import exits 0. Stdout contains the import summary. Stderr contains the batch-size line and `Fetch complete:`. The same `DATABASE_URL` then shows county parcel rows, soil rows, and `job_attempts` outcomes `success` for `union.gis.parcels` and `union.soil.screening`. The two seed parcel IDs are still present. `parcel_sales` is still the seed count, because the import does not write or delete that table.
+- The printed vacant-ID count is not the number of `likely_vacant` true rows. An empty `PID` is stored with `likely_vacant` false. `job_attempts.processed_count` on the parcel job counts saved features, which can exceed the number of `parcels` rows.
+- The GIS and USDA endpoints are production systems. There is no dry-run flag. Do not run two `./landman` drives at the same time. A second run records `skipped_overlap` and exits non-zero.
 - A green `make test` or `go test` is not evidence that the CLI or migrations work.
 
 ## Cleanup
 
+Run cleanup after the last drive of the pass, including any re-drive. Check that `artifacts/verify/$RUN_ID/` still exists after cleanup.
+
 - If this run started `./landman` and it is still running, kill that PID only (`kill "$PID"`). Do not `pkill landman` or kill by process name.
 - `make clean` may remove the `./landman` binary this run built.
-- If this run started PostGIS with `docker compose up`, stop that project with `docker compose stop postgis`. Do not `docker compose down -v` (that deletes `landman-postgis-data`). If the container was already running when the run began, leave it running.
-- Never run `make db-drop` or `make migrate-down` unless this run created the database from scratch and no operator data is in it.
+- Remove only the verify container and its volume.
+
+```sh
+docker rm -f "$VERIFY_CONTAINER"
+docker volume rm "$VERIFY_VOLUME"
+```
+
+- Do not `docker compose down`, do not stop `landman-postgis`, and do not `make db-drop` without `DB_CONTAINER=landman-verify-postgis`.
 - Do not delete `artifacts/verify/`.
 
 ## Helpers
 
-This skill ships no helper scripts. Use `make`, `docker`, `curl`, and `psql` via `docker exec` as shown above.
+This skill ships no helper scripts. The seed file is `.cursor/skills/verify-landman/seed.sql`. Use `make`, `docker`, `curl`, and `psql` via `docker exec` as shown above.
