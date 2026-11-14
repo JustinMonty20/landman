@@ -41,7 +41,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Database
 
-- [Bootstrap the verify database](./local-database-bootstrap.md) covers the verify container, the `landman` database, goose migrations, and the seed row.
+- [Bootstrap the verify database](./local-database-bootstrap.md) covers the verify container, the `landman` database, goose migrations, and the captured Union County sample.
 - [Check migration status](./migration-status.md) covers `make migrate-version` and `make migrate-status` after that database exists.
 
 ## CLI import

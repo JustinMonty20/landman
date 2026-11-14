@@ -14,4 +14,4 @@ The verify pass uses `docker run` for `landman-verify-postgis` and passes `DB_CO
 
 ## Out-of-scope decision
 
-`SaveSales` has no caller outside its tests. The map names `parcel_sales` and marks it operator-unreachable. This pass does not drive sales from a scratch program.
+`SaveSales` has no caller outside its tests. `./landman` does not write `parcel_sales`. The captured sample still loads the layer 215 sale attributes for its parcel IDs so the reset check can read them. This pass does not add a `SaveSales` caller and does not drive sales from a scratch program.

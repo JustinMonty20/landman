@@ -79,7 +79,7 @@ docker exec -i "$VERIFY_CONTAINER" \
   < .cursor/skills/verify-landman/seed.sql
 ```
 
-The seed inserts one `parcels` row with `source_name` `verify-landman` and `source_parcel_id` `verify-sentinel`. Leave `landman-postgis` alone. Do not run `docker compose` for this skill. Compose publishes port `5432` and mounts the volume `landman-postgis-data`.
+The seed is a captured Union County sample, not a synthetic row. On 2026-11-14 a `./landman` import into `landman-verify-postgis` started at 2026-11-14T17:03:06Z and exited 0 at 2026-11-14T17:11:39Z. The file keeps 36 parcels from that import, 18 likely vacant and 18 built, whose centroids fall in EPSG:3857 500 m cells `(-17961, 8354)` and `(-17960, 8354)`, plus the soil map units, polygons, and overlaps the import stored for those parcels. Sale rows are the layer 215 `s1`, `s2`, and `s3` attributes for the same parcel IDs, read the same day. `./landman` does not write `parcel_sales`, so the file loads those attributes. The header of `seed.sql` records the capture. Leave `landman-postgis` alone. Do not run `docker compose` for this skill. Compose publishes port `5432` and mounts the volume `landman-postgis-data`.
 
 ### CLI
 
@@ -153,7 +153,7 @@ Stable handles:
 - CLI stderr: `[union_county_gis] Fetch complete:`
 - CLI stderr fatal substrings: `create GIS source:`, `fetch soil polygons:`, `create parcel writer:`, `import parcels:`, `commit parcels:`, `store soil geometry:`, `required soil screening:`, `source import did not complete cleanly:`, `required soil screening did not complete cleanly:`, `invalid SOIL_SCREENING_MAX_AGE`
 - Makefile targets, always with the verify `DB_CONTAINER` and URL overrides: `make build`, `make db-drop`, `make db-create`, `make migrate-up`, `make migrate-version`, `make migrate-status`
-- SQL sentinel: `source_name = 'verify-landman'` and `source_parcel_id = 'verify-sentinel'`
+- SQL seed identities: `source_parcel_id` `07102010` (likely vacant, situs `105 CUPPED OAK DR`) and `07102051` (built, situs `203 WHITE OAK LN`), both `source_name` `union_county_gis`
 
 `log.Fatal` writes a timestamp before the error text and exits 1.
 
@@ -165,7 +165,7 @@ Proof standards:
 
 - Exercise `./landman` with `HOST_DATABASE_URL`, and exercise goose through the Makefile against `GOOSE_DATABASE_URL`. Do not call `GISSource.FetchBatches`, `ParcelIDImportService.Run`, `SaveSales`, or `IsLikelyVacantGISRecord` from a scratch program and call that a user-path proof.
 - Capture the command, stdout, stderr, and exit code. For the database, capture a later SQL read.
-- A successful import exits 0. Stdout contains the import summary. Stderr contains the batch-size line and `Fetch complete:`. The same `DATABASE_URL` then shows county parcel rows, soil rows, and `job_attempts` outcomes `success` for `union.gis.parcels` and `union.soil.screening`. The sentinel row is still present.
+- A successful import exits 0. Stdout contains the import summary. Stderr contains the batch-size line and `Fetch complete:`. The same `DATABASE_URL` then shows county parcel rows, soil rows, and `job_attempts` outcomes `success` for `union.gis.parcels` and `union.soil.screening`. The two seed parcel IDs are still present. `parcel_sales` is still the seed count, because the import does not write or delete that table.
 - The printed vacant-ID count is not the number of `likely_vacant` true rows. An empty `PID` is stored with `likely_vacant` false. `job_attempts.processed_count` on the parcel job counts saved features, which can exceed the number of `parcels` rows.
 - The GIS and USDA endpoints are production systems. There is no dry-run flag. Do not run two `./landman` drives at the same time. A second run records `skipped_overlap` and exits non-zero.
 - A green `make test` or `go test` is not evidence that the CLI or migrations work.
