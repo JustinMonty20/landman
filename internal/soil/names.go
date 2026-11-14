@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,6 +13,31 @@ import (
 
 const soilDataAccessURL = "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest"
 const nameLookupTimeout = 5 * time.Second
+
+func usdaQuery(ctx context.Context, client *http.Client, endpoint, query string) ([]byte, error) {
+	form := url.Values{"query": {query}, "format": {"JSON"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("USDA: HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > 16<<20 {
+		return nil, fmt.Errorf("USDA response exceeds 16 MiB")
+	}
+	return body, nil
+}
 
 type nameResult struct {
 	key, symbol, name, areaSymbol, areaName string
@@ -28,26 +54,16 @@ func fetchNames(ctx context.Context, client *http.Client, endpoint string, keys 
 		quoted[i] = "'" + strings.ReplaceAll(key, "'", "''") + "'"
 	}
 	query := fmt.Sprintf(`SELECT m.mukey, m.musym, m.muname, l.areasymbol, s.areaname, s.saverest FROM mapunit AS m JOIN legend AS l ON m.lkey = l.lkey LEFT JOIN sacatalog AS s ON l.areasymbol = s.areasymbol WHERE m.mukey IN (%s)`, strings.Join(quoted, ","))
-	form := url.Values{"query": {query}, "format": {"JSON"}}
 	lookupCtx, cancel := context.WithTimeout(ctx, nameLookupTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(lookupCtx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	raw, err := usdaQuery(lookupCtx, client, endpoint, query)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("USDA names: HTTP %d", resp.StatusCode)
 	}
 	var data struct {
 		Table [][]any `json:"Table"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.Unmarshal(raw, &data); err != nil {
 		return nil, fmt.Errorf("USDA names: %w", err)
 	}
 	if data.Table == nil {

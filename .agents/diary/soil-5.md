@@ -1,0 +1,8 @@
+# Soil screening continuation
+
+- [Out-of-scope decision] The existing jobs runner records source and derived-screening outcomes. This task does not enable schedules or change the ten-minute executable deadline. Full-county runtime was later measured; see `plans/soil-5.md`.
+- [Skipped refactor] The first checkpoint kept component evidence inside immutable interpretation JSON. Later migrations normalized component facts and measured observations. Source/rule-revision-specific canonical upserts remain outside this implementation.
+- [Out-of-scope decision] A parcel inserted during screening can miss the published head. A table lock prevents this but delays parcel writers for the assessment transaction. This was held for operator approval; the operator approved the lock, and a disposable full-county run and concurrent-write test now verify it.
+- [Out-of-scope decision] Current SDA metadata does not verify the map-unit ancillary domains. The operator approved raw retention and typed unavailability for those values. Do not infer favorable soil conditions from null or unverified values. Component observations remain typed when their source units are verified.
+- [Unrelated bug or code smell] The Pi evidence-auditor agent cannot start because its configured web tools are unavailable in this session. Do not count its partial output as a verdict. Review that agent's tool configuration separately; soil-5 uses a fresh read-only reviewer for the exact-head gate.
+- [Out-of-scope decision] Web Soil Survey lists Union tabular version 27 while Soil Data Access lists 28. The operator accepted the three-key, nine-rating comparison with a visible version warning. Do not claim matched revisions or full-dataset equivalence.

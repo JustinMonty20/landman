@@ -819,7 +819,11 @@ func TestFetchSoilPolygons(t *testing.T) {
 		}
 		features := make([]json.RawMessage, n)
 		for i := range features {
-			features[i] = feature
+			id := i + 1
+			if q.Get("resultOffset") == "2000" {
+				id += 2000
+			}
+			features[i] = json.RawMessage(strings.Replace(string(feature), `"OBJECTID_1":1,`, fmt.Sprintf(`"OBJECTID_1":%d,`, id), 1))
 		}
 		json.NewEncoder(w).Encode(struct {
 			Features []json.RawMessage `json:"features"`
@@ -863,6 +867,16 @@ func TestFetchSoilPolygonsErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	var raw struct {
+		Features []json.RawMessage `json:"features"`
+	}
+	if err := json.Unmarshal(fixture, &raw); err != nil {
+		t.Fatal(err)
+	}
+	duplicatePage, _ := json.Marshal(struct {
+		Features []json.RawMessage `json:"features"`
+	}{[]json.RawMessage{raw.Features[0], raw.Features[0]}})
 	for _, tc := range []struct {
 		name, count, page, want string
 		status                  int
@@ -877,6 +891,7 @@ func TestFetchSoilPolygonsErrors(t *testing.T) {
 		{name: "ArcGIS count error", count: `{"error":{"message":"denied"}}`, want: "denied"},
 		{name: "HTTP status", count: `{"count":1}`, status: 500, want: "500"},
 		{name: "ArcGIS page error", count: `{"count":1}`, page: `{"error":{"message":"denied"}}`, want: "denied"},
+		{name: "duplicate IDs", count: `{"count":2}`, page: string(duplicatePage), want: "repeats object ID"},
 		{name: "short count", count: `{"count":2}`, page: string(fixture), want: "count mismatch"},
 		{name: "cancel before count", cancel: true, want: "context canceled"},
 	} {

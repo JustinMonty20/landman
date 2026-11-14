@@ -36,6 +36,7 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 
 	var polygons []soil.Polygon
 	var units []soil.MapUnit
+	seen := make(map[string]bool)
 	params := ArcGISParams{
 		Where: "1=1", ReturnGeometry: true, ResultRecordCount: soilPageSize,
 		OrderByFields: "OBJECTID_1", OutFields: "OBJECTID_1,AREASYMBOL,SPATIALVER,MUSYM,MUKEY", Format: "json",
@@ -56,6 +57,15 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 		pagePolygons, pageUnits, err := ParseSoilFeatures(body)
 		if err != nil {
 			return nil, nil, fmt.Errorf("soil page at offset %d: %w", offset, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		for _, polygon := range pagePolygons {
+			if seen[polygon.ObjectID] {
+				return nil, nil, fmt.Errorf("soil response repeats object ID %s", polygon.ObjectID)
+			}
+			seen[polygon.ObjectID] = true
 		}
 		polygons = append(polygons, pagePolygons...)
 		units = append(units, pageUnits...)
