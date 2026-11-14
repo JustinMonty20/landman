@@ -44,6 +44,8 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Use the type system to eliminate impossible states and exhaust cases (see Verification Hierarchy).
 - Prefer patterns and tools that shift verification earlier and provide guardrails for correctness.
 - Follow existing code patterns unless they are explicitly deprecated in the repository.
+- Before a verification swarm, check that each selected agent can read the repository and run the required commands. A reviewer profile with no Git or shell tools cannot verify a committed PR or run tests. Do not report a tooling failure as a project verification result.
+- For pi-subagents parallel workflows, put `worktree` on the parent call, not on each task. The pstack adapter does not resolve `pstack:<role>` in `workflow: "parallel"` `args.tasks`; use exact available `provider/model` IDs for those tasks, or use separate direct subagent calls with role models. Check `subagent({ action: "models" })` before selecting an ID. An invalid model does not mean the agent is unavailable.
 - Before recommending implementation or release sequencing, re-list `plans/` and read any newly added relevant plans; carry forward their explicit V1 commitments and release gates.
 - Before claiming which plans exist or that a capability is absent from plans, freshly list `plans/` and inspect any plan path the operator names; do not rely on an earlier or incomplete listing.
 - Before proposing architecture across sources, inspect the relevant existing plans and distinguish planned behavior from implemented code. If a referenced plan is missing from this checkout, say so instead of assuming its design.
@@ -90,10 +92,12 @@ When the operator corrects you ("wrong," "no, do X," restated intent), classify:
 ## Scope Discipline
 
 - Don't expand scope. Log tangents to the diary (what, why, where).
+- When the operator asks for a PR with the current updates, include every current working-tree change unless the operator excludes it explicitly.
 
 ## Git Hygiene
 
 - Commits: one self-contained task, all verifications green. If a failing state is necessary, explain in the commit message.
+- For dependent plan PRs, create and maintain an explicit stack. Each child targets its direct unmerged parent. Before handoff, verify each target and that every dependency expected on `main` is reachable from `origin/main`; retarget and rebase children when a parent lands. Never ask the operator to land a stack parent after its child merged into that parent.
 
 ## Branch and PR naming
 
