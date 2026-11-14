@@ -1,0 +1,1 @@
+[Scope tangent worth pursuing later] `.cursor/skills/verify-landman/` describes `parcel_sales` as seed-only, but the current `ShapeWriter.SavePart` now writes sales. Update the verification recipe and its expected counts in a separate change after a safe verification run. Do not use its old sale assertions as evidence for this PR.

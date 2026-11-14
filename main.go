@@ -17,6 +17,27 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type soilSnapshot struct {
+	polygons []soil.Polygon
+	units    []soil.MapUnit
+	setID    string
+}
+
+type requiredRunner interface {
+	Run(context.Context, jobs.Definition) (jobs.Outcome, jobs.Result, error)
+}
+
+func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Definition) error {
+	outcome, _, err := runner.Run(ctx, definition)
+	if err != nil {
+		return fmt.Errorf("required %s: %w", definition.ID, err)
+	}
+	if outcome != jobs.OutcomeSuccess {
+		return fmt.Errorf("required %s did not complete cleanly: %s", definition.ID, outcome)
+	}
+	return nil
+}
+
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -52,40 +73,32 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create GIS source: %w", err)
 	}
-	var polygons []soil.Polygon
-	var units []soil.MapUnit
-	var soilSetID string
-	outcome, _, err := runner.Run(ctx, jobs.Definition{ID: "union.gis.parcels", Run: func(ctx context.Context) (jobs.Result, error) {
-		var err error
-		polygons, units, err = gisSource.FetchSoilPolygons(ctx)
+	if err := runRequired(ctx, runner, jobs.Definition{ID: "union.gis.parcels", Run: func(ctx context.Context) (jobs.Result, error) {
+		count, err := importParcels(ctx, dsn, gisSource)
+		return jobs.Result{Processed: count}, err
+	}}); err != nil {
+		return err
+	}
+	var snapshot soilSnapshot
+	if err := runRequired(ctx, runner, jobs.Definition{ID: "union.gis.soil", Run: func(ctx context.Context) (jobs.Result, error) {
+		polygons, units, err := gisSource.FetchSoilPolygons(ctx)
 		if err != nil {
 			return jobs.Result{}, fmt.Errorf("fetch soil polygons: %w", err)
 		}
-		count, err := importParcels(ctx, dsn, gisSource)
+		setID, err := soil.StoreWithSet(ctx, dsn, county.Union, gisSource.Name(), polygons, units)
 		if err != nil {
-			return jobs.Result{}, err
+			return jobs.Result{Processed: len(polygons)}, fmt.Errorf("store soil geometry: %w", err)
 		}
-		soilSetID, err = soil.StoreWithSet(ctx, dsn, county.Union, gisSource.Name(), polygons, units)
-		if err != nil {
-			return jobs.Result{Processed: count}, fmt.Errorf("store soil geometry: %w", err)
-		}
-		return jobs.Result{Processed: count}, nil
-	}})
-	if err != nil {
+		snapshot = soilSnapshot{polygons: polygons, units: units, setID: setID}
+		return jobs.Result{Processed: len(polygons)}, nil
+	}}); err != nil {
 		return err
 	}
-	if outcome != jobs.OutcomeSuccess {
-		return fmt.Errorf("source import did not complete cleanly: %s", outcome)
-	}
-	outcome, _, err = runner.Run(ctx, jobs.Definition{ID: "union.soil.screening", Run: func(ctx context.Context) (jobs.Result, error) {
-		err := soil.Screening(ctx, dsn, county.Union, gisSource.Name(), polygons, units, soil.ScreeningOptions{FreshnessInterval: interval, SoilSetID: soilSetID})
-		return jobs.Result{Processed: len(polygons)}, err
-	}})
-	if err != nil {
-		return fmt.Errorf("required soil screening: %w", err)
-	}
-	if outcome != jobs.OutcomeSuccess {
-		return fmt.Errorf("required soil screening did not complete cleanly: %s", outcome)
+	if err := runRequired(ctx, runner, jobs.Definition{ID: "union.soil.screening", Run: func(ctx context.Context) (jobs.Result, error) {
+		err := soil.Screening(ctx, dsn, county.Union, gisSource.Name(), snapshot.polygons, snapshot.units, soil.ScreeningOptions{FreshnessInterval: interval, SoilSetID: snapshot.setID})
+		return jobs.Result{Processed: len(snapshot.polygons)}, err
+	}}); err != nil {
+		return err
 	}
 	return nil
 }

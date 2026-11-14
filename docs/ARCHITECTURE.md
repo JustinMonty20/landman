@@ -1,5 +1,7 @@
 # Land Parcel ROI Analysis Platform - Go Service Specification
 
+This document describes a proposed service. The current `./landman` command runs manual Union County jobs. It does not start cron or register connectors with `init()`. See [Union jobs](union-jobs.md) for the current executable behavior and schedule limits.
+
 ## Project Overview
 
 A standalone Go service that identifies and analyzes high ROI land investment opportunities across multiple counties in North Carolina. The service fetches data from multiple county sources (GIS, tax assessor, deeds), normalizes it, tracks changes over time, and exposes the data via REST API.
