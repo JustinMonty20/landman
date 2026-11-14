@@ -1,6 +1,6 @@
 ---
 name: verify-landman
-description: Verify landman by driving ./landman and goose against a dedicated verify PostGIS database. The binary reads DATABASE_URL, upserts Union County parcels, joins soil from MapServer layer 197, and runs soil screening. Use after changes to main.go, the Union GIS client, the vacant-land filter, parcel or soil storage, Makefile database targets, docker-compose, or db/migrations. Never point this skill at the operator database.
+description: Verify landman by driving ./landman and goose against a dedicated verify PostGIS database. The binary reads DATABASE_URL, upserts Union County parcels, joins soil from MapServer layer 197, and runs soil screening. The helper checks the schema, the seed census, page timings, and the drive verdict. Use after changes to main.go, the Union GIS client, the vacant-land filter, parcel or soil storage, Makefile database targets, docker-compose, or db/migrations. Never point this skill at the operator database.
 ---
 
 # Verify landman
@@ -74,12 +74,24 @@ Reset, migrate, and seed on every pass. `make db-drop` drops the database named 
 make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
 make db-create DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
 make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL"
+go run ./.cursor/skills/verify-landman/cmd/verify-landman check-schema \
+  --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
+  --seed .cursor/skills/verify-landman/seed.sql
 docker exec -i "$VERIFY_CONTAINER" \
   psql "$GOOSE_DATABASE_URL" -v ON_ERROR_STOP=1 \
   < .cursor/skills/verify-landman/seed.sql
+go run ./.cursor/skills/verify-landman/cmd/verify-landman check-loaded \
+  --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
+  --seed .cursor/skills/verify-landman/seed.sql
 ```
 
-The seed is a captured Union County sample, not a synthetic row. On 2026-11-14 a `./landman` import into `landman-verify-postgis` started at 2026-11-14T17:03:06Z and exited 0 at 2026-11-14T17:11:39Z. The file keeps 36 parcels from that import, 18 likely vacant and 18 built, whose centroids fall in EPSG:3857 500 m cells `(-17961, 8354)` and `(-17960, 8354)`, plus the soil map units, polygons, and overlaps the import stored for those parcels. Sale rows are the layer 215 `s1`, `s2`, and `s3` attributes for the same parcel IDs, read the same day. `./landman` does not write `parcel_sales`, so the file loads those attributes. The header of `seed.sql` records the capture. Leave `landman-postgis` alone. Do not run `docker compose` for this skill. Compose publishes port `5432` and mounts the volume `landman-postgis-data`.
+Run `check-schema` after `migrate-up` and before the seed load. Stdout is `schema: ok`, or one `schema: <table>.<column> missing` line for each inserted column the database does not have, or one `schema: <table>.<column> not null` line when a `NOT NULL` column has no default and the seed does not insert it. Exit 0 lets you load the seed. Exit 1 means you stop and do not load the seed.
+
+The seed is a captured Union County sample, not a synthetic row. The parcel ids are the ones whose centroids fall in EPSG:3857 500 m cells `(-17961, 8354)` and `(-17960, 8354)`. `capture-seed` refreshes those parcels, their kept sale slots, and the soil that intersects them. The header of `seed.sql` records the capture time and the two query URLs. Sale rows are the kept slots for those parcel ids. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete.
+
+Run `check-loaded` after the seed load. It prints the census parsed from `seed.sql`, then `loaded: ok` when the live counts and the two sample parcels match that file. Exit 1 names the table or the `source_parcel_id`.
+
+Leave `landman-postgis` alone. Do not run `docker compose` for this skill. Compose publishes port `5432` and mounts the volume `landman-postgis-data`.
 
 ### CLI
 
@@ -124,7 +136,7 @@ curl -sS -o /tmp/landman-verify-layer-197.json -w "%{http_code}" \
   "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197?f=json"
 ```
 
-Worth driving when `./landman` is executable, `go version` can build the module in `go.mod`, and both layer metadata requests return HTTP 200. Layer 215 is parcels. Layer 197 is soil. Exit 0 also calls the USDA tabular endpoint `https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest`. There is no separate metadata probe for that host. A failed USDA call fails the drive.
+Worth driving when `./landman` is executable, `go version` can build the module in `go.mod`, and both layer metadata requests return HTTP 200. Layer 215 is parcels. Layer 197 is soil. Those curls check that the hosts answer. Page timings come from `probe`. Exit 0 also calls the USDA tabular endpoint `https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest`. There is no separate metadata probe for that host. A failed USDA call fails the drive.
 
 ## Drive
 
@@ -136,11 +148,20 @@ Capture stdout, stderr, and the exit code for every command. `RUN_ID` identifies
 RUN_ID=$(date +%Y%m%dT%H%M%S)-$$
 EVIDENCE=artifacts/verify/$RUN_ID
 mkdir -p "$EVIDENCE"
+go run ./.cursor/skills/verify-landman/cmd/verify-landman probe \
+  --evidence "$EVIDENCE"
 DATABASE_URL="$HOST_DATABASE_URL" ./landman \
   >"$EVIDENCE/import.stdout.txt" \
   2>"$EVIDENCE/import.stderr.txt"
 echo $? >"$EVIDENCE/import.exit.txt"
+go run ./.cursor/skills/verify-landman/cmd/verify-landman classify \
+  --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
+  --seed .cursor/skills/verify-landman/seed.sql --evidence "$EVIDENCE"
 ```
+
+Run `probe` before `./landman`. It times each layer's `?f=json` metadata request, then one 2000-row data page, and writes `page-timings.json`. Parcel pages use `orderByFields=OBJECTID`. Soil pages use `orderByFields=OBJECTID_1`. Exit 0 when both metadata calls returned HTTP 200. A slow data page still exits 0. Classify treats metadata as fast when the call is HTTP 200 within 5 seconds. A data page is slow at 15 seconds or a timeout. A parcel batch gap of 15 seconds also counts. The first `[union_county_gis]` line is after the soil fetch, so the gap that ends at batch 1 is the first parcel page.
+
+Run `classify` after `./landman`. Stdout is one verdict line. The command also writes `$EVIDENCE/drive-outcome.json`. The fields are `verdict`, `seededSales`, `fullImport`, and `sales`. `sales` is null when the parcel transaction did not commit. The helper exits 2 for `inconclusive: county-source-slow`. `go run` turns that into shell exit 1 and prints `exit status 2` on stderr. Read the verdict line and `drive-outcome.json`.
 
 The process deadline is 10 minutes. It covers the soil fetch, the parcel import, soil storage (including the optional USDA name lookup), and required soil screening. Parcel pages use `BatchSize` 2000 from `main.go`. The GIS client sends about one request per second. Soil pages are also 2000. Soil fetch logs nothing. The first parcel log line appears after the soil fetch returns. The import summary is printed after parcels commit and before soil storage and screening finish. That line alone is not success.
 
@@ -153,7 +174,10 @@ Stable handles:
 - CLI stderr: `[union_county_gis] Fetch complete:`
 - CLI stderr fatal substrings: `create GIS source:`, `fetch soil polygons:`, `create parcel writer:`, `import parcels:`, `commit parcels:`, `store soil geometry:`, `required soil screening:`, `source import did not complete cleanly:`, `required soil screening did not complete cleanly:`, `invalid SOIL_SCREENING_MAX_AGE`
 - Makefile targets, always with the verify `DB_CONTAINER` and URL overrides: `make build`, `make db-drop`, `make db-create`, `make migrate-up`, `make migrate-version`, `make migrate-status`
-- SQL seed identities: `source_parcel_id` `07102010` (likely vacant, situs `105 CUPPED OAK DR`) and `07102051` (built, situs `203 WHITE OAK LN`), both `source_name` `union_county_gis`
+- SQL seed identities: `source_parcel_id` `07102010` and `07102051`, both `source_name` `union_county_gis`. Vacancy and situs are the `census parcel` lines from `check-loaded`.
+- `check-schema` stdout `schema: ok`
+- `check-loaded` stdout begins `census parcels=` and ends with `loaded: ok`
+- `classify` stdout `pass`, `fail`, or `inconclusive: county-source-slow`
 
 `log.Fatal` writes a timestamp before the error text and exits 1.
 
@@ -163,9 +187,9 @@ Store proof under `artifacts/verify/$RUN_ID/` in the repo root. Cleanup must not
 
 Proof standards:
 
-- Exercise `./landman` with `HOST_DATABASE_URL`, and exercise goose through the Makefile against `GOOSE_DATABASE_URL`. Do not call `GISSource.FetchBatches`, `ParcelIDImportService.Run`, `SaveSales`, or `IsLikelyVacantGISRecord` from a scratch program and call that a user-path proof.
-- Capture the command, stdout, stderr, and exit code. For the database, capture a later SQL read.
-- A successful import exits 0. Stdout contains the import summary. Stderr contains the batch-size line and `Fetch complete:`. The same `DATABASE_URL` then shows county parcel rows, soil rows, and `job_attempts` outcomes `success` for `union.gis.parcels` and `union.soil.screening`. The two seed parcel IDs are still present. `parcel_sales` is still the seed count, because the import does not write or delete that table.
+- Exercise `./landman` with `HOST_DATABASE_URL`, and exercise goose through the Makefile against `GOOSE_DATABASE_URL`. Do not call the GIS fetch, the import service, or the vacant filter from a scratch program and call that a user-path proof.
+- Capture the command, stdout, stderr, and exit code. For the database, capture `drive-outcome.json` from `classify`.
+- A successful import exits 0. Stdout contains the import summary. Stderr contains the batch-size line and `Fetch complete:`. `classify` then prints `pass`. `drive-outcome.json` records `seededSales` and `fullImport` as `met`. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete. Do not query a county-wide `parcel_sales` total.
 - The printed vacant-ID count is not the number of `likely_vacant` true rows. An empty `PID` is stored with `likely_vacant` false. `job_attempts.processed_count` on the parcel job counts saved features, which can exceed the number of `parcels` rows.
 - The GIS and USDA endpoints are production systems. There is no dry-run flag. Do not run two `./landman` drives at the same time. A second run records `skipped_overlap` and exits non-zero.
 - A green `make test` or `go test` is not evidence that the CLI or migrations work.
@@ -188,4 +212,18 @@ docker volume rm "$VERIFY_VOLUME"
 
 ## Helpers
 
-This skill ships no helper scripts. The seed file is `.cursor/skills/verify-landman/seed.sql`. Use `make`, `docker`, `curl`, and `psql` via `docker exec` as shown above.
+The helper is one program.
+
+```sh
+go run ./.cursor/skills/verify-landman/cmd/verify-landman
+```
+
+`check-schema`, `check-loaded`, `probe`, and `classify` are the steps in the launch and the drive above. The seed file is `.cursor/skills/verify-landman/seed.sql`.
+
+`capture-seed` refreshes that file from the county. It writes `seed.sql.capture-tmp` beside the seed and renames the temp file over `seed.sql` only after the temp file parses back to the same parcel ids. A request that hits 30 seconds, or a missed 3 minute budget, prints `capture: left seed.sql in place (county slow)` and the helper exits 2. The current seed stays. `go run` turns that exit into shell exit 1 and prints `exit status 2` on stderr. Do not run `capture-seed` on a normal drive.
+
+```sh
+go run ./.cursor/skills/verify-landman/cmd/verify-landman capture-seed \
+  --container "$VERIFY_CONTAINER" --postgres-url "$POSTGRES_URL" \
+  --seed .cursor/skills/verify-landman/seed.sql
+```
