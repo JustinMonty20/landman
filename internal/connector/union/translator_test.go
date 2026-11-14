@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
+	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/twpayne/go-geom"
 )
 
@@ -424,6 +425,93 @@ func assertFloat(t *testing.T, got *float64, want float64, field string) {
 	if got == nil || *got != want {
 		t.Fatalf("%s = %v, want %f", field, got, want)
 	}
+}
+
+func TestGISTranslatorSaleSlots(t *testing.T) {
+	t.Run("no sale fields", func(t *testing.T) {
+		parcel := translateSaleAttrs(t, map[string]interface{}{"PID": "1"})
+		if len(parcel.Sales) != 0 {
+			t.Fatalf("len(Sales) = %d, want 0", len(parcel.Sales))
+		}
+	})
+	t.Run("empty and zero fields", func(t *testing.T) {
+		parcel := translateSaleAttrs(t, map[string]interface{}{
+			"PID":          "1",
+			"s1_SALESAMT":  0,
+			"s1_SALEDATE":  0,
+			"s1_DEED_BOOK": "",
+			"s1_grantor":   "  ",
+			"s2_SALESAMT":  0.0,
+			"s3_DEED_PAGE": " ",
+		})
+		if len(parcel.Sales) != 0 {
+			t.Fatalf("len(Sales) = %d, want 0", len(parcel.Sales))
+		}
+	})
+	t.Run("partial s2", func(t *testing.T) {
+		parcel := translateSaleAttrs(t, map[string]interface{}{
+			"PID":          "1",
+			"s2_DEED_BOOK": "6429",
+		})
+		if len(parcel.Sales) != 1 || parcel.Sales[0].Sequence != 2 {
+			t.Fatalf("Sales = %+v, want one sequence 2", parcel.Sales)
+		}
+		assertString(t, parcel.Sales[0].DeedBook, "6429", "DeedBook")
+	})
+	t.Run("zero amount with date and deed", func(t *testing.T) {
+		parcel := translateSaleAttrs(t, map[string]interface{}{
+			"PID":          "1",
+			"s2_SALESAMT":  0,
+			"s2_SALEDATE":  1430092800000,
+			"s2_DEED_BOOK": "6429",
+			"s2_DEED_PAGE": "122",
+		})
+		if len(parcel.Sales) != 1 || parcel.Sales[0].Sequence != 2 {
+			t.Fatalf("Sales = %+v, want sequence 2", parcel.Sales)
+		}
+		assertFloat(t, parcel.Sales[0].Amount, 0, "Amount")
+		if parcel.Sales[0].SaleDate == nil || parcel.Sales[0].OGSaleDate == nil {
+			t.Fatal("zero amount sale dropped the date")
+		}
+	})
+	t.Run("malformed date and price", func(t *testing.T) {
+		parcel := translateSaleAttrs(t, map[string]interface{}{
+			"PID":         "1",
+			"s1_SALEDATE": "05/25/2007",
+			"s1_SALESAMT": "$173,000",
+			"s1_DEEDTYPE": "WD",
+			"s3_SALESAMT": "nope",
+		})
+		if len(parcel.Sales) != 1 || parcel.Sales[0].Sequence != 1 {
+			t.Fatalf("Sales = %+v, want one sequence 1", parcel.Sales)
+		}
+		if parcel.Sales[0].SaleDate != nil || parcel.Sales[0].OGSaleDate != nil || parcel.Sales[0].Amount != nil {
+			t.Fatalf("malformed fields stored as %+v", parcel.Sales[0])
+		}
+		assertString(t, parcel.Sales[0].DeedType, "WD", "DeedType")
+	})
+	t.Run("negative amount stays on the sale", func(t *testing.T) {
+		parcel := translateSaleAttrs(t, map[string]interface{}{
+			"PID":         "1",
+			"s1_SALESAMT": -5,
+		})
+		if len(parcel.Sales) != 1 || parcel.Sales[0].Amount == nil || *parcel.Sales[0].Amount != -5 {
+			t.Fatalf("Sales = %+v, want amount -5", parcel.Sales)
+		}
+	})
+}
+
+func translateSaleAttrs(t *testing.T, attrs map[string]interface{}) *models.GISParcel {
+	t.Helper()
+	parcel, err := NewGISTranslator().Translate(connector.RawRecord{
+		SourceName: "union_county_gis",
+		ParcelID:   "1",
+		RawData:    map[string]interface{}{"attributes": attrs},
+	})
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	return parcel
 }
 
 func TestGISTranslatorLiveMultipleShells(t *testing.T) {
