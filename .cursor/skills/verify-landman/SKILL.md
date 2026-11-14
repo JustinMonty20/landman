@@ -85,9 +85,9 @@ go run ./.cursor/skills/verify-landman/cmd/verify-landman check-loaded \
   --seed .cursor/skills/verify-landman/seed.sql
 ```
 
-Run `check-schema` after `migrate-up` and before the seed load. Stdout is `schema: ok`, or one `schema: <table>.<column> missing` line for each column the seed inserts that the database does not have. Exit 0 lets you load the seed. Exit 1 means you stop and do not load the seed.
+Run `check-schema` after `migrate-up` and before the seed load. Stdout is `schema: ok`, or one `schema: <table>.<column> missing` line for each inserted column the database does not have, or one `schema: <table>.<column> not null` line when a `NOT NULL` column has no default and the seed does not insert it. Exit 0 lets you load the seed. Exit 1 means you stop and do not load the seed.
 
-The seed is a captured Union County sample, not a synthetic row. On 2026-11-14 a `./landman` import into `landman-verify-postgis` started at 2026-11-14T17:03:06Z and exited 0 at 2026-11-14T17:11:39Z. The parcels are the ones whose centroids fall in EPSG:3857 500 m cells `(-17961, 8354)` and `(-17960, 8354)`, plus the soil map units, polygons, and overlaps stored for those parcels. Sale rows are the kept slots for those parcel ids. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete. The header of `seed.sql` records the capture.
+The seed is a captured Union County sample, not a synthetic row. The parcel ids are the ones whose centroids fall in EPSG:3857 500 m cells `(-17961, 8354)` and `(-17960, 8354)`. `capture-seed` refreshes those parcels, their kept sale slots, and the soil that intersects them. The header of `seed.sql` records the capture time and the two query URLs. Sale rows are the kept slots for those parcel ids. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete.
 
 Run `check-loaded` after the seed load. It prints the census parsed from `seed.sql`, then `loaded: ok` when the live counts and the two sample parcels match that file. Exit 1 names the table or the `source_parcel_id`.
 
@@ -159,9 +159,9 @@ go run ./.cursor/skills/verify-landman/cmd/verify-landman classify \
   --seed .cursor/skills/verify-landman/seed.sql --evidence "$EVIDENCE"
 ```
 
-Run `probe` before `./landman`. It times layer 215 and layer 197 metadata, then one data page each, and writes `page-timings.json`. Exit 0 when both metadata calls returned HTTP 200. A slow data page still exits 0.
+Run `probe` before `./landman`. It times each layer's `?f=json` metadata request, then one 2000-row data page, and writes `page-timings.json`. Parcel pages use `orderByFields=OBJECTID`. Soil pages use `orderByFields=OBJECTID_1`. Exit 0 when both metadata calls returned HTTP 200. A slow data page still exits 0. Classify treats metadata as fast when the call is HTTP 200 within 5 seconds. A data page is slow at 15 seconds or a timeout. A later parcel batch gap of 15 seconds also counts. The gap that ends at batch 1 includes the silent soil fetch, so it does not count.
 
-Run `classify` after `./landman`. Stdout is one verdict line. The command also writes `$EVIDENCE/drive-outcome.json`. The fields are `verdict`, `seededSales`, `fullImport`, and `sales`. `sales` is null when the parcel transaction did not commit.
+Run `classify` after `./landman`. Stdout is one verdict line. The command also writes `$EVIDENCE/drive-outcome.json`. The fields are `verdict`, `seededSales`, `fullImport`, and `sales`. `sales` is null when the parcel transaction did not commit. The helper exits 2 for `inconclusive: county-source-slow`. `go run` turns that into shell exit 1 and prints `exit status 2` on stderr. Read the verdict line and `drive-outcome.json`.
 
 The process deadline is 10 minutes. It covers the soil fetch, the parcel import, soil storage (including the optional USDA name lookup), and required soil screening. Parcel pages use `BatchSize` 2000 from `main.go`. The GIS client sends about one request per second. Soil pages are also 2000. Soil fetch logs nothing. The first parcel log line appears after the soil fetch returns. The import summary is printed after parcels commit and before soil storage and screening finish. That line alone is not success.
 
@@ -220,7 +220,7 @@ go run ./.cursor/skills/verify-landman/cmd/verify-landman
 
 `check-schema`, `check-loaded`, `probe`, and `classify` are the steps in the launch and the drive above. The seed file is `.cursor/skills/verify-landman/seed.sql`.
 
-`capture-seed` refreshes that file from the county. It writes `seed.sql.capture-tmp` beside the seed and renames the temp file over `seed.sql` only after the temp file parses back to the same parcel ids. A request that hits 30 seconds, or a missed 3 minute budget, prints `capture: left seed.sql in place (county slow)`, exits 2, and leaves the current seed. Do not run `capture-seed` on a normal drive.
+`capture-seed` refreshes that file from the county. It writes `seed.sql.capture-tmp` beside the seed and renames the temp file over `seed.sql` only after the temp file parses back to the same parcel ids. A request that hits 30 seconds, or a missed 3 minute budget, prints `capture: left seed.sql in place (county slow)` and the helper exits 2. The current seed stays. `go run` turns that exit into shell exit 1 and prints `exit status 2` on stderr. Do not run `capture-seed` on a normal drive.
 
 ```sh
 go run ./.cursor/skills/verify-landman/cmd/verify-landman capture-seed \
