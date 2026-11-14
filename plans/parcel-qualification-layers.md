@@ -1,4 +1,4 @@
-# Parcel qualification layers for Application V1
+# Parcel qualification layers for V1
 
 ## Outcome and release scope
 
@@ -10,7 +10,7 @@ Use branch `plan/parcel-qualification-layers` and PR title `[plan:parcel-qualifi
 
 ## Existing inputs and boundaries
 
-- [application-v1.md](application-v1.md) owns the buyer workflow, user isolation, saved lists, personal scratchpad, lead state machine, activity history, and follow-up reminders. This plan supplies evidence to that workflow, not another lead-management system. The current application explicitly excludes mailing preparation/export and owner-facing message generation or delivery.
+[v1.md](v1.md) owns the buyer workflow, user isolation, saved lists, personal scratchpad, lead state machine, activity history, and follow-up reminders. This plan supplies evidence to that workflow, not another lead-management system. The application excludes mailing preparation/export and owner-facing message generation or delivery.
 - [soil-layer.md](soil-layer.md) owns durable multipart parcel persistence, stable parcel UUIDs, and soil screening. Reuse its parcel foundation. Do not wait for soil screening to implement these three groups, and do not change its soil release contract.
 - [source-jobs-runner-scheduler.md](source-jobs-runner-scheduler.md) owns execution history, job exclusion, scheduling, cancellation, and quarantine. Use it rather than adding a parallel scheduler. A source job owns publication transactions and assessment freshness.
 - Present code has the Union layer-215 fetcher, translator, parcel/sales writers, and an executable streaming likely-vacant IDs. The full parcel import, runner, these layers, and the application UI are planned rather than all implemented. No frontend source or established application API is present in this checkout; identify the application implementation location before the UI work. Backend completion alone cannot satisfy this plan.
@@ -115,7 +115,7 @@ The external triage receipts and downloaded archive are temporary investigation 
 
 - [ ] `go test -race ./... -count=1`, `go vet ./...`, and `go build ./...` pass; database-tagged tests pass against migrated PostGIS. Run the actual application's test/build commands once its location is identified; record those commands and results rather than inventing them now.
 - [ ] Source receipts, current-generation/freshness checks, geometry fixtures, and end-to-end UI evidence exist for all three groups. A source-specific gap is visibly reported; an entirely unimplemented group or unreachable unvalidated flood feed cannot satisfy release.
-- [ ] Application V1's scratchpad, explicit state transitions, dated activity, do-not-contact handling, follow-up reminders, and user-isolation checks still pass. The new layers are evidence for buyer decisions, not a replacement for personal lead tracking or permission to add excluded outreach features.
+- [ ] V1 scratchpad, explicit state transitions, dated activity, do-not-contact handling, follow-up reminders, and user-isolation checks still pass. The new layers are evidence for buyer decisions, not a replacement for personal lead tracking or permission to add excluded outreach features.
 
 ## Open gates, not deferred promises
 
