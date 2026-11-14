@@ -27,13 +27,13 @@ func TestSchemaNamesSaleDateTypoWhenColumnIsNotLive(t *testing.T) {
 			t.Fatalf("catalog SQL %s", sql)
 		}
 		return strings.Join([]string{
-			"parcels\tid",
-			"parcels\tsource_parcel_id",
-			"parcels\tsitus_line_1",
-			"parcels\tlikely_vacant",
-			"parcel_sales\tparcel_id",
-			"parcel_sales\tsequence",
-			"parcel_sales\tsale_date",
+			"parcels\tid\tNO\tgen_random_uuid()",
+			"parcels\tsource_parcel_id\tNO\t",
+			"parcels\tsitus_line_1\tYES\t",
+			"parcels\tlikely_vacant\tNO\tfalse",
+			"parcel_sales\tparcel_id\tNO\t",
+			"parcel_sales\tsequence\tNO\t",
+			"parcel_sales\tsale_date\tYES\t",
 			"",
 		}, "\n"), nil
 	})
@@ -48,6 +48,37 @@ func TestSchemaNamesSaleDateTypoWhenColumnIsNotLive(t *testing.T) {
 	}
 	if strings.Contains(text, "schema: ok") {
 		t.Fatalf("report %q", text)
+	}
+}
+
+func TestSchemaNamesOmittedNotNullColumn(t *testing.T) {
+	dir := t.TempDir()
+	seedPath := filepath.Join(dir, "seed.sql")
+	seed := "" +
+		"INSERT INTO parcels (id, source_parcel_id, situs_line_1, likely_vacant) VALUES ('11111111-1111-1111-1111-111111111111'::uuid, '07102010', '105 CUPPED OAK DR', 't');\n" +
+		"INSERT INTO parcel_sales (parcel_id, sequence, sale_date) SELECT id, 1, NULL FROM parcels WHERE source_parcel_id = '07102010';\n"
+	if err := os.WriteFile(seedPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	text, code := checkSchema(verifyContainerName, "postgres://landman/landman", seedPath, func(ctx context.Context, container, databaseURL, sql string) (string, error) {
+		return strings.Join([]string{
+			"parcels\tid\tNO\tgen_random_uuid()",
+			"parcels\tsource_parcel_id\tNO\t",
+			"parcels\tsitus_line_1\tYES\t",
+			"parcels\tlikely_vacant\tNO\tfalse",
+			"parcel_sales\tparcel_id\tNO\t",
+			"parcel_sales\tsequence\tNO\t",
+			"parcel_sales\tsale_date\tYES\t",
+			"parcel_sales\tid\tNO\tgen_random_uuid()",
+			"parcel_sales\tdeed_book\tNO\t",
+			"",
+		}, "\n"), nil
+	})
+	if code != 1 || !strings.Contains(text, "schema: parcel_sales.deed_book not null") {
+		t.Fatalf("exit %d report %q", code, text)
+	}
+	if strings.Contains(text, "parcel_sales.id") {
+		t.Fatalf("defaulted id was reported %q", text)
 	}
 }
 
