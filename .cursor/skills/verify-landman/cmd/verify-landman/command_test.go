@@ -11,7 +11,7 @@ import (
 )
 
 func TestClassifyCommandSkipsSalesWhenImportDidNotCommit(t *testing.T) {
-	dir := writeEvidence(t, "", slowDriveLog(30*time.Second)+"context deadline exceeded\n", "1", fastMetadataProbe(0))
+	dir := writeEvidence(t, "", slowDriveLog(30*time.Second)+"context deadline exceeded\n", "1", fastMetadataProbe(30*time.Second))
 	text, code := runClassify(verifyContainerName, "postgres://landman/landman", filepath.Join(dir, "missing.sql"), dir, classifyDeps{
 		query: func(ctx context.Context, container, databaseURL, sql string) (string, error) {
 			t.Fatal("sale query ran")

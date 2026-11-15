@@ -102,7 +102,7 @@ func classify(in classifyInput) driveOutcome {
 	logText := in.stdout + "\n" + in.stderr
 	didCommit := strings.Contains(in.stdout, commitLine) || strings.Contains(in.stderr, commitLine)
 	deadline := deadlineText(logText)
-	slow := countySourceSlow(in.probe, logText)
+	slow := countySourceSlow(in.probe)
 
 	if !didCommit {
 		out := driveOutcome{SeededSales: tierNotRun, FullImport: tierMissed}
@@ -157,9 +157,8 @@ func deadlineText(logText string) bool {
 		strings.Contains(logText, "rate: Wait(n=1) would exceed context deadline")
 }
 
-func countySourceSlow(probe pageTimings, logText string) bool {
-	gap := laterBatchGapSlow(logText)
-	if metaFast(probe.ParcelMetadata) && (callSlow(probe.ParcelPage) || gap) {
+func countySourceSlow(probe pageTimings) bool {
+	if metaFast(probe.ParcelMetadata) && callSlow(probe.ParcelPage) {
 		return true
 	}
 	return metaFast(probe.SoilMetadata) && callSlow(probe.SoilPage)
