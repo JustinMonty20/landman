@@ -45,3 +45,23 @@ Did not refresh `seed.sql`. After migrate to version 15, `check-schema` printed 
 ## Out-of-scope decision
 
 Added `features/schedule-union-jobs.md` instead of folding `./landman schedule` into the import feature. The map contract is one user-visible behavior per feature file, and schedule does not import at startup.
+
+## Out-of-scope decision
+
+Left `[union_county_gis] Fetch cancelled after <n> batches` off the stable handles. A cancelled parcel fetch still exits with `context deadline exceeded` and `required union.gis.parcels:`, which the map already names.
+
+## Out-of-scope decision
+
+Did not describe `ANALYZE parcels, parcel_sales` in the feature map. That statement writes no log line.
+
+## Out-of-scope decision
+
+Did not run `./landman run union.gis.parcels` or `./landman run union.gis.soil`. This pass keeps one county fetch, and that fetch is bare `./landman`.
+
+## Out-of-scope decision
+
+`cursor-team-kit` `deslop` and `control-cli` are not installed here. The helper tests and the live drive are the checks.
+
+## Product gap
+
+The live `./landman` import on 2026-11-15 started at 04:07:03Z on `landman-verify-postgis`. Parcel fetch finished in 2m56s. `union.gis.parcels` and `union.gis.soil` recorded `success`. `union.soil.screening` recorded `interrupted` at 04:17:03Z with `soil assessment hits: timeout: context deadline exceeded`. Probe pages were 469 ms and 981 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. This pass does not change product code. Evidence is `artifacts/verify/20261115T040419Z-8693`, which is gitignored.
