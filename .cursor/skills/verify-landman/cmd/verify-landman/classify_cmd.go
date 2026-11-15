@@ -15,8 +15,6 @@ type classifyDeps struct {
 	get   httpGetter
 }
 
-// runClassify reads the drive evidence, and reads sales only when a full
-// parcel scan published. It writes drive-outcome.json and returns the verdict line.
 func runClassify(container, gooseURL, seedPath, evidence string, deps classifyDeps) (string, int) {
 	if err := refuseContainer(container); err != nil {
 		fmt.Fprintf(os.Stderr, "classify: %v\n", err)

@@ -19,8 +19,7 @@ WHERE p.county_id = 'union' AND p.source_name = 'union_county_gis'
   AND p.source_parcel_id = ANY($1::text[])
 ORDER BY 1, 2`
 
-// publicationSQL counts a full parcel scan that published. Quarantine still publishes the accepted parcels.
-const publicationSQL = `
+const committedIncludingQuarantineSQL = `
 SELECT count(*)::text
 FROM job_attempts
 WHERE job_id = 'union.gis.parcels'
@@ -294,7 +293,7 @@ func parseSaleRows(raw string) ([]saleSlot, error) {
 }
 
 func parcelPublished(ctx context.Context, query sqlQuery, container, databaseURL string) (bool, error) {
-	raw, err := query(ctx, container, databaseURL, publicationSQL)
+	raw, err := query(ctx, container, databaseURL, committedIncludingQuarantineSQL)
 	if err != nil {
 		return false, err
 	}
