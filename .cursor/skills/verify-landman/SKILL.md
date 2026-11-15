@@ -5,7 +5,7 @@ description: Verify landman by driving ./landman and goose against a dedicated v
 
 # Verify landman
 
-Landman is a Go CLI plus PostGIS. There is no web UI, no TUI, and no HTTP server of our own. The binary reads no flags. Extra arguments are ignored, so `./landman import` is the same process as `./landman`. It reads `DATABASE_URL` and runs three jobs in order. `union.gis.parcels` writes parcels and prints one summary line. `union.gis.soil` stores soil. `union.soil.screening` screens that committed soil set. An error, or any outcome other than `success`, stops the later jobs.
+Landman is a Go CLI plus PostGIS. There is no web UI, no TUI, and no HTTP server of our own. The binary reads no flags. With no arguments, it reads `DATABASE_URL` and runs three jobs in order. `union.gis.parcels` writes parcels and prints one summary line. `union.gis.soil` stores soil. `union.soil.screening` screens that committed soil set. An error, or any outcome other than `success`, stops the later jobs. `./landman schedule` does not import at startup. It requires `UNION_PARCELS_CRON` and `UNION_SOIL_CRON`, then waits for the next due time. `./landman run union.gis.parcels`, `./landman run union.gis.soil`, and `./landman run union.soil.screening` each run that one job. A source `run` still screens afterward. Any other argument, including `import`, prints a usage error and exits 1 before it opens the database.
 
 This skill is for the next agent. Drive the real binary and a verify database this run created. Do not treat `go test` as a substitute. Do not use the operator database.
 
@@ -172,7 +172,8 @@ Stable handles:
 - CLI stderr: `[union_county_gis] Batch size: 2000, Total batches: <m>`
 - CLI stderr: `[union_county_gis] Batch <i>/<total> complete:`
 - CLI stderr: `[union_county_gis] Fetch complete:`
-- CLI stderr fatal substrings: `create GIS source:`, `fetch soil polygons:`, `create parcel writer:`, `import parcels:`, `commit parcels:`, `store soil geometry:`, `required union.gis.parcels:`, `required union.gis.soil:`, `required union.soil.screening:`, `required union.gis.parcels did not complete cleanly:`, `required union.gis.soil did not complete cleanly:`, `required union.soil.screening did not complete cleanly:`, `invalid SOIL_SCREENING_MAX_AGE`
+- CLI stderr when the arguments are not a known command: `usage: landman [schedule | run <union.gis.parcels|union.gis.soil|union.soil.screening>]`
+- CLI stderr fatal substrings: `create GIS source:`, `fetch soil polygons:`, `create parcel writer:`, `import parcels:`, `commit parcels:`, `required union.gis.parcels:`, `required union.gis.soil:`, `required union.soil.screening:`, `required union.gis.parcels did not complete cleanly:`, `required union.gis.soil did not complete cleanly:`, `required union.soil.screening did not complete cleanly:`, `invalid SOIL_SCREENING_MAX_AGE`, `connect for derived refresh exclusion:`, `wait for derived refresh exclusion:`
 - Makefile targets, always with the verify `DB_CONTAINER` and URL overrides: `make build`, `make db-drop`, `make db-create`, `make migrate-up`, `make migrate-version`, `make migrate-status`
 - SQL seed identities: `source_parcel_id` `07102010` and `07102051`, both `source_name` `union_county_gis`. Vacancy and situs are the `census parcel` lines from `check-loaded`.
 - `check-schema` stdout `schema: ok`
