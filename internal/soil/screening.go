@@ -668,6 +668,13 @@ SELECT $1,m.polygon_id FROM soil_polygon_set_members m JOIN soil_polygons p ON p
 			}
 		}
 	}
+	// Both derived writes must see the same parcel geometry through publication.
+	if _, err = tx.Exec(ctx, `LOCK TABLE parcels IN SHARE MODE`); err != nil {
+		return fmt.Errorf("soil assessment parcel lock: %w", err)
+	}
+	if _, err = tx.Exec(ctx, overlapInsert, countyID.String(), source, setID); err != nil {
+		return err
+	}
 	if err = assessParcels(ctx, tx, runID, setID, countyID, source); err != nil {
 		return err
 	}

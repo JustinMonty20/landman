@@ -103,6 +103,7 @@ func TestPostgresRunnerPersistsOutcomesAndLastCleanSuccess(t *testing.T) {
 		{name: "success with quarantine", result: Result{Processed: 3, Quarantined: 1}, outcome: OutcomeSuccessWithQuarantine},
 		{name: "failed", runErr: errors.New("source failed"), outcome: OutcomeFailed},
 		{name: "interrupted", runErr: context.Canceled, outcome: OutcomeInterrupted},
+		{name: "pending", runErr: ErrPending, outcome: OutcomePending},
 	}
 	jobIDs := make([]string, 0, len(cases)+1)
 	for _, tc := range cases {

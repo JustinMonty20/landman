@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector"
@@ -14,14 +18,10 @@ import (
 	"github.com/JustinMonty20/landman/internal/parcelstore"
 	"github.com/JustinMonty20/landman/internal/service"
 	"github.com/JustinMonty20/landman/internal/soil"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/robfig/cron/v3"
 )
-
-type soilSnapshot struct {
-	polygons []soil.Polygon
-	units    []soil.MapUnit
-	setID    string
-}
 
 type requiredRunner interface {
 	Run(context.Context, jobs.Definition) (jobs.Outcome, jobs.Result, error)
@@ -38,8 +38,66 @@ func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Def
 	return nil
 }
 
+const (
+	parcelJobID    = "union.gis.parcels"
+	soilJobID      = "union.gis.soil"
+	screeningJobID = "union.soil.screening"
+	jobTimeout     = 10 * time.Minute
+)
+
+// unionExecutor preserves source outcomes when a separate downstream attempt fails.
+type unionExecutor struct {
+	runner  requiredRunner
+	refresh func(context.Context) error
+}
+
+func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, jobTimeout)
+	defer cancel()
+	outcome, result, err := e.runner.Run(ctx, definition)
+	if err == nil && outcome == jobs.OutcomeSuccess {
+		err = e.refresh(ctx)
+	}
+	return outcome, result, err
+}
+
+func command(args []string) (string, error) {
+	if len(args) == 0 {
+		return "all", nil
+	}
+	if len(args) == 1 && args[0] == "schedule" {
+		return "schedule", nil
+	}
+	if len(args) == 2 && args[0] == "run" {
+		switch args[1] {
+		case parcelJobID, soilJobID, screeningJobID:
+			return args[1], nil
+		}
+	}
+	return "", fmt.Errorf("usage: landman [schedule | run <%s|%s|%s>]", parcelJobID, soilJobID, screeningJobID)
+}
+
+func schedules(getenv func(string) string) (map[string]string, error) {
+	values := make(map[string]string, 2)
+	for _, entry := range []struct{ id, env string }{
+		{parcelJobID, "UNION_PARCELS_CRON"}, {soilJobID, "UNION_SOIL_CRON"},
+	} {
+		text := getenv(entry.env)
+		fields := strings.Fields(text)
+		if len(fields) != 6 || !strings.HasPrefix(fields[0], "CRON_TZ=") || fields[0] == "CRON_TZ=" {
+			return nil, fmt.Errorf("%s requires CRON_TZ and five calendar fields", entry.env)
+		}
+		text = strings.Join(fields, " ")
+		if _, err := cron.ParseStandard(text); err != nil {
+			return nil, fmt.Errorf("%s: %w", entry.env, err)
+		}
+		values[entry.id] = text
+	}
+	return values, nil
+}
+
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := run(ctx); err != nil {
 		log.Fatal(err)
@@ -47,6 +105,22 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	mode, err := command(os.Args[1:])
+	if err != nil {
+		return err
+	}
+	var calendar map[string]string
+	if mode == "schedule" {
+		calendar, err = schedules(os.Getenv)
+		if err != nil {
+			return err
+		}
+	} else {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, jobTimeout)
+		defer cancel()
+	}
+
 	dsn := os.Getenv("DATABASE_URL")
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -73,34 +147,101 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create GIS source: %w", err)
 	}
-	if err := runRequired(ctx, runner, jobs.Definition{ID: "union.gis.parcels", Run: func(ctx context.Context) (jobs.Result, error) {
-		count, err := importParcels(ctx, dsn, gisSource)
-		return jobs.Result{Processed: count}, err
-	}}); err != nil {
-		return err
+	definitions := []jobs.Definition{
+		{ID: parcelJobID, Schedule: calendar[parcelJobID], Run: func(ctx context.Context) (jobs.Result, error) {
+			count, err := importParcels(ctx, dsn, gisSource)
+			return jobs.Result{Processed: count}, err
+		}},
+		{ID: soilJobID, Schedule: calendar[soilJobID], Run: func(ctx context.Context) (jobs.Result, error) {
+			polygons, units, err := gisSource.FetchSoilPolygons(ctx)
+			if err != nil {
+				return jobs.Result{}, fmt.Errorf("fetch soil polygons: %w", err)
+			}
+			_, err = soil.StoreWithSet(ctx, dsn, county.Union, gisSource.Name(), polygons, units)
+			return jobs.Result{Processed: len(polygons)}, err
+		}},
 	}
-	var snapshot soilSnapshot
-	if err := runRequired(ctx, runner, jobs.Definition{ID: "union.gis.soil", Run: func(ctx context.Context) (jobs.Result, error) {
-		polygons, units, err := gisSource.FetchSoilPolygons(ctx)
+	refresh := func(ctx context.Context) error {
+		return withRefreshLock(ctx, dsn, func(ctx context.Context) error {
+			return runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+				count, err := soil.ScreenStored(ctx, dsn, county.Union, gisSource.Name(), interval)
+				if errors.Is(err, soil.ErrNoStoredSet) {
+					err = fmt.Errorf("%w: %w", jobs.ErrPending, err)
+				}
+				return jobs.Result{Processed: count}, err
+			}})
+		})
+	}
+	executor := unionExecutor{runner: runner, refresh: refresh}
+	if mode == "schedule" {
+		scheduler, err := jobs.NewScheduler(executor, definitions)
 		if err != nil {
-			return jobs.Result{}, fmt.Errorf("fetch soil polygons: %w", err)
+			return err
 		}
-		setID, err := soil.StoreWithSet(ctx, dsn, county.Union, gisSource.Name(), polygons, units)
+		scheduler.Start()
+		<-ctx.Done()
+		<-scheduler.Stop().Done()
+		return nil
+	}
+	return runManual(ctx, mode, runner, executor, definitions, refresh)
+}
+
+func runManual(ctx context.Context, mode string, runner requiredRunner, executor unionExecutor, definitions []jobs.Definition, refresh func(context.Context) error) error {
+	if mode == screeningJobID {
+		return refresh(ctx)
+	}
+	for _, definition := range definitions {
+		if mode == "all" {
+			if err := runRequired(ctx, runner, definition); err != nil {
+				return err
+			}
+		} else if mode == definition.ID {
+			return runRequired(ctx, executor, definition)
+		}
+	}
+	return refresh(ctx)
+}
+
+// Retry a derived overlap while the caller's deadline remains. A lost advisory-lock session must not discard a source success.
+func runDerived(ctx context.Context, runner requiredRunner, definition jobs.Definition) error {
+	for {
+		outcome, _, err := runner.Run(ctx, definition)
 		if err != nil {
-			return jobs.Result{Processed: len(polygons)}, fmt.Errorf("store soil geometry: %w", err)
+			return fmt.Errorf("required %s: %w", definition.ID, err)
 		}
-		snapshot = soilSnapshot{polygons: polygons, units: units, setID: setID}
-		return jobs.Result{Processed: len(polygons)}, nil
-	}}); err != nil {
+		if outcome == jobs.OutcomeSuccess {
+			return nil
+		}
+		if outcome != jobs.OutcomeSkippedOverlap {
+			return fmt.Errorf("required %s did not complete cleanly: %s", definition.ID, outcome)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("required %s: %w", definition.ID, ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// Wait before claiming the derived job so a concurrent successful source cannot lose its refresh to an overlap skip.
+func withRefreshLock(ctx context.Context, dsn string, refresh func(context.Context) error) error {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
 		return err
 	}
-	if err := runRequired(ctx, runner, jobs.Definition{ID: "union.soil.screening", Run: func(ctx context.Context) (jobs.Result, error) {
-		err := soil.Screening(ctx, dsn, county.Union, gisSource.Name(), snapshot.polygons, snapshot.units, soil.ScreeningOptions{FreshnessInterval: interval, SoilSetID: snapshot.setID})
-		return jobs.Result{Processed: len(snapshot.polygons)}, err
-	}}); err != nil {
-		return err
+	conn, err := pgx.ConnectConfig(ctx, config.ConnConfig)
+	if err != nil {
+		return fmt.Errorf("connect for derived refresh exclusion: %w", err)
 	}
-	return nil
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = conn.Close(closeCtx)
+	}()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1,0))`, "soil-refresh:union:union_county_gis"); err != nil {
+		return fmt.Errorf("wait for derived refresh exclusion: %w", err)
+	}
+	return refresh(ctx)
 }
 
 func importParcels(ctx context.Context, dsn string, gisSource *union.GISSource) (int, error) {

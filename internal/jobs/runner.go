@@ -16,7 +16,11 @@ const (
 	OutcomeFailed                Outcome = "failed"
 	OutcomeInterrupted           Outcome = "interrupted"
 	OutcomeSkippedOverlap        Outcome = "skipped_overlap"
+	OutcomePending               Outcome = "pending"
 )
+
+// ErrPending marks work that cannot complete until a prerequisite is available.
+var ErrPending = errors.New("job pending")
 
 // Result describes work completed by a source job.
 type Result struct {
@@ -94,6 +98,9 @@ func (r *Runner) Run(ctx context.Context, definition Definition) (Outcome, Resul
 
 func outcomeFor(result Result, err error) Outcome {
 	if err != nil {
+		if errors.Is(err, ErrPending) {
+			return OutcomePending
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return OutcomeInterrupted
 		}

@@ -85,10 +85,6 @@ type ParcelAssessment struct {
 func areaTolerance(total float64) float64 { return math.Max(1e-7, total*1e-8) }
 
 func assessParcels(ctx context.Context, tx pgx.Tx, runID, setID string, countyID county.ID, source string) error {
-	// Keep parcel writes after the published head, not between the area snapshot and publication.
-	if _, err := tx.Exec(ctx, `LOCK TABLE parcels IN SHARE MODE`); err != nil {
-		return fmt.Errorf("soil assessment parcel lock: %w", err)
-	}
 	if _, err := tx.Exec(ctx, `INSERT INTO soil_assessment_keys(parcel_id) SELECT id FROM parcels WHERE county_id=$1 AND source_name=$2 ON CONFLICT DO NOTHING`, countyID.String(), source); err != nil {
 		return err
 	}

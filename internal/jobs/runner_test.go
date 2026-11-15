@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -51,6 +52,7 @@ func TestRunnerRun(t *testing.T) {
 		{name: "success", claimed: true, result: Result{Processed: 2}, outcome: OutcomeSuccess},
 		{name: "quarantine", claimed: true, result: Result{Processed: 2, Quarantined: 1}, outcome: OutcomeSuccessWithQuarantine},
 		{name: "failure", claimed: true, runErr: errors.New("source failed"), outcome: OutcomeFailed},
+		{name: "pending prerequisite", claimed: true, runErr: fmt.Errorf("%w: missing stored set", ErrPending), outcome: OutcomePending},
 		{name: "cancellation", claimed: true, runErr: context.Canceled, outcome: OutcomeInterrupted},
 		{name: "invalid counts", claimed: true, result: Result{Processed: -1}, outcome: OutcomeFailed},
 		{name: "overlap", claimed: false, outcome: OutcomeSkippedOverlap},

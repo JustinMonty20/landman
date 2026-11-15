@@ -13,10 +13,14 @@ import (
 )
 
 // OFFSET 0 keeps the parcel index lookup inside each soil polygon probe.
-const overlapInsert = `WITH hit AS (
+const overlapInsert = `WITH current_soil AS (
+SELECT m.polygon_id AS id, s.county_id, s.source_name, m.shape
+FROM soil_polygon_set_members m JOIN soil_polygon_sets s ON s.id=m.set_id
+WHERE m.set_id=$3 AND s.county_id=$1 AND s.source_name=$2
+), hit AS (
  SELECT s.id AS soil_polygon_id, p.id AS parcel_id,
  ST_Area(ST_Transform(ST_Intersection(p.shape, s.shape), 2264)) / 43560 AS overlap_acres
- FROM soil_polygons AS s CROSS JOIN LATERAL (
+ FROM current_soil AS s CROSS JOIN LATERAL (
  SELECT p.id, p.shape FROM parcels AS p
  WHERE p.county_id = s.county_id AND p.source_name = s.source_name
  AND p.shape && s.shape AND p.shape IS NOT NULL
@@ -130,11 +134,11 @@ func storeWithSet(ctx context.Context, db beginner, countyID county.ID, source s
 			return "", err
 		}
 	}
-	if _, err = tx.Exec(ctx, overlapInsert, countyID.String(), source); err != nil {
-		return "", err
-	}
 	setID, err := recordPolygonSet(ctx, tx, countyID, source, polygons)
 	if err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(ctx, overlapInsert, countyID.String(), source, setID); err != nil {
 		return "", err
 	}
 	if err = ctx.Err(); err != nil {

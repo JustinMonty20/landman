@@ -1,49 +1,76 @@
-# Run Union County jobs and change their schedules
+# Run Union jobs and configure independent schedules
 
-A job is a named import function. The runner records each attempt in `job_attempts` and prevents two processes from running the same job ID at the same time. The scheduler is a Go component that calls the runner at set times.
+## Manual commands
 
-## Current executable behavior
+Build with `go build -o landman .`. Set `DATABASE_URL` to a PostGIS database migrated through `000015_job_pending.sql`.
 
-`./landman` runs three jobs in order. It does not start the scheduler. Each start of `./landman` makes one attempt at each job. A second process that uses the same job ID while the first runs records `skipped_overlap`. The second process stops before it starts a dependent job.
+These commands contact the live Union GIS or USDA services. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
-1. `union.gis.parcels` imports parcel pages and commits parcel shapes and sales.
-2. `union.gis.soil` fetches soil polygons, stores the soil set, and computes parcel overlaps.
-3. `union.soil.screening` reads that committed soil set and publishes soil assessments.
+```sh
+# Existing ordered import. Parcel source, soil source, then one derived refresh.
+./landman
 
-The caller starts the next job only when the previous job has outcome `success`. An error or any other outcome stops the sequence. The whole command has a 10-minute context deadline. The three jobs do not share one database transaction. If a later job fails, an earlier job can have committed data. A new command starts the parcel scan again.
+# Import only parcels, then refresh from stored soil. No county soil fetch.
+./landman run union.gis.parcels
 
-To run the import manually, set `DATABASE_URL` to a migrated PostGIS database and run `./landman`. `make run` loads `.env` and can use the operator database. Use a separate database for tests. The program contacts the live Union GIS and USDA services. There is no partial-import flag.
+# Import only soil, then refresh. No county parcel fetch.
+./landman run union.gis.soil
 
-Inspect attempt status with SQL after a run:
+# Retry overlaps and required USDA screening without either county fetch.
+./landman run union.soil.screening
+```
+
+Every source import and derived refresh uses `jobs.Runner.Run`. The default command keeps its ten-minute overall deadline. Each single-source command shares that deadline with its downstream refresh. A source error or non-clean outcome stops dependent work. A derived error fails the command but does not change an already successful source attempt.
+
+A parcel-only run needs a stored soil set. If no set exists, the source can succeed while screening records `pending` and the command fails with the missing prerequisite. Run the soil source to ingest a set and refresh screening. A stored empty set is not a missing set.
+
+Derived refresh uses immutable members of the current stored set. It neither records a new county soil fetch nor changes soil fetch timestamps. It still contacts USDA for required interpretations. `SOIL_SCREENING_MAX_AGE` sets the maximum age of published evidence and defaults to `720h`. It is not a fetch-skipping interval.
+
+## Start the scheduler
+
+Stop old executable versions before enabling the new scheduler. Use the same migrated database for all processes that must share exclusion and attempt history.
+
+Set both independent calendar expressions explicitly. There are no default schedules.
+
+```sh
+export UNION_PARCELS_CRON='CRON_TZ=America/New_York 0 2 * * 0,3'
+export UNION_SOIL_CRON='CRON_TZ=UTC 0 3 1 */3 *'
+./landman schedule
+```
+
+The example imports parcels on Sunday and Wednesday at 02:00 New York time, and soil at 03:00 UTC on the first day of each calendar quarter. Change either environment variable independently, then restart the process. Each expression requires `CRON_TZ` and five calendar fields. Interval descriptors such as `@every` are not accepted by this command. Use UTC to avoid daylight-saving transitions.
+
+Only the two source jobs have schedules. After either source succeeds cleanly, the executable runs `union.soil.screening`. It refreshes overlaps and screening from the current stored soil set. There is no independent screening cron.
+
+The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its downstream work share a ten-minute deadline. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
+
+## Inspect incomplete work
 
 ```sql
-SELECT job_id, outcome, processed_count, quarantined_count, started_at, finished_at, error_text
+SELECT job_id, outcome, processed_count, quarantined_count,
+       started_at, finished_at, error_text
 FROM job_attempts
 WHERE job_id IN ('union.gis.parcels', 'union.gis.soil', 'union.soil.screening')
 ORDER BY started_at DESC;
 ```
 
-`success` means the job finished without quarantine. `success_with_quarantine` means the job reported invalid records. `failed` means an error stopped the job. `interrupted` means a canceled or abandoned attempt. `skipped_overlap` means another process held the same job ID. These outcomes do not prove that a remote offset-paged source is a complete snapshot. An import does not delete parcels that are absent from a later source response.
+- `success` means that job finished without quarantine, not that every downstream job succeeded.
+- `success_with_quarantine` means that the job reported invalid records. It does not trigger screening.
+- `failed` means that an error stopped the job.
+- `interrupted` means that cancellation or process abandonment stopped the attempt.
+- `skipped_overlap` means that another process held the same job ID. It is not success.
+- `pending` means that a prerequisite is missing, currently a stored soil set for screening.
 
-## Change a schedule after scheduler wiring exists
+Concurrent successful sources wait for a cross-process refresh lock before claiming the screening job. A waiting refresh loads the set after acquiring the lock. If the lock session closes during screening, a later derived attempt retries an overlap skip until the running attempt ends or the deadline expires. Existing set-head checks and parcel SHARE locks prevent publication against replaced soil membership or an inconsistent parcel snapshot. Parcel writes can wait during assessment publication. Reads remain available.
 
-`internal/jobs/scheduler.go` provides `NewScheduler`, `Start`, `Stop`, and manual `Run(ctx, jobID)`. `main.go` does not call these methods. There are no active cron jobs or schedule values to edit today. The current executable always runs all three jobs. You cannot change parcel and soil frequencies independently yet.
+Required USDA or database failure preserves the prior screening head. Derived overlap updates and screening publication commit together. Historical polygon and legacy overlap rows remain in the database. Refresh writes only current-set overlaps; screening never treats old legacy joins as current evidence.
 
-When the executable starts the scheduler, give the parcel source and the soil source separate job definitions and separate schedule strings. Do not put both sources under one combined schedule. After either source succeeds, update the derived overlaps and screening from the stored soil set. A parcel-only run must not fetch county soil polygons. A soil-only run must not fetch county parcels. A time offset between independent schedules cannot enforce these rules. The runner locks one job ID at a time. It does not coordinate two different IDs or persist the in-memory soil input that screening uses today. Implement and verify that coordination before you start independent schedules.
+Scheduler errors and non-clean outcomes appear in process logs. A failure while connecting or waiting for refresh exclusion occurs before the derived attempt starts, so inspect logs as well as history. There is no persistent dispatch queue. After a crash between source commit and derived completion, use the manual screening command or wait for the next successful source run. A new source run starts its scan from the beginning.
 
-After the scheduler is wired, update the schedule string for the source you want to change. Test the new schedule. Deploy the new executable and restart the scheduler process. A change to a Go string cannot change a process that is already running. Keep each job ID stable so its attempt history stays together.
+Offset paging and upserts do not prove a complete remote snapshot. Absent parcels are not deleted. See [the independent-schedule plan](../plans/union-independent-schedules.md) for the live gate and remaining verification.
 
-A calendar expression has `CRON_TZ=<timezone>` followed by five fields: minute, hour, day of month, month, and day of week. `NewScheduler` rejects a definition without `CRON_TZ`, a malformed expression, and a repeated job ID. These are example values for two future independent source definitions:
+## Add another ingestion entry point
 
-```text
-union.gis.parcels   CRON_TZ=America/New_York 0 2 * * 0,3
-union.gis.soil      CRON_TZ=UTC 0 3 1 */3 *
-```
+Define a stable ID and a `jobs.Definition`. Invoke it through `jobs.Runner.Run`, directly or through scheduler composition. Keep source fetching, ordering, and transaction rules inside the definition or its explicit ordered caller. Do not call Union ingestion directly from an executable or scheduler callback.
 
-Use `UTC` if local daylight-saving time must not change the time of a run. The scheduler starts at the next due time. It does not run immediately and does not replay times that passed while the process was stopped. A due run that overlaps a run with the same job ID is skipped and recorded. The scheduler does not retry a failed job automatically before its next due time. `@every` is accepted by the cron library, but an interval is relative to process start. Do not use it to express a calendar deadline or a 180-day source freshness rule.
-
-For future Union tax data, keep the four file feeds in one ordered tax job. Preserve each file's freshness test. A calendar cron expression is not the same as 180 days of freshness. See `plans/source-jobs-runner-scheduler.md` and `plans/tax-data-ingest.md` before you add that job.
-
-## Add a Union ingestion entry point
-
-Put each new Union County ingestion path in a `jobs.Definition` with a stable ID and a `Run` function. Call the definition only through `jobs.Runner.Run`, or through `jobs.Scheduler`, which calls the same runner. Keep network fetches, transaction limits, and source rules in the job function. Check the outcome before you start work that depends on that job. Do not call a Union importer directly from `main`, a command, or a scheduled callback. `AGENTS.md` requires this rule for future changes.
+Future Union tax work remains one ordered tax job with per-file freshness checks. Calendar scheduling does not replace its 180-day freshness rule. Read [the source-job plan](../plans/source-jobs-runner-scheduler.md) and [the tax plan](../plans/tax-data-ingest.md) before wiring that source.
