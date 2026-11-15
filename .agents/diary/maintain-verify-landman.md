@@ -29,3 +29,19 @@ The live `./landman` import hit the 10 minute deadline at batch 29/60 with `impo
 ## Out-of-scope decision
 
 Comment review asked to bind sale ids through `database/sql` and to delete the `seed.sql` header. The header is the capture record, and `psql -c` is the helper's query path. Neither change landed. The batch-1 gap skip did land as a behavior fix: `FetchSoilPolygons` returns before `Total parcels to fetch`, so that gap is the first parcel page.
+
+## Out-of-scope decision
+
+Left product code alone after the independent-schedule merge. The live `./landman` run on 2026-11-15 hit the ten minute deadline at parcel batch 31 of 60. `classify` printed `inconclusive: county-source-slow`. That is the documented slow-county result. It is not a map patch.
+
+## Out-of-scope decision
+
+Did not run `./landman run union.gis.parcels` or `./landman run union.gis.soil`. This pass keeps one county fetch, and that fetch is bare `./landman`.
+
+## Out-of-scope decision
+
+Did not refresh `seed.sql`. After migrate to version 15, `check-schema` printed `schema: ok` and `check-loaded` printed `loaded: ok`. Migration `000015_job_pending.sql` adds no column. The capture header is still 2026-11-14T23:06:21Z.
+
+## Out-of-scope decision
+
+Added `features/schedule-union-jobs.md` instead of folding `./landman schedule` into the import feature. The map contract is one user-visible behavior per feature file, and schedule does not import at startup.
