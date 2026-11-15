@@ -88,6 +88,8 @@ Refactor to eliminate the need for module mocking.
 
 ## Corrections
 
+- When the operator explicitly changes a planned source-access boundary, do not treat the older plan or `robots.txt` as an immutable product decision. State the access risk, update the scoped plans, and do not bypass a denied request or challenge.
+
 When the operator corrects you ("wrong," "no, do X," restated intent), classify:
 
 - **Systemic** — would recur without a rule. Write a rule to the scoped AGENTS.md addressing the root cause.
