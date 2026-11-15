@@ -261,6 +261,43 @@ func TestScheduleValidationPrecedesDatabaseAccess(t *testing.T) {
 	}
 }
 
+type overlapOnceRunner struct {
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (r *overlapOnceRunner) Run(_ context.Context, _ jobs.Definition) (jobs.Outcome, jobs.Result, error) {
+	r.calls++
+	if r.calls == 1 {
+		if r.cancel != nil {
+			r.cancel()
+		}
+		return jobs.OutcomeSkippedOverlap, jobs.Result{}, nil
+	}
+	return jobs.OutcomeSuccess, jobs.Result{}, nil
+}
+
+func TestDerivedRefreshRetriesOverlap(t *testing.T) {
+	runner := &overlapOnceRunner{}
+	if err := runDerived(context.Background(), runner, jobs.Definition{ID: screeningJobID}); err != nil {
+		t.Fatal(err)
+	}
+	if runner.calls != 2 {
+		t.Fatalf("derived runner calls = %d, want 2", runner.calls)
+	}
+}
+
+func TestDerivedRefreshOverlapHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &overlapOnceRunner{cancel: cancel}
+	if err := runDerived(ctx, runner, jobs.Definition{ID: screeningJobID}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("derived refresh error = %v, want cancellation", err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("derived runner calls = %d, want 1", runner.calls)
+	}
+}
+
 func TestDefaultManualStopsBeforeDependencies(t *testing.T) {
 	runner := &executingRunner{outcomes: map[string]jobs.Outcome{parcelJobID: jobs.OutcomeSkippedOverlap}}
 	definitions := []jobs.Definition{{ID: parcelJobID}, {ID: soilJobID}}

@@ -163,7 +163,7 @@ func run(ctx context.Context) error {
 	}
 	refresh := func(ctx context.Context) error {
 		return withRefreshLock(ctx, dsn, func(ctx context.Context) error {
-			return runRequired(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			return runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 				count, err := soil.ScreenStored(ctx, dsn, county.Union, gisSource.Name(), interval)
 				if errors.Is(err, soil.ErrNoStoredSet) {
 					err = fmt.Errorf("%w: %w", jobs.ErrPending, err)
@@ -200,6 +200,27 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 		}
 	}
 	return refresh(ctx)
+}
+
+// Retry a derived overlap while the caller's deadline remains. A lost advisory-lock session must not discard a source success.
+func runDerived(ctx context.Context, runner requiredRunner, definition jobs.Definition) error {
+	for {
+		outcome, _, err := runner.Run(ctx, definition)
+		if err != nil {
+			return fmt.Errorf("required %s: %w", definition.ID, err)
+		}
+		if outcome == jobs.OutcomeSuccess {
+			return nil
+		}
+		if outcome != jobs.OutcomeSkippedOverlap {
+			return fmt.Errorf("required %s did not complete cleanly: %s", definition.ID, outcome)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("required %s: %w", definition.ID, ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // Wait before claiming the derived job so a concurrent successful source cannot lose its refresh to an overlap skip.

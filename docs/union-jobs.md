@@ -61,7 +61,7 @@ ORDER BY started_at DESC;
 - `skipped_overlap` means that another process held the same job ID. It is not success.
 - `pending` means that a prerequisite is missing, currently a stored soil set for screening.
 
-Concurrent successful sources wait for a cross-process refresh lock before claiming the screening job. A waiting refresh loads the set after acquiring the lock. It is not silently dropped because another screening attempt is running. Existing set-head checks and parcel SHARE locks prevent publication against replaced soil membership or an inconsistent parcel snapshot. Parcel writes can wait during assessment publication. Reads remain available.
+Concurrent successful sources wait for a cross-process refresh lock before claiming the screening job. A waiting refresh loads the set after acquiring the lock. If the lock session closes during screening, a later derived attempt retries an overlap skip until the running attempt ends or the deadline expires. Existing set-head checks and parcel SHARE locks prevent publication against replaced soil membership or an inconsistent parcel snapshot. Parcel writes can wait during assessment publication. Reads remain available.
 
 Required USDA or database failure preserves the prior screening head. Derived overlap updates and screening publication commit together. Historical polygon and legacy overlap rows remain in the database. Refresh writes only current-set overlaps; screening never treats old legacy joins as current evidence.
 
