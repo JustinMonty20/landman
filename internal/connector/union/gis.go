@@ -85,6 +85,8 @@ func NewGISSource(config GISSourceConfig) (*GISSource, error) {
 	}
 
 	httpClient := httpclient.NewHTTPClient()
+	// A redirect is a failed source response, not an unbudgeted second request.
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	rateLimitedClient := httpclient.NewRateLimitedClient(httpClient, config.RateLimit)
 
 	return &GISSource{
@@ -202,7 +204,7 @@ func (s *GISSource) queryTotalParcels(ctx context.Context, params ArcGISParams) 
 	}
 
 	count := gjson.Get(string(body), "count")
-	if !count.Exists() || count.Type != gjson.Number || count.Int() < 0 {
+	if !count.Exists() || count.Type != gjson.Number || count.Int() < 0 || count.Num != float64(count.Int()) {
 		return 0, fmt.Errorf("union county gis response missing count")
 	}
 	return count.Int(), nil
@@ -273,9 +275,16 @@ func (s *GISSource) get(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, err
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	const maxResponseBytes = 32 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxResponseBytes {
+		return nil, fmt.Errorf("union county gis response exceeds size limit")
+	}
+	if !gjson.ValidBytes(body) {
+		return nil, fmt.Errorf("union county gis invalid JSON response")
 	}
 	return body, nil
 }

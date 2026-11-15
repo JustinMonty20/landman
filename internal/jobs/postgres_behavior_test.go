@@ -157,6 +157,13 @@ func TestPostgresRunnerPersistsOutcomesAndLastCleanSuccess(t *testing.T) {
 	if err != nil || !found || latestClean != clean {
 		t.Fatalf("LastCleanSuccess after quarantined run = (%v, %v), want prior clean result %v", latestClean, err, clean)
 	}
+	if _, _, err := runner.Run(ctx, Definition{ID: cleanID, Kind: AttemptReprocess, Run: func(context.Context) (Result, error) { return Result{Processed: 1}, nil }}); err != nil {
+		t.Fatal(err)
+	}
+	repairClean, found, err := store.LastCleanSuccess(ctx, cleanID)
+	if err != nil || !found || repairClean != clean {
+		t.Fatalf("repair polluted clean full import: %v %v", repairClean, err)
+	}
 	missing, found, err := store.LastCleanSuccess(ctx, jobIDs[2])
 	if err != nil || found {
 		t.Fatalf("LastCleanSuccess for failed-only job = (%v, %v), want no result", missing, err)
@@ -165,7 +172,6 @@ func TestPostgresRunnerPersistsOutcomesAndLastCleanSuccess(t *testing.T) {
 
 func TestPostgresQuarantineDeduplicatesAndTracksLatestAttempt(t *testing.T) {
 	pool, ctx := postgresTestPool(t)
-	store := &postgresStore{pool: pool}
 	runner, err := NewRunner(pool)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -190,7 +196,7 @@ func TestPostgresQuarantineDeduplicatesAndTracksLatestAttempt(t *testing.T) {
 				if err := pool.QueryRow(runCtx, "SELECT id::text FROM job_attempts WHERE job_id = $1 AND outcome = 'running'", jobID).Scan(&currentAttemptID); err != nil {
 					return Result{}, err
 				}
-				if err := store.Quarantine(runCtx, record); err != nil {
+				if err := NewQuarantineStore(pool).Quarantine(runCtx, record); err != nil {
 					return Result{}, err
 				}
 				return Result{Quarantined: 1}, nil
@@ -230,13 +236,12 @@ func TestPostgresQuarantineDeduplicatesAndTracksLatestAttempt(t *testing.T) {
 
 func TestPostgresQuarantineRequiresActiveAttempt(t *testing.T) {
 	pool, ctx := postgresTestPool(t)
-	store := &postgresStore{pool: pool}
 	jobID := postgresTestJobID("quarantine-no-active-attempt")
 	cleanupPostgresJobHistory(t, pool, jobID)
 	if _, err := pool.Exec(ctx, `INSERT INTO job_attempts (job_id, outcome) VALUES ($1, 'running')`, jobID); err != nil {
 		t.Fatalf("insert abandoned attempt: %v", err)
 	}
-	if err := store.Quarantine(ctx, QuarantineRecord{
+	if err := NewQuarantineStore(pool).Quarantine(ctx, QuarantineRecord{
 		JobID: jobID, CountyID: "union", SourceName: "union_county_gis",
 		RawRecordKey: "object-1", Payload: []byte(`{"objectId":1}`), Reason: "invalid record",
 	}); err == nil {
@@ -254,7 +259,6 @@ func TestPostgresQuarantineRequiresActiveAttempt(t *testing.T) {
 func TestPostgresQuarantineRejectsOversizedPayloadInCodeAndDatabase(t *testing.T) {
 	const maxPayloadBytes = 64 << 10
 	pool, ctx := postgresTestPool(t)
-	store := &postgresStore{pool: pool}
 	runner, err := NewRunner(pool)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -265,7 +269,7 @@ func TestPostgresQuarantineRejectsOversizedPayloadInCodeAndDatabase(t *testing.T
 	outcome, _, runErr := runner.Run(ctx, Definition{
 		ID: jobID,
 		Run: func(runCtx context.Context) (Result, error) {
-			err := store.Quarantine(runCtx, QuarantineRecord{
+			err := NewQuarantineStore(pool).Quarantine(runCtx, QuarantineRecord{
 				JobID: jobID, CountyID: "union", SourceName: "union_county_gis",
 				RawRecordKey: "object-large", Payload: oversized, Reason: "invalid record",
 			})

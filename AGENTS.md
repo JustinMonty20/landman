@@ -84,6 +84,7 @@ Refactor to eliminate the need for module mocking.
 ## Decision Making
 
 - Decide and proceed. If a decision impacts unrelated modules, propose to operator first.
+- Do not infer a local workstation as the deployment environment from local development tools. Ask for the target cloud platform and runtime before adding deployment, supervision, or monitoring artifacts.
 
 ## Corrections
 
