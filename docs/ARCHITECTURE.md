@@ -1,6 +1,6 @@
 # Land Parcel ROI Analysis Platform - Go Service Specification
 
-This document describes a proposed service. The current `./landman` command runs manual Union County jobs. It does not start cron or register connectors with `init()`. See [Union jobs](union-jobs.md) for the current executable behavior and schedule limits.
+This document describes a proposed service. The current `./landman` command runs manual Union County jobs. `./landman schedule` starts independent parcel and soil calendars from explicit environment variables. Both paths use the jobs runner and refresh derived soil evidence from the stored current set. Connectors are constructed explicitly, not registered with `init()`. See [Union jobs](union-jobs.md) for executable usage and limits. The proposed registration and bi-weekly examples below are not implemented contracts.
 
 ## Project Overview
 

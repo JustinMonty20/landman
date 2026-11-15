@@ -3,14 +3,20 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/robfig/cron/v3"
 )
 
+// Executor runs a definition, optionally including explicitly ordered downstream work.
+type Executor interface {
+	Run(context.Context, Definition) (Outcome, Result, error)
+}
+
 // Scheduler dispatches code-defined jobs at their explicit calendar schedules.
 type Scheduler struct {
-	runner      *Runner
+	runner      Executor
 	definitions map[string]Definition
 	cron        *cron.Cron
 	ctx         context.Context
@@ -19,7 +25,7 @@ type Scheduler struct {
 
 // NewScheduler validates all definitions before registering any schedule. Schedules
 // must include CRON_TZ so a job's calendar is unambiguous across DST changes.
-func NewScheduler(runner *Runner, definitions []Definition) (*Scheduler, error) {
+func NewScheduler(runner Executor, definitions []Definition) (*Scheduler, error) {
 	if runner == nil {
 		return nil, fmt.Errorf("jobs: runner is required")
 	}
@@ -48,7 +54,10 @@ func NewScheduler(runner *Runner, definitions []Definition) (*Scheduler, error) 
 	for _, definition := range definitions {
 		definition := definition
 		if _, err := scheduler.cron.AddFunc(definition.Schedule, func() {
-			_, _, _ = scheduler.runner.Run(scheduler.ctx, definition)
+			outcome, _, err := scheduler.Run(scheduler.ctx, definition.ID)
+			if err != nil || outcome != OutcomeSuccess {
+				log.Printf("scheduled %s outcome=%s error=%v", definition.ID, outcome, err)
+			}
 		}); err != nil {
 			cancel()
 			return nil, fmt.Errorf("jobs: definition %q schedule: %w", definition.ID, err)

@@ -1,7 +1,10 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -103,5 +106,77 @@ func TestSchedulerRunUsesRunner(t *testing.T) {
 	}
 	if outcome != OutcomeSuccess || result.Processed != 3 || store.finished != OutcomeSuccess {
 		t.Fatalf("Run() = (%q, %#v), persisted %q", outcome, result, store.finished)
+	}
+}
+
+func TestScheduledDispatchReportsIncompleteWork(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		claimed bool
+		result  Result
+		err     error
+		outcome Outcome
+	}{
+		{name: "success", claimed: true, outcome: OutcomeSuccess},
+		{name: "failed", claimed: true, err: errors.New("fixture failure"), outcome: OutcomeFailed},
+		{name: "pending", claimed: true, err: ErrPending, outcome: OutcomePending},
+		{name: "quarantine", claimed: true, result: Result{Quarantined: 1}, outcome: OutcomeSuccessWithQuarantine},
+		{name: "overlap", outcome: OutcomeSkippedOverlap},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(previous)
+			scheduler, err := NewScheduler(newRunner(&fakeStore{claimed: tc.claimed}), []Definition{{
+				ID: "scheduled.fixture", Schedule: "CRON_TZ=UTC 0 2 * * *",
+				Run: func(context.Context) (Result, error) { return tc.result, tc.err },
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer scheduler.Stop()
+			scheduler.cron.Entries()[0].Job.Run()
+			if tc.outcome == OutcomeSuccess {
+				if output.Len() != 0 {
+					t.Fatalf("clean success logged as incomplete: %s", output.String())
+				}
+				return
+			}
+			if !strings.Contains(output.String(), "scheduled.fixture") || !strings.Contains(output.String(), string(tc.outcome)) {
+				t.Fatalf("incomplete work missing from logs: %s", output.String())
+			}
+			if tc.err != nil && !strings.Contains(output.String(), tc.err.Error()) {
+				t.Fatalf("failure cause missing from logs: %s", output.String())
+			}
+		})
+	}
+}
+
+func TestSchedulerIndependentCalendars(t *testing.T) {
+	runner := newRunner(&fakeStore{claimed: true})
+	run := func(context.Context) (Result, error) { return Result{}, nil }
+	scheduler, err := NewScheduler(runner, []Definition{
+		{ID: "daily", Schedule: "CRON_TZ=America/New_York 0 2 * * *", Run: run},
+		{ID: "quarterly", Schedule: "CRON_TZ=UTC 0 3 1 */3 *", Run: run},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scheduler.Stop()
+	entries := scheduler.cron.Entries()
+	// New York skips 02:00 on the spring DST transition day.
+	start := time.Date(2026, time.March, 8, 5, 0, 0, 0, time.UTC)
+	want := time.Date(2026, time.March, 9, 6, 0, 0, 0, time.UTC)
+	if got := entries[0].Schedule.Next(start); !got.Equal(want) {
+		t.Fatalf("daily next=%v want=%v", got, want)
+	}
+	boundary := time.Date(2026, time.December, 31, 23, 59, 0, 0, time.UTC)
+	wantQuarter := time.Date(2027, time.January, 1, 3, 0, 0, 0, time.UTC)
+	if got := entries[1].Schedule.Next(boundary); !got.Equal(wantQuarter) {
+		t.Fatalf("quarter next=%v want=%v", got, wantQuarter)
+	}
+	if got := entries[1].Schedule.Next(wantQuarter); got.Month() != time.April || got.Day() != 1 {
+		t.Fatalf("next quarter=%v", got)
 	}
 }

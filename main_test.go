@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JustinMonty20/landman/internal/jobs"
 )
@@ -36,6 +38,7 @@ func TestRunRequired(t *testing.T) {
 		{"failed", jobs.OutcomeFailed, true},
 		{"interrupted", jobs.OutcomeInterrupted, true},
 		{"overlap", jobs.OutcomeSkippedOverlap, true},
+		{"pending", jobs.OutcomePending, true},
 		{"unknown", jobs.Outcome("unknown"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,5 +63,239 @@ func TestRunRequiredWrapsRunnerError(t *testing.T) {
 	err := runRequired(context.Background(), runner, jobs.Definition{ID: "union.gis.parcels"})
 	if !errors.Is(err, cause) || !strings.Contains(err.Error(), "union.gis.parcels") {
 		t.Fatalf("runRequired() error = %v, want wrapped cause and job ID", err)
+	}
+}
+
+func TestCommands(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		mode string
+	}{
+		{nil, "all"}, {[]string{"schedule"}, "schedule"},
+		{[]string{"run", parcelJobID}, parcelJobID}, {[]string{"run", soilJobID}, soilJobID},
+		{[]string{"run", screeningJobID}, screeningJobID},
+	} {
+		mode, err := command(tc.args)
+		if err != nil || mode != tc.mode {
+			t.Fatalf("command(%v) = %q, %v", tc.args, mode, err)
+		}
+	}
+	for _, args := range [][]string{{"run"}, {"run", "unknown"}, {"schedule", "extra"}, {"extra"}} {
+		if _, err := command(args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}
+
+func TestIndependentSchedules(t *testing.T) {
+	env := map[string]string{
+		"UNION_PARCELS_CRON": "CRON_TZ=America/New_York 0 2 * * 0,3",
+		"UNION_SOIL_CRON":    "CRON_TZ=UTC 0 3 1 */3 *",
+	}
+	getenv := func(key string) string { return env[key] }
+	before, err := schedules(getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env["UNION_PARCELS_CRON"] = "CRON_TZ=UTC 15 1 * * *"
+	after, err := schedules(getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[soilJobID] != after[soilJobID] || before[parcelJobID] == after[parcelJobID] || len(after) != 2 {
+		t.Fatalf("schedules not independent: %v -> %v", before, after)
+	}
+	for _, invalid := range []string{"", "0 2 * * *", "CRON_TZ=UTC @every 1h", "CRON_TZ= 0 2 * * *", "CRON_TZ=Invalid/Zone 0 2 * * *", "CRON_TZ=UTC 99 2 * * *"} {
+		env["UNION_SOIL_CRON"] = invalid
+		if _, err := schedules(getenv); err == nil {
+			t.Fatalf("accepted %q", invalid)
+		}
+	}
+}
+
+func TestSchedulesNormalizeWhitespace(t *testing.T) {
+	for _, expression := range []string{
+		"CRON_TZ=UTC\t0\t2\t*\t*\t*",
+		"  CRON_TZ=UTC  0 2 * * *  ",
+	} {
+		calendar, err := schedules(func(string) string { return expression })
+		if err != nil {
+			t.Fatalf("schedules(%q): %v", expression, err)
+		}
+		for _, id := range []string{parcelJobID, soilJobID} {
+			if calendar[id] != "CRON_TZ=UTC 0 2 * * *" {
+				t.Fatalf("schedule %s = %q", id, calendar[id])
+			}
+		}
+	}
+}
+
+type executingRunner struct {
+	ids      []string
+	outcomes map[string]jobs.Outcome
+}
+
+func (r *executingRunner) Run(ctx context.Context, d jobs.Definition) (jobs.Outcome, jobs.Result, error) {
+	r.ids = append(r.ids, d.ID)
+	if outcome := r.outcomes[d.ID]; outcome != "" && outcome != jobs.OutcomeSuccess {
+		return outcome, jobs.Result{}, nil
+	}
+	result, err := d.Run(ctx)
+	if err != nil {
+		return jobs.OutcomeFailed, result, err
+	}
+	return jobs.OutcomeSuccess, result, nil
+}
+
+func TestManualSourcePaths(t *testing.T) {
+	for _, mode := range []string{"all", parcelJobID, soilJobID, screeningJobID} {
+		t.Run(mode, func(t *testing.T) {
+			runner := &executingRunner{}
+			parcelFetches, soilFetches, refreshes := 0, 0, 0
+			definitions := []jobs.Definition{
+				{ID: parcelJobID, Run: func(context.Context) (jobs.Result, error) { parcelFetches++; return jobs.Result{}, nil }},
+				{ID: soilJobID, Run: func(context.Context) (jobs.Result, error) { soilFetches++; return jobs.Result{}, nil }},
+			}
+			refresh := func(ctx context.Context) error {
+				return runRequired(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(context.Context) (jobs.Result, error) {
+					refreshes++
+					return jobs.Result{}, nil
+				}})
+			}
+			executor := unionExecutor{runner: runner, refresh: refresh}
+			if err := runManual(context.Background(), mode, runner, executor, definitions, refresh); err != nil {
+				t.Fatal(err)
+			}
+			wantParcels, wantSoil := 0, 0
+			if mode == "all" || mode == parcelJobID {
+				wantParcels = 1
+			}
+			if mode == "all" || mode == soilJobID {
+				wantSoil = 1
+			}
+			if parcelFetches != wantParcels || soilFetches != wantSoil || refreshes != 1 {
+				t.Fatalf("fetch parcels=%d soil=%d refresh=%d", parcelFetches, soilFetches, refreshes)
+			}
+			if mode == "all" && strings.Join(runner.ids, ",") != parcelJobID+","+soilJobID+","+screeningJobID {
+				t.Fatalf("manual order %v", runner.ids)
+			}
+		})
+	}
+}
+
+func TestSourceOutcomesDoNotConcealIncompleteWork(t *testing.T) {
+	for _, outcome := range []jobs.Outcome{jobs.OutcomeFailed, jobs.OutcomeInterrupted, jobs.OutcomeSkippedOverlap, jobs.OutcomeSuccessWithQuarantine} {
+		runner := &executingRunner{outcomes: map[string]jobs.Outcome{parcelJobID: outcome}}
+		refreshes := 0
+		executor := unionExecutor{runner: runner, refresh: func(context.Context) error { refreshes++; return nil }}
+		definition := jobs.Definition{ID: parcelJobID, Run: func(context.Context) (jobs.Result, error) {
+			t.Fatal("non-clean source invoked")
+			return jobs.Result{}, nil
+		}}
+		if err := runRequired(context.Background(), executor, definition); err == nil || refreshes != 0 {
+			t.Fatalf("outcome %s: error=%v refreshes=%d", outcome, err, refreshes)
+		}
+	}
+	for _, cause := range []error{errors.New("USDA failed"), jobs.ErrPending, context.Canceled} {
+		runner := &executingRunner{}
+		executor := unionExecutor{runner: runner, refresh: func(context.Context) error { return cause }}
+		outcome, result, err := executor.Run(context.Background(), jobs.Definition{ID: soilJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{Processed: 3}, nil }})
+		if outcome != jobs.OutcomeSuccess || result.Processed != 3 || !errors.Is(err, cause) {
+			t.Fatalf("lost separate source success or derived error: %s %v %v", outcome, result, err)
+		}
+	}
+}
+
+func TestSourceAndRefreshShareDeadlineAndCancellation(t *testing.T) {
+	const limit = 10 * time.Minute
+	for _, parentLimit := range []time.Duration{time.Hour, time.Minute} {
+		t.Run(parentLimit.String(), func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), parentLimit)
+			defer cancel()
+			started := time.Now()
+			var sourceDeadline time.Time
+			executor := unionExecutor{runner: &executingRunner{}, refresh: func(ctx context.Context) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || !deadline.Equal(sourceDeadline) {
+					t.Fatalf("source deadline %v differs from refresh deadline %v", sourceDeadline, deadline)
+				}
+				return ctx.Err()
+			}}
+			outcome, _, err := executor.Run(parent, jobs.Definition{ID: parcelJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+				var ok bool
+				sourceDeadline, ok = ctx.Deadline()
+				if !ok {
+					t.Fatal("source has no deadline")
+				}
+				if parentLimit > limit {
+					if sourceDeadline.Before(started.Add(limit)) || sourceDeadline.After(time.Now().Add(limit)) {
+						t.Fatalf("source deadline %v is not bounded by %v", sourceDeadline, limit)
+					}
+				} else if deadline, _ := parent.Deadline(); !sourceDeadline.Equal(deadline) {
+					t.Fatalf("extended parent deadline %v to %v", deadline, sourceDeadline)
+				}
+				cancel()
+				return jobs.Result{}, nil
+			}})
+			if outcome != jobs.OutcomeSuccess || !errors.Is(err, context.Canceled) {
+				t.Fatalf("outcome=%s error=%v", outcome, err)
+			}
+		})
+	}
+}
+
+func TestScheduleValidationPrecedesDatabaseAccess(t *testing.T) {
+	args := os.Args
+	os.Args = []string{"landman", "schedule"}
+	t.Cleanup(func() { os.Args = args })
+	t.Setenv("DATABASE_URL", "://invalid")
+	for _, missing := range []string{"UNION_PARCELS_CRON", "UNION_SOIL_CRON"} {
+		t.Run(missing, func(t *testing.T) {
+			t.Setenv("UNION_PARCELS_CRON", "CRON_TZ=UTC 0 2 * * *")
+			t.Setenv("UNION_SOIL_CRON", "CRON_TZ=UTC 0 3 1 */3 *")
+			t.Setenv(missing, "")
+			if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), missing) {
+				t.Fatalf("startup error=%v, want schedule validation for %s", err, missing)
+			}
+		})
+	}
+}
+
+func TestDefaultManualStopsBeforeDependencies(t *testing.T) {
+	runner := &executingRunner{outcomes: map[string]jobs.Outcome{parcelJobID: jobs.OutcomeSkippedOverlap}}
+	definitions := []jobs.Definition{{ID: parcelJobID}, {ID: soilJobID}}
+	refresh := func(context.Context) error { t.Fatal("refresh after skipped source"); return nil }
+	err := runManual(context.Background(), "all", runner, unionExecutor{}, definitions, refresh)
+	if err == nil || len(runner.ids) != 1 {
+		t.Fatalf("error=%v jobs=%v", err, runner.ids)
+	}
+}
+
+func TestSchedulerDispatchesSourceAndDerivedThroughRunner(t *testing.T) {
+	runner := &executingRunner{}
+	refreshes := 0
+	executor := unionExecutor{runner: runner, refresh: func(ctx context.Context) error {
+		return runRequired(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(context.Context) (jobs.Result, error) { refreshes++; return jobs.Result{}, nil }})
+	}}
+	parcels, soilFetches := 0, 0
+	scheduler, err := jobs.NewScheduler(executor, []jobs.Definition{
+		{ID: parcelJobID, Schedule: "CRON_TZ=UTC 0 2 * * *", Run: func(context.Context) (jobs.Result, error) { parcels++; return jobs.Result{}, nil }},
+		{ID: soilJobID, Schedule: "CRON_TZ=UTC 0 3 1 */3 *", Run: func(context.Context) (jobs.Result, error) { soilFetches++; return jobs.Result{}, nil }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scheduler.Stop()
+	if parcels != 0 || soilFetches != 0 || refreshes != 0 {
+		t.Fatal("scheduler ran on construction")
+	}
+	if outcome, _, err := scheduler.Run(context.Background(), parcelJobID); err != nil || outcome != jobs.OutcomeSuccess {
+		t.Fatalf("dispatch=%s %v", outcome, err)
+	}
+	if parcels != 1 || soilFetches != 0 || refreshes != 1 {
+		t.Fatalf("parcels=%d soil=%d refresh=%d", parcels, soilFetches, refreshes)
+	}
+	if _, _, err := scheduler.Run(context.Background(), screeningJobID); err == nil {
+		t.Fatal("derived job was independently registered")
 	}
 }
