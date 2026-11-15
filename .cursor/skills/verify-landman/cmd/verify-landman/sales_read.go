@@ -19,6 +19,13 @@ WHERE p.county_id = 'union' AND p.source_name = 'union_county_gis'
   AND p.source_parcel_id = ANY($1::text[])
 ORDER BY 1, 2`
 
+const committedIncludingQuarantineSQL = `
+SELECT count(*)::text
+FROM job_attempts
+WHERE job_id = 'union.gis.parcels'
+  AND attempt_kind = 'full_scan'
+  AND outcome IN ('success', 'success_with_quarantine')`
+
 const postImportSQL = `
 SELECT 'county_parcels', count(*)::text
 FROM parcels
@@ -35,15 +42,15 @@ WHERE s.county_id = 'union' AND s.source_name = 'union_county_gis'
 UNION ALL
 SELECT 'parcel_jobs', count(*)::text
 FROM job_attempts
-WHERE job_id = 'union.gis.parcels' AND outcome = 'success'
+WHERE job_id = 'union.gis.parcels' AND outcome = 'success' AND attempt_kind = 'full_scan'
 UNION ALL
 SELECT 'soil_jobs', count(*)::text
 FROM job_attempts
-WHERE job_id = 'union.gis.soil' AND outcome = 'success'
+WHERE job_id = 'union.gis.soil' AND outcome = 'success' AND attempt_kind = 'full_scan'
 UNION ALL
 SELECT 'screening_jobs', count(*)::text
 FROM job_attempts
-WHERE job_id = 'union.soil.screening' AND outcome = 'success'
+WHERE job_id = 'union.soil.screening' AND outcome = 'success' AND attempt_kind = 'full_scan'
 UNION ALL
 SELECT 'heads', count(*)::text
 FROM soil_screening_heads
@@ -283,6 +290,22 @@ func parseSaleRows(raw string) ([]saleSlot, error) {
 		})
 	}
 	return slots, nil
+}
+
+func parcelPublished(ctx context.Context, query sqlQuery, container, databaseURL string) (bool, error) {
+	raw, err := query(ctx, container, databaseURL, committedIncludingQuarantineSQL)
+	if err != nil {
+		return false, err
+	}
+	line := strings.TrimSpace(raw)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	n, err := strconv.Atoi(line)
+	if err != nil {
+		return false, fmt.Errorf("parcel publication count %q", strings.TrimSpace(raw))
+	}
+	return n > 0, nil
 }
 
 func readPostImport(ctx context.Context, query sqlQuery, container, databaseURL string, snap seedSnapshot) (postImport, error) {

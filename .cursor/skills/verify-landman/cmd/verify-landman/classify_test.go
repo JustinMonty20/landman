@@ -99,7 +99,7 @@ func TestClassifyPassWhenZeroAmountDeedMatches(t *testing.T) {
 		DeedPage:       "0680",
 	}}
 	out := classify(classifyInput{
-		stdout:      "Imported parcels, 4 likely-vacant feature IDs\n",
+		committed:   true,
 		processExit: 0,
 		salesRead:   true,
 		expected:    expected,
@@ -127,7 +127,7 @@ func TestClassifyFailWhenEmptySlotHasDatabaseRow(t *testing.T) {
 		t.Fatalf("empty slot kept %#v", expected)
 	}
 	out := classify(classifyInput{
-		stdout:      "Imported parcels, 1 likely-vacant feature IDs\n",
+		committed:   true,
 		processExit: 0,
 		salesRead:   true,
 		expected:    expected,
@@ -151,7 +151,7 @@ func TestClassifyCountySlowAfterCommitWhenPageIsSlow(t *testing.T) {
 	actual := append([]saleSlot(nil), expected...)
 	actual[0].Amount = ""
 	out := classify(classifyInput{
-		stdout:      "Imported parcels, 2 likely-vacant feature IDs\n",
+		committed:   true,
 		stderr:      "context deadline exceeded\n",
 		processExit: 1,
 		probe:       fastMetadataProbe(30 * time.Second),
@@ -189,7 +189,7 @@ func TestExpectedSaleSlotsKeepsSequenceThreeDeedOnly(t *testing.T) {
 
 func TestDriveOutcomeJSONHasNoBoolean(t *testing.T) {
 	out := classify(classifyInput{
-		stdout:      "Imported parcels, 1 likely-vacant feature IDs\n",
+		committed:   true,
 		processExit: 0,
 		salesRead:   true,
 		expected:    expectedSaleSlots("1", map[string]any{"s1_DEED_PAGE": "0680", "s1_SALESAMT": 0}),

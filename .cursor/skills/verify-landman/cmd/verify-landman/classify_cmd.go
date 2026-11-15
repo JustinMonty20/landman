@@ -15,8 +15,6 @@ type classifyDeps struct {
 	get   httpGetter
 }
 
-// runClassify reads the drive evidence, and reads sales only when the commit
-// line is present. It writes drive-outcome.json and returns the verdict line.
 func runClassify(container, gooseURL, seedPath, evidence string, deps classifyDeps) (string, int) {
 	if err := refuseContainer(container); err != nil {
 		fmt.Fprintf(os.Stderr, "classify: %v\n", err)
@@ -27,7 +25,13 @@ func runClassify(container, gooseURL, seedPath, evidence string, deps classifyDe
 		fmt.Fprintf(os.Stderr, "classify: %v\n", err)
 		return "", 1
 	}
-	if committedText(in.stdout, in.stderr) {
+	published, err := parcelPublished(context.Background(), deps.query, container, gooseURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "classify: %v\n", err)
+		return "", 1
+	}
+	in.committed = published
+	if published {
 		text, err := os.ReadFile(seedPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "classify: %v\n", err)
@@ -64,10 +68,6 @@ func runClassify(container, gooseURL, seedPath, evidence string, deps classifyDe
 		fmt.Fprintf(os.Stderr, "classify: %s\n", strings.Join(out.Problems, "; "))
 	}
 	return string(out.Verdict) + "\n", out.code()
-}
-
-func committedText(stdout, stderr string) bool {
-	return strings.Contains(stdout, commitLine) || strings.Contains(stderr, commitLine)
 }
 
 func readEvidence(dir string) (classifyInput, error) {

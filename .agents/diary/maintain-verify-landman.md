@@ -65,3 +65,23 @@ Did not run `./landman run union.gis.parcels` or `./landman run union.gis.soil`.
 ## Product gap
 
 The live `./landman` import on 2026-11-15 started at 04:07:03Z on `landman-verify-postgis`. Parcel fetch finished in 2m56s. `union.gis.parcels` and `union.gis.soil` recorded `success`. `union.soil.screening` recorded `interrupted` at 04:17:03Z with `soil assessment hits: timeout: context deadline exceeded`. Probe pages were 469 ms and 981 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. This pass does not change product code. Evidence is `artifacts/verify/20261115T040419Z-8693`, which is gitignored.
+
+## Out-of-scope decision
+
+Left `reprocess` inside the import feature. A second feature file would repeat the same database and the same screening path.
+
+## Out-of-scope decision
+
+Did not refresh `seed.sql` after migration 16. `attempt_kind` has a default, the seed does not insert `job_attempts`, and `check-loaded` printed `loaded: ok`. The capture header is still 2026-11-14T23:06:21Z.
+
+## Out-of-scope decision
+
+Did not put the vacant-count stdout line back into the product. `docs/union-jobs.md` does not mention it. The helper now reads publication from `job_attempts`.
+
+## Out-of-scope decision
+
+Did not run `./landman run union.gis.parcels` or `./landman run union.gis.soil`. This pass keeps one county parcel fetch, and that fetch is bare `./landman`.
+
+## Live proof
+
+On 2026-11-15 at 11:13:08Z, bare `./landman` against `landman-verify-postgis` fetched 118202 parcel records in 1m0s. Stdout was empty. `union.gis.parcels` and `union.gis.soil` recorded `full_scan` `success` with zero quarantine. `union.soil.screening` recorded `interrupted` at 11:23:08Z with `timeout: context deadline exceeded`. Probe pages were 510 ms and 969 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. `./landman reprocess union.gis.parcels --limit 1` then exited 0 with empty output and no parcel fetch. Its parcel attempt was `reprocess` `success` with processed 0, and screening recorded `success`. Evidence is `artifacts/verify/20261115T111044-10364`, which is gitignored.
