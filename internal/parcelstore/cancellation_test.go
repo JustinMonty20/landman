@@ -39,8 +39,10 @@ func TestShapeWriterCancellationKeepsPublishedSnapshot(t *testing.T) {
 	parcel.Geometry.Shape = &changedShape
 	changedAmount := 200.0
 	parcel.Sales = []models.ParcelSale{{Sequence: 3, Amount: &changedAmount}}
-	if err := writer.SavePart(ctx, parcel, false); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2000; i++ {
+		if err := writer.SavePart(ctx, parcel, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cancel()
 	if err := writer.Commit(ctx); err == nil {
