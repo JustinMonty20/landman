@@ -16,8 +16,9 @@ import (
 
 // ShapeWriter stores all pages in one transaction so failed imports leave no partial rows.
 type ShapeWriter struct {
-	pool *pgxpool.Pool
-	tx   pgx.Tx
+	pool       *pgxpool.Pool
+	tx         pgx.Tx
+	partsSaved int
 }
 
 // NewShapeWriter opens one import transaction from the supplied connection string.
@@ -46,7 +47,7 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 // SavePart stores a mapped parcel, replaces its sale slots, and keeps the
 // original shape on the same transaction. Sequences missing from parcel.Sales
 // are deleted. An empty Sales slice deletes every sale for that parcel. A sale
-// error aborts the transaction.
+// error aborts the transaction. The writer updates table statistics every 2,000 parts.
 func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, likelyVacant bool) error {
 	shape, _, err := encodeShape(parcel.Geometry)
 	if err != nil {
@@ -59,7 +60,7 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 	if err != nil {
 		return err
 	}
-	if _, err := SaveSales(ctx, w.tx, parcel.Identity, parcel.Sales); err != nil {
+	if _, err := saveSalesForParcel(ctx, w.tx, parcelID, parcel.Sales); err != nil {
 		return err
 	}
 	seqs := make([]int16, 0, len(parcel.Sales))
@@ -71,9 +72,18 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 		  AND NOT (sequence = ANY($2::smallint[]))`, parcelID, seqs); err != nil {
 		return fmt.Errorf("parcelstore: delete omitted sales: %w", err)
 	}
-	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)
-		VALUES ($1, ST_GeomFromEWKB($2), $3)`, parcel.Identity.SourceParcelID, shape, likelyVacant)
-	return err
+	if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)
+		VALUES ($1, ST_GeomFromEWKB($2), $3)`, parcel.Identity.SourceParcelID, shape, likelyVacant); err != nil {
+		return err
+	}
+	w.partsSaved++
+	if w.partsSaved%2000 != 0 {
+		return nil
+	}
+	if _, err := w.tx.Exec(ctx, `ANALYZE parcels, parcel_sales`); err != nil {
+		return fmt.Errorf("parcelstore: analyze import tables: %w", err)
+	}
+	return nil
 }
 
 // Commit combines parts across pages and replaces the shape and vacancy flag.

@@ -52,6 +52,10 @@ func SaveSales(ctx context.Context, tx pgx.Tx, identity models.ParcelIdentity, s
 		return nil, fmt.Errorf("parcelstore: lookup parcel: %w", err)
 	}
 
+	return saveSalesForParcel(ctx, tx, parcelID, sales)
+}
+
+func saveSalesForParcel(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID, sales []models.ParcelSale) ([]models.SaleID, error) {
 	ids := make([]models.SaleID, 0, len(sales))
 	for _, sale := range sales {
 		var id models.SaleID

@@ -270,11 +270,12 @@ func TestShapeWriterReplacesSales(t *testing.T) {
 		t.Fatal("DATABASE_URL is empty")
 	}
 	parcel := shapedParcel(t, "sales-replace")
+	parcel.ID = models.ParcelID("ignored-caller-parcel")
 	sold := time.Date(2015, 4, 27, 0, 0, 0, 0, time.UTC)
 	amount := func(v float64) *float64 { return &v }
 	book := func(v string) *string { return &v }
 	parcel.Sales = []models.ParcelSale{
-		{Sequence: 1, Amount: amount(250000), DeedBook: book("7110")},
+		{ID: models.SaleID("ignored-caller-sale"), ParcelID: models.ParcelID("ignored-caller-parcel"), Sequence: 1, Amount: amount(250000), DeedBook: book("7110")},
 		{Sequence: 2, Amount: amount(0), SaleDate: &sold, DeedBook: book("6429")},
 		{Sequence: 3, Amount: amount(70000), DeedBook: book("4232")},
 	}

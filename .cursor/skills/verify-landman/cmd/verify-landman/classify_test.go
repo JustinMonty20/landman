@@ -13,7 +13,7 @@ import (
 func TestClassifyCountySlowWithoutCommitDoesNotNeedSales(t *testing.T) {
 	out := classify(classifyInput{
 		stderr: slowDriveLog(30*time.Second) + "context deadline exceeded\n",
-		probe:  fastMetadataProbe(0),
+		probe:  fastMetadataProbe(30 * time.Second),
 	})
 	if out.Verdict != verdictCountySlow {
 		t.Fatalf("verdict %q, want county-source-slow", out.Verdict)
@@ -36,9 +36,9 @@ func TestClassifyCountySlowWithoutCommitDoesNotNeedSales(t *testing.T) {
 	}
 }
 
-func TestClassifyFailWhenGapsAndPageAreFast(t *testing.T) {
+func TestClassifyFailWhenPageIsFastDespiteSlowBatchGap(t *testing.T) {
 	out := classify(classifyInput{
-		stderr: slowDriveLog(2*time.Second) + "context deadline exceeded\n",
+		stderr: slowDriveLog(30*time.Second) + "context deadline exceeded\n",
 		probe:  fastMetadataProbe(2 * time.Second),
 	})
 	if out.Verdict != verdictFail {
@@ -60,22 +60,22 @@ func TestClassifyRejectsSlowVerdictWithoutFastMetadataOrSlowPage(t *testing.T) {
 		},
 	})
 	if out.Verdict == verdictCountySlow {
-		t.Fatal("county-source-slow without a fast metadata sample and a slow page or batch gap")
+		t.Fatal("county-source-slow without a fast metadata sample and a slow page")
 	}
 	if out.Verdict != verdictFail {
 		t.Fatalf("verdict %q, want fail", out.Verdict)
 	}
 }
 
-func TestClassifyCountsGapThatEndsAtBatchOne(t *testing.T) {
+func TestClassifyDoesNotInferCountySlownessFromFirstBatchGap(t *testing.T) {
 	start := time.Date(2026, 11, 14, 17, 0, 0, 0, time.UTC)
 	logText := fmt.Sprintf("%s [union_county_gis] Total parcels to fetch: 4000\n%s [union_county_gis] Batch 1/2 complete: fetched 2000 records (total so far: 2000)\n%s [union_county_gis] Batch 2/2 complete: fetched 2000 records (total so far: 4000)\ncontext deadline exceeded\n",
 		start.Format("2006/01/02 15:04:05"),
 		start.Add(40*time.Second).Format("2006/01/02 15:04:05"),
 		start.Add(42*time.Second).Format("2006/01/02 15:04:05"))
 	out := classify(classifyInput{stderr: logText, probe: fastMetadataProbe(2 * time.Second)})
-	if out.Verdict != verdictCountySlow {
-		t.Fatalf("verdict %q, want county-source-slow", out.Verdict)
+	if out.Verdict != verdictFail {
+		t.Fatalf("verdict %q, want fail", out.Verdict)
 	}
 }
 
