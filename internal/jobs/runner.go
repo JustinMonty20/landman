@@ -28,16 +28,24 @@ type Result struct {
 	Quarantined int
 }
 
+type AttemptKind string
+
+const (
+	AttemptFullScan  AttemptKind = "full_scan"
+	AttemptReprocess AttemptKind = "reprocess"
+)
+
 // Definition is a code-defined source import.
 type Definition struct {
+	Kind     AttemptKind
 	ID       string
 	Schedule string
 	Run      func(context.Context) (Result, error)
 }
 
 type attemptStore interface {
-	claim(context.Context, string) (attempt, bool, error)
-	recordOverlap(context.Context, string) error
+	claim(context.Context, string, AttemptKind) (attempt, bool, error)
+	recordOverlap(context.Context, string, AttemptKind) error
 	recoverInterrupted(context.Context) error
 }
 
@@ -74,12 +82,15 @@ func (r *Runner) Run(ctx context.Context, definition Definition) (Outcome, Resul
 		return "", Result{}, err
 	}
 
-	attempt, claimed, err := r.store.claim(ctx, definition.ID)
+	if definition.Kind == "" {
+		definition.Kind = AttemptFullScan
+	}
+	attempt, claimed, err := r.store.claim(ctx, definition.ID, definition.Kind)
 	if err != nil {
 		return "", Result{}, fmt.Errorf("jobs: claim %q: %w", definition.ID, err)
 	}
 	if !claimed {
-		if err := r.store.recordOverlap(ctx, definition.ID); err != nil {
+		if err := r.store.recordOverlap(ctx, definition.ID, definition.Kind); err != nil {
 			return "", Result{}, fmt.Errorf("jobs: record overlap %q: %w", definition.ID, err)
 		}
 		return OutcomeSkippedOverlap, Result{}, nil
@@ -113,6 +124,9 @@ func outcomeFor(result Result, err error) Outcome {
 }
 
 func validateDefinition(definition Definition) error {
+	if definition.Kind != "" && definition.Kind != AttemptFullScan && definition.Kind != AttemptReprocess {
+		return fmt.Errorf("jobs: invalid attempt kind %q", definition.Kind)
+	}
 	if definition.ID == "" {
 		return errors.New("jobs: definition ID is required")
 	}

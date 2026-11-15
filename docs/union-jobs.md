@@ -2,7 +2,7 @@
 
 ## Manual commands
 
-Build with `go build -o landman .`. Set `DATABASE_URL` to a PostGIS database migrated through `000015_job_pending.sql`.
+Build with `go build -o landman .`. Set `DATABASE_URL` to a PostGIS database migrated through `000016_job_attempt_kind.sql`.
 
 These commands contact the live Union GIS or USDA services. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
@@ -16,6 +16,10 @@ These commands contact the live Union GIS or USDA services. Do not use an operat
 # Import only soil, then refresh. No county parcel fetch.
 ./landman run union.gis.soil
 
+# Repair at most 25 pending parcel records from the current county source.
+# A clean repair then refreshes derived evidence from stored soil.
+./landman reprocess union.gis.parcels --limit 25
+
 # Retry overlaps and required USDA screening without either county fetch.
 ./landman run union.soil.screening
 ```
@@ -25,6 +29,39 @@ Every source import and derived refresh uses `jobs.Runner.Run`. The default comm
 A parcel-only run needs a stored soil set. If no set exists, the source can succeed while screening records `pending` and the command fails with the missing prerequisite. Run the soil source to ingest a set and refresh screening. A stored empty set is not a missing set.
 
 Derived refresh uses immutable members of the current stored set. It neither records a new county soil fetch nor changes soil fetch timestamps. It still contacts USDA for required interpretations. `SOIL_SCREENING_MAX_AGE` sets the maximum age of published evidence and defaults to `720h`. It is not a fetch-skipping interval.
+
+## Quarantine and explicit parcel repair
+
+Missing or unreadable rings and invalid constrained numeric fields produce durable quarantine evidence keyed by `OBJECTID` and reason. Numeric validation rejects non-finite values and values that would overflow after column-scale rounding. Values that round to the stored maximum remain valid. Every part of that effective PID is excluded, including parts on earlier pages. Existing parcel fields, sales, UUID, and shape remain unchanged. Valid unrelated PIDs still publish. A missing PID uses the existing `OBJECTID` fallback and cannot be likely vacant.
+
+Full scans stage normalized parts on disk and publish accepted PIDs through the existing parcel writer in one transaction. Fields and sale slots remain last-part-wins. Geometry uses all accepted parts. An indexed temporary identity table tracks every observed `OBJECTID`, including invalid records. Contradictory PID assignments for one `OBJECTID` fail the entire scan before publication. Repeated observations of the same `OBJECTID` and PID retain last-part-wins behavior. HTTP errors, ambiguous identity, malformed responses, SQL failures, failed dissolution, and quarantine-storage failure abort publication. Quarantine evidence already written survives that rollback. Payloads are sensitive JSON, limited to 64 KiB, and must not be copied into logs.
+
+`reprocess union.gis.parcels --limit N` requires an integer from 1 through 100, checked before database access. It selects pending entries by oldest `last_seen_at`, then UUID. Repeated entries for one PID are coalesced. It refetches the current selected `OBJECTID`, validates its identity, and fetches every current part of its effective PID. Saved payloads supply identity only and are never replayed as parcel attributes.
+
+One repair allows at most 200 HTTP requests and 10,000 returned features, including identity checks. All county fetching shares a two-minute deadline inside the ten-minute command deadline. Each response is limited to 32 MiB. Missing or changed identity, incomplete counts or pages, duplicate parts, and exhausted limits fail the repair. No partial repair is published. Reduce `--limit` after request-budget exhaustion. A single oversized PID requires a later full scan instead.
+
+Full scans and repairs claim the same `union.gis.parcels` job ID. There is no repair cron. Repairs record `attempt_kind = 'reprocess'`; ordinary attempts default to `full_scan`. Migration 16 cannot be rolled back while repair history exists. Last clean full-import evidence requires both `outcome = 'success'` and `attempt_kind = 'full_scan'`.
+
+Evidence resolves only with successful complete-PID publication, in the same transaction. Repair resolves only the selected quarantine UUIDs whose `last_seen_at` tokens are unchanged, even when complete geometry requires more parts or another reason exists for the same `OBJECTID`. A clean full scan still resolves all older evidence for recovered observed records. A later invalid observation replaces the evidence payload, increments its occurrence count, and clears `reprocessed_at`. A crash before publication leaves pending evidence and can be retried safely.
+
+Clean repairs use the same downstream refresh as clean source imports, without another county soil fetch. A downstream error preserves the successful repair attempt and fails the command. Quarantined repairs do not trigger screening. Retry derived work with `run union.soil.screening` after a downstream failure.
+
+Inspect pending identity and reason without exposing owner payloads:
+
+```sql
+SELECT id, raw_record_key, reason, occurrence_count, first_seen_at, last_seen_at
+FROM quarantined_records
+WHERE job_id = 'union.gis.parcels' AND reprocessed_at IS NULL
+ORDER BY last_seen_at, id;
+
+SELECT finished_at
+FROM job_attempts
+WHERE job_id = 'union.gis.parcels'
+  AND attempt_kind = 'full_scan' AND outcome = 'success'
+ORDER BY finished_at DESC LIMIT 1;
+```
+
+A quarantined import or repair records `success_with_quarantine` and exits unsuccessfully as required work. It is not clean freshness evidence. See [controlled ingestion verification](ingestion-gaps-verification.md) for fixture coverage and unverified live gates.
 
 ## Start the scheduler
 
@@ -47,7 +84,7 @@ The scheduler waits for the next due time on startup. It does not replay missed 
 ## Inspect incomplete work
 
 ```sql
-SELECT job_id, outcome, processed_count, quarantined_count,
+SELECT job_id, attempt_kind, outcome, processed_count, quarantined_count,
        started_at, finished_at, error_text
 FROM job_attempts
 WHERE job_id IN ('union.gis.parcels', 'union.gis.soil', 'union.soil.screening')

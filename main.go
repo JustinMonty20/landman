@@ -11,12 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/jobs"
-	"github.com/JustinMonty20/landman/internal/parcelstore"
-	"github.com/JustinMonty20/landman/internal/service"
 	"github.com/JustinMonty20/landman/internal/soil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,7 +71,13 @@ func command(args []string) (string, error) {
 			return args[1], nil
 		}
 	}
-	return "", fmt.Errorf("usage: landman [schedule | run <%s|%s|%s>]", parcelJobID, soilJobID, screeningJobID)
+	if len(args) == 4 && args[0] == "reprocess" && args[1] == parcelJobID && args[2] == "--limit" {
+		if _, err := reprocessLimit(args[3]); err != nil {
+			return "", err
+		}
+		return "reprocess", nil
+	}
+	return "", fmt.Errorf("usage: landman [schedule | run <%s|%s|%s> | reprocess %s --limit N]", parcelJobID, soilJobID, screeningJobID, parcelJobID)
 }
 
 func schedules(getenv func(string) string) (map[string]string, error) {
@@ -149,8 +152,7 @@ func run(ctx context.Context) error {
 	}
 	definitions := []jobs.Definition{
 		{ID: parcelJobID, Schedule: calendar[parcelJobID], Run: func(ctx context.Context) (jobs.Result, error) {
-			count, err := importParcels(ctx, dsn, gisSource)
-			return jobs.Result{Processed: count}, err
+			return importParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool))
 		}},
 		{ID: soilJobID, Schedule: calendar[soilJobID], Run: func(ctx context.Context) (jobs.Result, error) {
 			polygons, units, err := gisSource.FetchSoilPolygons(ctx)
@@ -173,6 +175,12 @@ func run(ctx context.Context) error {
 		})
 	}
 	executor := unionExecutor{runner: runner, refresh: refresh}
+	if mode == "reprocess" {
+		limit, _ := reprocessLimit(os.Args[4])
+		return runRequired(ctx, executor, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReprocess, Run: func(ctx context.Context) (jobs.Result, error) {
+			return reprocessParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool), limit)
+		}})
+	}
 	if mode == "schedule" {
 		scheduler, err := jobs.NewScheduler(executor, definitions)
 		if err != nil {
@@ -242,49 +250,4 @@ func withRefreshLock(ctx context.Context, dsn string, refresh func(context.Conte
 		return fmt.Errorf("wait for derived refresh exclusion: %w", err)
 	}
 	return refresh(ctx)
-}
-
-func importParcels(ctx context.Context, dsn string, gisSource *union.GISSource) (int, error) {
-	writer, err := parcelstore.NewShapeWriter(ctx, dsn)
-	if err != nil {
-		return 0, fmt.Errorf("create parcel writer: %w", err)
-	}
-	defer writer.Close()
-	translator := union.NewGISTranslator()
-	var processed int
-	importer := service.NewParcelIDImportService(gisSource, 2000,
-		service.WithParcelRecordHook(func(ctx context.Context, records []connector.RawRecord) error {
-			for _, record := range records {
-				vacant := union.IsLikelyVacantGISRecord(record)
-				attrs, _ := record.RawData["attributes"].(map[string]interface{})
-				pid, _ := attrs["PID"].(string)
-				if pid == "" {
-					vacant = false
-				}
-				parcel, err := translator.Translate(record)
-				if err != nil {
-					return err
-				}
-				if err := writer.SavePart(ctx, *parcel, vacant); err != nil {
-					return err
-				}
-				processed++
-			}
-			return nil
-		}),
-		service.WithParcelRecordFilter(union.IsLikelyVacantGISRecord),
-	)
-	var totalIDs int
-	err = importer.Run(ctx, func(_ context.Context, _ int, ids []string) error {
-		totalIDs += len(ids)
-		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("import parcels: %w", err)
-	}
-	if err := writer.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit parcels: %w", err)
-	}
-	fmt.Printf("Imported parcels, %d likely-vacant feature IDs\n", totalIDs)
-	return processed, nil
 }

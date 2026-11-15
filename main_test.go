@@ -336,3 +336,35 @@ func TestSchedulerDispatchesSourceAndDerivedThroughRunner(t *testing.T) {
 		t.Fatal("derived job was independently registered")
 	}
 }
+
+func TestReprocessCommandValidationBeforeDatabase(t *testing.T) {
+	for _, limit := range []string{"1", "100"} {
+		mode, err := command([]string{"reprocess", parcelJobID, "--limit", limit})
+		if err != nil || mode != "reprocess" {
+			t.Fatal(mode, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"reprocess", parcelJobID, "--limit", "0"}, {"reprocess", parcelJobID, "--limit", "101"},
+		{"reprocess", parcelJobID, "--limit", "invalid"}, {"reprocess", soilJobID, "--limit", "1"},
+		{"reprocess", parcelJobID}, {"reprocess", parcelJobID, "--limit", "1", "extra"},
+	} {
+		old := os.Args
+		os.Args = append([]string{"landman"}, args...)
+		err := run(context.Background())
+		os.Args = old
+		if err == nil || strings.Contains(err.Error(), "connect") {
+			t.Fatalf("args=%v error=%v", args, err)
+		}
+	}
+}
+
+func TestCleanRepairUsesExistingDerivedExecutor(t *testing.T) {
+	runner := &executingRunner{}
+	refreshes := 0
+	executor := unionExecutor{runner: runner, refresh: func(context.Context) error { refreshes++; return errors.New("derived failed") }}
+	outcome, result, err := executor.Run(context.Background(), jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReprocess, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{Processed: 2}, nil }})
+	if outcome != jobs.OutcomeSuccess || result.Processed != 2 || refreshes != 1 || err == nil {
+		t.Fatalf("outcome=%s result=%v refreshes=%d error=%v", outcome, result, refreshes, err)
+	}
+}

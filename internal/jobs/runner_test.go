@@ -16,11 +16,11 @@ type fakeStore struct {
 	runErr          error
 }
 
-func (s *fakeStore) claim(context.Context, string) (attempt, bool, error) {
+func (s *fakeStore) claim(context.Context, string, AttemptKind) (attempt, bool, error) {
 	return fakeAttempt{s: s}, s.claimed, nil
 }
 
-func (s *fakeStore) recordOverlap(context.Context, string) error {
+func (s *fakeStore) recordOverlap(context.Context, string, AttemptKind) error {
 	s.overlapRecorded = true
 	return nil
 }
@@ -103,5 +103,14 @@ func TestRunnerRecoverInterrupted(t *testing.T) {
 	}
 	if !store.recovered {
 		t.Error("recovery was not requested")
+	}
+}
+
+func TestRunnerRejectsInvalidAttemptKind(t *testing.T) {
+	invoked := false
+	runner := newRunner(&fakeStore{claimed: true})
+	_, _, err := runner.Run(context.Background(), Definition{ID: "parcels", Kind: "unknown", Run: func(context.Context) (Result, error) { invoked = true; return Result{}, nil }})
+	if err == nil || invoked {
+		t.Fatalf("error=%v invoked=%v", err, invoked)
 	}
 }

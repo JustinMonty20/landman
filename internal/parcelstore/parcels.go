@@ -35,7 +35,15 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 	_, err = tx.Exec(ctx, `CREATE TEMP TABLE parcel_shape_parts (
 		source_parcel_id TEXT NOT NULL, shape GEOMETRY(Geometry, 3857) NOT NULL,
 		likely_vacant BOOLEAN NOT NULL
-	) ON COMMIT DROP`)
+	) ON COMMIT DROP;
+	CREATE TEMP TABLE parcel_import_parts (
+		ordinal BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+		source_parcel_id TEXT NOT NULL, payload BYTEA NOT NULL, shape BYTEA NOT NULL,
+		likely_vacant BOOLEAN NOT NULL, raw_key TEXT NOT NULL
+	) ON COMMIT DROP;
+	CREATE INDEX ON parcel_import_parts(source_parcel_id);
+	CREATE TEMP TABLE parcel_import_rejected(source_parcel_id TEXT PRIMARY KEY) ON COMMIT DROP;
+	CREATE TEMP TABLE parcel_import_identities(raw_key TEXT PRIMARY KEY, source_parcel_id TEXT NOT NULL) ON COMMIT DROP`)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		pool.Close()
