@@ -59,7 +59,7 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 	if err != nil {
 		return err
 	}
-	if _, err := SaveSales(ctx, w.tx, parcel.Identity, parcel.Sales); err != nil {
+	if _, err := saveSalesForParcel(ctx, w.tx, parcelID, parcel.Sales); err != nil {
 		return err
 	}
 	seqs := make([]int16, 0, len(parcel.Sales))
