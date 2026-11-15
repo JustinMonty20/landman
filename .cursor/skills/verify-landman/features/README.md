@@ -47,7 +47,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## CLI import
 
-- [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman` writing parcels, joining soil, and running screening against the verify database. It also covers `./landman run`.
+- [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman` writing parcels, joining soil, and running screening against the verify database. It also covers `./landman run` and `./landman reprocess`.
 - [Schedule Union jobs](./schedule-union-jobs.md) covers `./landman schedule` and the two cron variables.
 
 ## Journey

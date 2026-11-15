@@ -18,7 +18,7 @@
 
 Preconditions:
 
-- The verify database exists and `make migrate-up` has reached version 15.
+- The verify database exists and `make migrate-up` has reached version 16.
 - `./landman` exists from `make build`.
 - No other `./landman` process is running.
 

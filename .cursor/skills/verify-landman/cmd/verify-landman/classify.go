@@ -8,7 +8,6 @@ import (
 const (
 	fastMetadataLimit = 5 * time.Second
 	slowPageLimit     = 15 * time.Second
-	commitLine        = "Imported parcels,"
 )
 
 type verdict string
@@ -92,6 +91,7 @@ type classifyInput struct {
 	stderr      string
 	processExit int
 	probe       pageTimings
+	committed   bool
 	salesRead   bool
 	expected    []saleSlot
 	actual      []saleSlot
@@ -100,11 +100,10 @@ type classifyInput struct {
 
 func classify(in classifyInput) driveOutcome {
 	logText := in.stdout + "\n" + in.stderr
-	didCommit := strings.Contains(in.stdout, commitLine) || strings.Contains(in.stderr, commitLine)
 	deadline := deadlineText(logText)
 	slow := countySourceSlow(in.probe)
 
-	if !didCommit {
+	if !in.committed {
 		out := driveOutcome{SeededSales: tierNotRun, FullImport: tierMissed}
 		if deadline && slow {
 			out.Verdict = verdictCountySlow

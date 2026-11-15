@@ -14,6 +14,9 @@ func TestClassifyCommandSkipsSalesWhenImportDidNotCommit(t *testing.T) {
 	dir := writeEvidence(t, "", slowDriveLog(30*time.Second)+"context deadline exceeded\n", "1", fastMetadataProbe(30*time.Second))
 	text, code := runClassify(verifyContainerName, "postgres://landman/landman", filepath.Join(dir, "missing.sql"), dir, classifyDeps{
 		query: func(ctx context.Context, container, databaseURL, sql string) (string, error) {
+			if strings.Contains(sql, "success_with_quarantine") {
+				return "0\n", nil
+			}
 			t.Fatal("sale query ran")
 			return "", nil
 		},
@@ -58,7 +61,7 @@ func TestClassifyCommandPassUsesSeedSaleQuery(t *testing.T) {
 	if err := os.WriteFile(seed, []byte(twoParcelSeed), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir := writeEvidence(t, "Imported parcels, 2 likely-vacant feature IDs\n", "", "0", fastMetadataProbe(0))
+	dir := writeEvidence(t, "", "", "0", fastMetadataProbe(0))
 	var sawSale, sawPost bool
 	text, code := runClassify(verifyContainerName, "postgres://landman/landman", seed, dir, classifyDeps{
 		get: func(ctx context.Context, rawURL string) (int, []byte, error) {
@@ -73,6 +76,9 @@ func TestClassifyCommandPassUsesSeedSaleQuery(t *testing.T) {
 		query: func(ctx context.Context, container, databaseURL, sql string) (string, error) {
 			if strings.Contains(sql, "parcel_sales") && strings.Contains(sql, "count(*)") {
 				t.Fatalf("county-wide sales count: %s", sql)
+			}
+			if strings.Contains(sql, "success_with_quarantine") {
+				return "1\n", nil
 			}
 			if strings.Contains(sql, "sale_date::text") {
 				sawSale = true
@@ -117,10 +123,13 @@ func TestClassifyCommandCountySlowAfterCommitKeepsSalesMet(t *testing.T) {
 	if err := os.WriteFile(seed, []byte(twoParcelSeed), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir := writeEvidence(t, "Imported parcels, 2 likely-vacant feature IDs\n", "context deadline exceeded\n", "1", fastMetadataProbe(30*time.Second))
+	dir := writeEvidence(t, "", "context deadline exceeded\n", "1", fastMetadataProbe(30*time.Second))
 	text, code := runClassify(verifyContainerName, "postgres://landman/landman", seed, dir, classifyDeps{
 		get: salePageGetter(t),
 		query: func(ctx context.Context, container, databaseURL, sql string) (string, error) {
+			if strings.Contains(sql, "success_with_quarantine") {
+				return "1\n", nil
+			}
 			if strings.Contains(sql, "soil_screening_heads") {
 				t.Fatal("post-import ran before exit 0")
 			}
