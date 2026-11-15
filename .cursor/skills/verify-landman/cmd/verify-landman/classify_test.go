@@ -246,9 +246,21 @@ func matchingPost() *postImport {
 		Overlaps:              80,
 		SeedOverlaps:          71,
 		ParcelJobSuccesses:    1,
+		SoilJobSuccesses:      1,
 		ScreeningJobSuccesses: 1,
 		ScreeningHeads:        1,
 		Assessments:           100,
+	}
+}
+
+func TestMatchingPostRequiresSoilJob(t *testing.T) {
+	post := matchingPost()
+	if !post.matches() {
+		t.Fatal("matching post")
+	}
+	post.SoilJobSuccesses = 0
+	if post.matches() {
+		t.Fatal("soil job success is required")
 	}
 }
 

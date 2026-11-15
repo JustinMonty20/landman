@@ -91,6 +91,7 @@ func TestClassifyCommandPassUsesSeedSaleQuery(t *testing.T) {
 					"soil_polygons\t1",
 					"overlaps\t1",
 					"parcel_jobs\t1",
+					"soil_jobs\t1",
 					"screening_jobs\t1",
 					"heads\t1",
 					"assessments\t3",
