@@ -7,6 +7,39 @@ import (
 	"testing"
 )
 
+func TestMarkdownOmitsStaleJobClaims(t *testing.T) {
+	phrases := []string{
+		"required soil screening:",
+		"source import did not complete cleanly:",
+		"after the soil fetch",
+		"after that fetch returns",
+	}
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == "cmd" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		assertNoStaleSales(t, path, string(body), phrases)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMarkdownOmitsStaleSalesClaims(t *testing.T) {
 	phrases := []string{
 		"does not write parcel_sales",

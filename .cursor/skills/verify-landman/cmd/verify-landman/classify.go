@@ -70,6 +70,7 @@ type postImport struct {
 	Overlaps              int
 	SeedOverlaps          int
 	ParcelJobSuccesses    int
+	SoilJobSuccesses      int
 	ScreeningJobSuccesses int
 	ScreeningHeads        int
 	Assessments           int
@@ -80,6 +81,7 @@ func (p postImport) matches() bool {
 		p.SoilPolygons > p.SeedSoilPolygons &&
 		p.Overlaps > p.SeedOverlaps &&
 		p.ParcelJobSuccesses >= 1 &&
+		p.SoilJobSuccesses >= 1 &&
 		p.ScreeningJobSuccesses >= 1 &&
 		p.ScreeningHeads == 1 &&
 		p.Assessments == p.CountyParcels

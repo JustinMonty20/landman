@@ -37,6 +37,10 @@ SELECT 'parcel_jobs', count(*)::text
 FROM job_attempts
 WHERE job_id = 'union.gis.parcels' AND outcome = 'success'
 UNION ALL
+SELECT 'soil_jobs', count(*)::text
+FROM job_attempts
+WHERE job_id = 'union.gis.soil' AND outcome = 'success'
+UNION ALL
 SELECT 'screening_jobs', count(*)::text
 FROM job_attempts
 WHERE job_id = 'union.soil.screening' AND outcome = 'success'
@@ -318,6 +322,9 @@ func readPostImport(ctx context.Context, query sqlQuery, container, databaseURL 
 		return postImport{}, missing
 	}
 	if post.ParcelJobSuccesses, missing = requiredCount(counts, "parcel_jobs"); missing != nil {
+		return postImport{}, missing
+	}
+	if post.SoilJobSuccesses, missing = requiredCount(counts, "soil_jobs"); missing != nil {
 		return postImport{}, missing
 	}
 	if post.ScreeningJobSuccesses, missing = requiredCount(counts, "screening_jobs"); missing != nil {
