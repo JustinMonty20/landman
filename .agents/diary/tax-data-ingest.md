@@ -68,3 +68,17 @@ The tax-2 verification provider returned HTTP 402 after one behavior lane and th
 [Out-of-scope decision] Keep tax-3 through tax-7 adapters out of the artifact-store change. The operator chose to retain file bytes before any adapter parses or publishes them, so this change only adds the shared store, import evidence, and tests.
 
 [Out-of-scope decision] Use only local disk for current single-instance tax runs. Keep the S3 backend inactive until the operator selects cloud infrastructure; local disk does not give shared durability.
+
+[Out-of-scope decision] The operator approved a verified artifact field in shared `taxsource.Meta` for tax-3. Use this value instead of a separate method on each Union source; the `Read` signature and tax table schemas stay unchanged.
+
+[Out-of-scope decision] The one approved county CSV request returned Akamai HTTP 403. Do not retry or bypass the denial; use the operator's saved CSV only for offline parsing and timing, and leave the live-fetch gate blocked.
+
+[Out-of-scope decision] One plain Go HTTP request each to the other three known county tax document URLs also returned 403. The operator chose manual local input for all four source files now; do not add automatic county fetches to the tax run.
+
+[Scope tangent] The operator wants a later bucket-upload action to start ingestion after cloud infrastructure exists. Do not add a cloud event adapter or assume a provider and runtime before the operator selects them.
+
+[Out-of-scope decision] The earlier scheduled `union.tax` choice above is superseded for the first single-instance release. Four operator-supplied disk files now enter one manual `jobs.Runner.Run` call; keep parcel and soil calendars independent. Do not treat the four Akamai 403 replies as permission to bypass a denial.
+
+[Out-of-scope decision] Stage the two files initially available in private, Git-ignored `artifacts/tax-input/`, not in tracked full-file fixtures. At that time the two foreclosure files were not in Downloads; do not substitute old cached documents.
+
+[Out-of-scope decision] Later on 2026-11-16 the operator downloaded both foreclosure files. The sales source is a 10-page PDF (`b8406ff8dcdd927bbb681c21b5a97be8ca1c957ac665969e7d054614cd537a68`); the pipeline source is a 27-page PDF (`b0f8926a4d9d893dc022c0225649d9752f2c905ecb8b0ffcf4813d845e5b801b`). Both now reside in the private ignored input directory; no full county document belongs in Git.
