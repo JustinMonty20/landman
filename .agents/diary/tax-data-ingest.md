@@ -60,3 +60,7 @@ A shallow file scan missed `internal/connector/shared/httpclient/`. The full Go 
 ## Out-of-scope decision
 
 The operator approved isolated local verification lanes instead of separate cloud VMs. Keep the ten-lane behavior checks and use disposable databases. Do not claim that local lanes ran in the cloud.
+
+## Scope tangent
+
+The tax-2 verification provider returned HTTP 402 after one behavior lane and the static gate passed. The operator approved `openai-codex/gpt-6.1-sol` with high thinking for the remaining lanes and audits. Keep the two completed receipts and do not call stopped lanes project failures.
