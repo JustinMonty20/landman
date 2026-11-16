@@ -247,29 +247,57 @@ func TestBillingCancelDuringRead(t *testing.T) {
 type billingCancelOnCheck struct {
 	context.Context
 	cancel context.CancelFunc
+	armed  bool
 	checks int
 	at     int
 }
 
 func (c *billingCancelOnCheck) Err() error {
 	err := c.Context.Err()
-	c.checks++
-	if c.cancel != nil && c.checks == c.at {
-		c.cancel()
+	if c.armed {
+		c.checks++
+		if c.checks == c.at {
+			c.cancel()
+		}
 	}
 	return err
 }
 
+type billingDeliveryStore struct {
+	taxartifact.Store
+	gets       int
+	onDelivery func()
+}
+
+func (s *billingDeliveryStore) Get(ctx context.Context, artifact taxartifact.Artifact) (io.ReadCloser, error) {
+	body, err := s.Store.Get(ctx, artifact)
+	if err == nil {
+		s.gets++
+		if s.gets == 2 {
+			s.onDelivery()
+		}
+	}
+	return body, err
+}
+
 func TestBillingCancelDuringBufferedRow(t *testing.T) {
-	list, _, _ := billingTestSource(t, "WKBILA-test.csv", billingGolden)
+	_, store, raw := billingTestSource(t, "WKBILA-test.csv", billingGolden)
+	path := filepath.Join(t.TempDir(), "operator.zip")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Check 31 leaves the first bill buffered when cancellation occurs.
-	canceled := &billingCancelOnCheck{Context: ctx, cancel: cancel, at: 31}
+	canceled := &billingCancelOnCheck{Context: ctx, cancel: cancel, at: 7}
+	delivery := &billingDeliveryStore{Store: store, onDelivery: func() { canceled.armed = true }}
+	list, err := NewBillingFile(path, billingTestURL, delivery)
+	if err != nil {
+		t.Fatal(err)
+	}
 	count := 0
 	meta, err := list.Read(canceled, func(BillRow) error { count++; return nil })
-	if !errors.Is(err, context.Canceled) || count != 0 || !meta.Artifact.Verified() {
-		t.Fatalf("cancel during buffered row: checks=%d at=%d yielded=%d meta=%+v err=%v", canceled.checks, canceled.at, count, meta, err)
+	if !errors.Is(err, context.Canceled) || count != 0 || !meta.Artifact.Verified() || delivery.gets != 2 || canceled.checks < canceled.at {
+		t.Fatalf("cancel during buffered row: delivery gets=%d checks=%d at=%d yielded=%d meta=%+v err=%v", delivery.gets, canceled.checks, canceled.at, count, meta, err)
 	}
 }
 
