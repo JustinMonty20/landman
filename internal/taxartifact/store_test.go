@@ -70,6 +70,31 @@ func testContract(t *testing.T, store Store) {
 	if err := Verify(ctx, store, a); err != nil {
 		t.Fatalf("cancel changed prior version: %v", err)
 	}
+	midReadCtx, cancelMidRead := context.WithCancel(ctx)
+	if _, err := store.Put(midReadCtx, "union_delinquent", &cancellingReader{cancel: cancelMidRead}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel during staging: %v", err)
+	}
+	if err := Verify(ctx, store, a); err != nil {
+		t.Fatalf("staging cancellation changed prior version: %v", err)
+	}
+	readCtx, cancelRead := context.WithCancel(ctx)
+	body, err := store.Get(readCtx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstByte [1]byte
+	if n, err := body.Read(firstByte[:]); n != 1 || err != nil {
+		body.Close()
+		t.Fatalf("read before cancellation: n=%d err=%v", n, err)
+	}
+	cancelRead()
+	if _, err := body.Read(firstByte[:]); !errors.Is(err, context.Canceled) {
+		body.Close()
+		t.Fatalf("read after cancellation: %v", err)
+	}
+	if err := body.Close(); err != nil {
+		t.Fatal(err)
+	}
 	failure := errors.New("source read failed")
 	if _, err := store.Put(ctx, "union_delinquent", &failingReader{err: failure}); !errors.Is(err, failure) {
 		t.Fatalf("failed put: %v", err)
@@ -90,6 +115,15 @@ func testContract(t *testing.T, store Store) {
 	if _, err := store.Put(ctx, "../bad", strings.NewReader("x")); err == nil {
 		t.Fatal("accepted unsafe source")
 	}
+}
+
+type cancellingReader struct {
+	cancel context.CancelFunc
+}
+
+func (r *cancellingReader) Read(p []byte) (int, error) {
+	r.cancel()
+	return copy(p, "partial"), nil
 }
 
 type failingReader struct {
