@@ -21,6 +21,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install PDF text tool
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends poppler-utils
       - name: Check Go format
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
       - name: Check review verifier
@@ -59,6 +61,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install PDF text tool
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends poppler-utils
       - name: Install migration tool
         run: go install github.com/pressly/goose/v3/cmd/goose@v3.30.0
       - name: Apply migrations
