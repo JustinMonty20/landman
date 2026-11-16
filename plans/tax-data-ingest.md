@@ -50,7 +50,7 @@ The later `vacancy_tier` migration must replace the planned `tax_owed` view's `p
 
 **Local limit.** Local disk is not shared storage. A lost disk can remove source files. Do not claim that this mode gives multi-instance or cloud durability.
 
-**Local gate.** Before a local tax run, choose a persistent private directory. Set file permissions and a retention duration. Record the selected mode and file verification in job evidence.
+**Local gate.** Before a local tax run, choose a persistent private directory. Confirm that its filesystem supports directory sync. Set file permissions and a retention duration. Record the selected mode and file verification in job evidence.
 
 **Cloud gate.** Before a cloud release, ask the operator for the target platform and runtime. Configure S3 bucket access, encryption, retention, and explicit selection. Do not select local disk after an S3 failure. The shared-store step in `plans/source-jobs-runner-scheduler.md` applies to this later cloud mode.
 
@@ -60,7 +60,7 @@ All downloaded tax source files are retained as exact, immutable versions in the
 
 - [ ] Write the exact downloaded bytes to the selected store before parsing or publishing typed tax rows. Use bounded memory and a temporary file when a ZIP reader needs random access. Make each version immutable; an identical hash can reuse a verified object, but different bytes must not overwrite it. An upload, checksum, or parse failure must not publish a new active dataset or erase the prior one.
 - [x] Verify both backends through the same contract tests: write, read, checksum, identical retry, different-version retention, cancellation, and failure before publication. Test the local backend on disk and the S3 backend with an isolated test bucket or compatible test service. Do not contact a live bucket in default tests.
-- [ ] Before the first local tax run, configure a persistent private directory, file permissions, and a retention duration. Show active `local` mode and artifact verification in job evidence. Do not require S3 credentials for this mode.
+- [ ] Before the first local tax run, configure a persistent private directory, confirm directory sync works on its filesystem, and set file permissions and a retention duration. Show active `local` mode and artifact verification in job evidence. Do not require S3 credentials for this mode.
 - [ ] For a later shared cloud run, require explicit S3 configuration. Set bucket access, encryption, and retention before that release. Do not select local disk if the S3 backend fails. Local mode does not meet the shared, multi-instance durability requirement.
 
 The on-favorite DevNet observation is a separate buyer record, not one of these four immutable county source files.
