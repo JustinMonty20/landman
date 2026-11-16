@@ -12,4 +12,4 @@
 
 **Independent review.** Three read-only lanes passed at code commit `6fd80b6`. They checked S3 and local behavior, database rules, and static scope. The database lane saw PostgreSQL error `23505` when two imports tried to become active at the same time. The caller must roll back and retry a failed transaction. The test-only cancellation checks were added after these lanes. A cross-provider audit did not start because xAI (a model provider) returned HTTP 402.
 
-**Limits.** No test contacted a county service, an operator database, or a deployed S3 bucket. Tax adapters do not call the new store yet. Bucket access, encryption, retention, and release configuration remain open in the plan.
+**Limits.** No test contacted a county service, an operator database, or a deployed S3 bucket. Tax adapters do not call the new store yet. The first tax run will select local disk only. Before that run, choose a private persistent directory, file permissions, and retention duration. Keep S3 inactive until the operator selects cloud infrastructure. A local disk cannot provide shared, multi-instance storage.
