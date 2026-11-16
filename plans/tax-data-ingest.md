@@ -515,6 +515,7 @@ Each live lane runs in its own isolated local worktree at the PR head. Use a sep
 - [ ] A test with `Enabled` false does not call `Read`. A test with `Enabled` true and an empty `Latest` uses local files and writes a delinquent row, a bill row, a foreclosure case, a join row, and a pipeline row for a parcel with `likely_vacant` false. A test with `fetched_at` inside 180 days does not call `Read`. A test with `fetched_at` older than `Period` does call `Read`. Run `go test -race . -count=1` from the module root for the main package tests, and `go test -race -tags postgres ./internal/taxstore/ -count=1`.
 - [ ] Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
 - [ ] `rg -n "devnetwedge|func init\\(" --glob '*.go'` prints nothing.
+- [ ] Test that manual and scheduled tax runs use `jobs.Runner.Run` with ID `union.tax`. Test that `UNION_TAX_CRON` is required only when tax scheduling is enabled, has an explicit timezone, and is independent of the parcel and soil schedules. The test does not request a county URL.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
@@ -713,7 +714,7 @@ The operator first excluded DevNet and chose a fetch-and-parse program for four 
 
 On the open questions he said, "Don't worry about the schedule yet because we are still building that should just be configurable somewhere down the line. Probably should store likely-vacant somewhere. don't think we care about the personal property not sure where that is coming from and idk about renamed columns just yet."
 
-The schedule is config. tax-6 keeps the run off unless `Enabled` is set. The automatically applied 180-day default checks about twice a year; it is not a claim about the county's publication schedule. The process does not loop. A later runner can read `Period`. This plan does not add cron.
+The schedule is config. tax-6 keeps the run off unless `Enabled` is set. The automatically applied 180-day default checks about twice a year; it is not a claim about the county's publication schedule. The process does not loop. The earlier no-cron decision is superseded. One `union.tax` calendar schedule triggers `jobs.Runner.Run`; the job checks each file's `Latest` against the 180-day `Period`. The scheduler does not read `Period`.
 
 Likely-vacant is `parcels.likely_vacant`, written by persist-1, not by this program. Delinquent, billing, foreclosure, and pipeline rows are stored for every matched parcel. `tax_owed` sums `balance_due` where that flag is true and is the likely-seller flag. The operator confirmed dropping the write-time gate. A house on the foreclosure list can join its balance. The view still hides that balance from the seller flag until the parcel is likely vacant.
 
