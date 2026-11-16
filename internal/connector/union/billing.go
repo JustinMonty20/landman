@@ -259,6 +259,9 @@ func parseBilling(ctx context.Context, entry *zip.File, yield func(BillRow) erro
 			}
 			return strings.TrimSpace(record[index])
 		}
+		if err := ctx.Err(); err != nil {
+			return skipped, err
+		}
 		if err := yield(BillRow{ParcelKey: key, Year: int16(year), TotalTaxes: cents, PropertyAddress: address,
 			TaxpayerName: name, MailingLine: mailing, MailingCity: optional("Taxpayer City"),
 			MailingState: optional("Taxpayer State"), MailingPostalCode: optional("Taxpayer ZIP Code")}); err != nil {

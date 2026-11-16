@@ -244,6 +244,35 @@ func TestBillingCancelDuringRead(t *testing.T) {
 	}
 }
 
+type billingCancelOnCheck struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+	at     int
+}
+
+func (c *billingCancelOnCheck) Err() error {
+	err := c.Context.Err()
+	c.checks++
+	if c.cancel != nil && c.checks == c.at {
+		c.cancel()
+	}
+	return err
+}
+
+func TestBillingCancelDuringBufferedRow(t *testing.T) {
+	list, _, _ := billingTestSource(t, "WKBILA-test.csv", billingGolden)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Check 31 leaves the first bill buffered when cancellation occurs.
+	canceled := &billingCancelOnCheck{Context: ctx, cancel: cancel, at: 31}
+	count := 0
+	meta, err := list.Read(canceled, func(BillRow) error { count++; return nil })
+	if !errors.Is(err, context.Canceled) || count != 0 || !meta.Artifact.Verified() {
+		t.Fatalf("cancel during buffered row: checks=%d at=%d yielded=%d meta=%+v err=%v", canceled.checks, canceled.at, count, meta, err)
+	}
+}
+
 func TestBillingRejectsZIPGrowthBeforeRetention(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "growing.zip")
