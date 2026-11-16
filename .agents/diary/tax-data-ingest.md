@@ -64,3 +64,7 @@ The operator approved isolated local verification lanes instead of separate clou
 ## Scope tangent
 
 The tax-2 verification provider returned HTTP 402 after one behavior lane and the static gate passed. The operator approved `openai-codex/gpt-6.1-sol` with high thinking for the remaining lanes and audits. Keep the two completed receipts and do not call stopped lanes project failures.
+
+[Out-of-scope decision] Keep tax-3 through tax-7 adapters out of the artifact-store change. The operator chose to retain file bytes before any adapter parses or publishes them, so this change only adds the shared store, import evidence, and tests.
+
+[Out-of-scope decision] Use only local disk for current single-instance tax runs. Keep the S3 backend inactive until the operator selects cloud infrastructure; local disk does not give shared durability.
