@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/JustinMonty20/landman/internal/taxsource"
@@ -145,18 +146,42 @@ var pdfObject = regexp.MustCompile(`(?s)(\d+)\s+\d+\s+obj\b(.*?)endobj`)
 var pdfContents = regexp.MustCompile(`/Contents\s+(?:\[((?:\s*\d+\s+\d+\s+R)+)\]|(\d+\s+\d+\s+R))`)
 var pdfReference = regexp.MustCompile(`(\d+)\s+\d+\s+R`)
 var pdfPage = regexp.MustCompile(`/Type\s*/Page\b`)
-var pdfShow = regexp.MustCompile(`(?s)(\[(?:[^\]]|\\.)*\]|\((?:\\.|[^\\)])*\))\s*(TJ|Tj|'|")`)
-var pdfTextToken = regexp.MustCompile(`(?s)(?:\[(?:[^\]]|\\.)*\]|\((?:\\.|[^\\)])*\))\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}Td\b|\bT\*\b`)
-var pdfString = regexp.MustCompile(`\((?:\\.|[^\\)])*\)`)
+var pdfOperand = `(?:\[(?:[^\]]|\\.)*\]|\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>)`
+var pdfShow = regexp.MustCompile(`(?s)(` + pdfOperand + `)\s*(TJ|Tj|'|")`)
+var pdfTextToken = regexp.MustCompile(`(?s)` + pdfOperand + `\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}(?:Td|TD)\b|(?:[-+\d.]+\s+){6}Tm\b|T\*\b`)
+var pdfString = regexp.MustCompile(`\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>`)
+var pdfTJSpacing = regexp.MustCompile(`^(?:\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*)*$`)
+var pdfRoot = regexp.MustCompile(`/Root\s+(\d+)\s+\d+\s+R`)
+var pdfPagesRef = regexp.MustCompile(`/Pages\s+(\d+)\s+\d+\s+R`)
+var pdfLength = regexp.MustCompile(`/Length\s+(\d+)\b`)
 var pdfAlternative = regexp.MustCompile(`/(?:ActualText|Alt)\s*(\((?:\\.|[^\\)])*\)|<([0-9A-Fa-f]+)>)`)
+var pdfAlternativeName = regexp.MustCompile(`/(?:ActualText|Alt)\b`)
+var pdfStartXref = regexp.MustCompile(`(?s)startxref\s+(\d+)\s+%%EOF\s*$`)
+var pdfShowingOperator = regexp.MustCompile(`(?:\s|\)|\]|>)(?:Tj|TJ)\b`)
 
 func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
+	start := pdfStartXref.FindSubmatch(data)
+	if start == nil {
+		return nil, errors.New("invalid PDF structure")
+	}
+	offset, err := strconv.Atoi(string(start[1]))
+	if err != nil || offset < 0 || offset >= len(data) || !(bytes.HasPrefix(data[offset:], []byte("xref\n")) || bytes.HasPrefix(data[offset:], []byte("xref\r\n"))) || !bytes.Contains(data[offset:], []byte("trailer")) {
+		return nil, errors.New("invalid PDF cross-reference")
+	}
 	objects := map[string][]byte{}
 	order := []string{}
 	for _, match := range pdfObject.FindAllSubmatch(data, -1) {
 		key := string(match[1])
 		objects[key] = match[2]
 		order = append(order, key)
+	}
+	root := pdfRoot.FindSubmatch(data[bytes.LastIndex(data, []byte("trailer")):])
+	if root == nil || !bytes.Contains(objects[string(root[1])], []byte("/Type /Catalog")) {
+		return nil, errors.New("invalid PDF catalog")
+	}
+	pagesRef := pdfPagesRef.FindSubmatch(objects[string(root[1])])
+	if pagesRef == nil || !bytes.Contains(objects[string(pagesRef[1])], []byte("/Type /Pages")) {
+		return nil, errors.New("invalid PDF page tree")
 	}
 	var pages [][]string
 	for _, id := range order {
@@ -168,8 +193,7 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 		}
 		ref := pdfContents.FindSubmatch(objects[id])
 		if ref == nil {
-			pages = append(pages, nil)
-			continue
+			return nil, errors.New("PDF page missing content stream")
 		}
 		refs := pdfReference.FindAllSubmatch(ref[0], -1)
 		var lines []string
@@ -182,6 +206,18 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 			}
 			content := bytes.TrimPrefix(stream[start+6:end], []byte("\r\n"))
 			content = bytes.TrimPrefix(content, []byte("\n"))
+			length := pdfLength.FindSubmatch(stream[:start])
+			if length == nil {
+				return nil, errors.New("PDF content stream missing length")
+			}
+			want, err := strconv.Atoi(string(length[1]))
+			if err != nil || want < 0 || want > pipelineLimit || len(content) < want || len(bytes.TrimSpace(content[want:])) != 0 {
+				return nil, errors.New("invalid PDF content length")
+			}
+			content = content[:want]
+			if bytes.Contains(stream[:start], []byte("/Filter")) && !bytes.Contains(stream[:start], []byte("/FlateDecode")) {
+				return nil, errors.New("unsupported PDF content filter")
+			}
 			if bytes.Contains(stream[:start], []byte("/FlateDecode")) {
 				decoder, err := zlib.NewReader(bytes.NewReader(content))
 				if err != nil {
@@ -204,6 +240,9 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 				}
 				line.Reset()
 			}
+			if len(pdfShowingOperator.FindAll(content, -1)) > len(pdfShow.FindAll(content, -1)) || len(pdfAlternativeName.FindAll(content, -1)) > len(pdfAlternative.FindAll(content, -1)) {
+				return nil, errors.New("unsupported PDF text operand")
+			}
 			for _, token := range pdfTextToken.FindAll(content, -1) {
 				match := pdfShow.FindSubmatch(token)
 				if match == nil {
@@ -213,27 +252,42 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 				if string(match[2]) == "'" || string(match[2]) == "\"" {
 					flush()
 				}
-				for _, part := range pdfString.FindAll(match[1], -1) {
-					line.WriteString(pdfDecode(part[1 : len(part)-1]))
+				operand := match[1]
+				parts := pdfString.FindAllIndex(operand, -1)
+				if len(parts) == 0 {
+					return nil, errors.New("unsupported PDF text operand")
+				}
+				if operand[0] == '[' {
+					inner := operand[1 : len(operand)-1]
+					previous := 0
+					for _, part := range parts {
+						begin, end := part[0]-1, part[1]-1
+						if !pdfTJSpacing.Match(inner[previous:begin]) {
+							return nil, errors.New("unsupported PDF text array")
+						}
+						previous = end
+					}
+					if !pdfTJSpacing.Match(inner[previous:]) {
+						return nil, errors.New("unsupported PDF text array")
+					}
+				} else if len(parts) != 1 || parts[0][0] != 0 || parts[0][1] != len(operand) {
+					return nil, errors.New("unsupported PDF text operand")
+				}
+				for _, part := range parts {
+					value, err := decodePDFText(operand[part[0]:part[1]])
+					if err != nil {
+						return nil, err
+					}
+					line.WriteString(value)
 				}
 			}
 			flush()
 			for _, match := range pdfAlternative.FindAllSubmatch(content, -1) {
-				value := match[1]
-				if len(match[2]) != 0 {
-					value, _ = hex.DecodeString(string(match[2]))
-				} else {
-					value = []byte(pdfDecode(value[1 : len(value)-1]))
+				value, err := decodePDFText(match[1])
+				if err != nil {
+					return nil, err
 				}
-				if len(value) >= 2 && value[0] == 0xfe && value[1] == 0xff {
-					units := make([]uint16, 0, (len(value)-2)/2)
-					for i := 2; i+1 < len(value); i += 2 {
-						units = append(units, uint16(value[i])<<8|uint16(value[i+1]))
-					}
-					lines = append(lines, string(utf16.Decode(units)))
-				} else {
-					lines = append(lines, string(value))
-				}
+				lines = append(lines, value)
 			}
 		}
 		pages = append(pages, lines)
@@ -242,6 +296,41 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 		return nil, errors.New("PDF has no pages")
 	}
 	return pages, nil
+}
+func decodePDFText(operand []byte) (string, error) {
+	if len(operand) < 2 {
+		return "", errors.New("unsupported PDF text operand")
+	}
+	var raw []byte
+	if operand[0] == '(' && operand[len(operand)-1] == ')' {
+		raw = []byte(pdfDecode(operand[1 : len(operand)-1]))
+	} else if operand[0] == '<' && operand[len(operand)-1] == '>' {
+		encoded := bytes.Join(bytes.Fields(operand[1:len(operand)-1]), nil)
+		if len(encoded)%2 == 1 {
+			encoded = append(encoded, '0')
+		}
+		var err error
+		raw, err = hex.DecodeString(string(encoded))
+		if err != nil {
+			return "", err
+		}
+	} else {
+		return "", errors.New("unsupported PDF text operand")
+	}
+	if len(raw) >= 2 && raw[0] == 0xfe && raw[1] == 0xff {
+		if len(raw)%2 != 0 {
+			return "", errors.New("invalid PDF UTF-16 text")
+		}
+		units := make([]uint16, 0, (len(raw)-2)/2)
+		for i := 2; i < len(raw); i += 2 {
+			units = append(units, uint16(raw[i])<<8|uint16(raw[i+1]))
+		}
+		return string(utf16.Decode(units)), nil
+	}
+	if !utf8.Valid(raw) {
+		return "", errors.New("unsupported PDF text encoding")
+	}
+	return string(raw), nil
 }
 func pdfDecode(raw []byte) string {
 	var b strings.Builder
@@ -290,7 +379,7 @@ func pipelinePPTX(ctx context.Context, data []byte) ([][]string, error) {
 	}
 	slides := map[string][]string{}
 	notes := map[string][]string{}
-	valid := false
+	valid, presentation := false, false
 	for _, file := range archive.File {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -300,7 +389,33 @@ func pipelinePPTX(ctx context.Context, data []byte) ([][]string, error) {
 			if e != nil {
 				return nil, e
 			}
-			valid = bytes.Contains(b, []byte("presentationml.presentation"))
+			var types struct {
+				XMLName   xml.Name `xml:"Types"`
+				Overrides []struct {
+					PartName    string `xml:"PartName,attr"`
+					ContentType string `xml:"ContentType,attr"`
+				} `xml:"Override"`
+			}
+			if err := xml.Unmarshal(b, &types); err != nil || types.XMLName.Local != "Types" {
+				return nil, errors.New("invalid PPTX content types XML")
+			}
+			for _, item := range types.Overrides {
+				if item.PartName == "/ppt/presentation.xml" && item.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml" {
+					valid = true
+				}
+			}
+			continue
+		}
+		if file.Name == "ppt/presentation.xml" {
+			b, e := readPipelineEntry(file)
+			if e != nil {
+				return nil, e
+			}
+			var doc struct{ XMLName xml.Name }
+			if e := xml.Unmarshal(b, &doc); e != nil || doc.XMLName.Local != "presentation" || doc.XMLName.Space != "http://schemas.openxmlformats.org/presentationml/2006/main" {
+				return nil, errors.New("invalid PPTX presentation XML")
+			}
+			presentation = true
 			continue
 		}
 		if !slideFile.MatchString(file.Name) && !noteFile.MatchString(file.Name) {
@@ -310,7 +425,11 @@ func pipelinePPTX(ctx context.Context, data []byte) ([][]string, error) {
 		if e != nil {
 			return nil, e
 		}
-		lines, e := pipelineXML(b)
+		expected := "notes"
+		if slideFile.MatchString(file.Name) {
+			expected = "sld"
+		}
+		lines, e := pipelineXML(b, expected)
 		if e != nil {
 			return nil, e
 		}
@@ -320,7 +439,7 @@ func pipelinePPTX(ctx context.Context, data []byte) ([][]string, error) {
 			notes[file.Name] = lines
 		}
 	}
-	if !valid || len(slides) == 0 {
+	if !valid || !presentation || len(slides) == 0 {
 		return nil, errors.New("ZIP is not a PPTX presentation")
 	}
 	var pages [][]string
@@ -352,48 +471,76 @@ func readPipelineEntry(file *zip.File) ([]byte, error) {
 	}
 	return b, nil
 }
-func pipelineXML(data []byte) ([]string, error) {
+func pipelineXML(data []byte, expected string) ([]string, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
+	root := false
 	var lines []string
+	var paragraph strings.Builder
+	inParagraph := false
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
+			if !root {
+				return nil, errors.New("missing PPTX slide XML")
+			}
 			return lines, nil
 		}
 		if err != nil {
 			return nil, err
 		}
-		start, ok := token.(xml.StartElement)
-		if !ok {
-			continue
-		}
-		if start.Name.Local == "cNvPr" {
-			for _, a := range start.Attr {
-				if (a.Name.Local == "descr" || a.Name.Local == "title") && a.Value != "" {
-					lines = append(lines, a.Value)
+		switch element := token.(type) {
+		case xml.StartElement:
+			if !root {
+				if element.Name.Local != expected || element.Name.Space != "http://schemas.openxmlformats.org/presentationml/2006/main" {
+					return nil, errors.New("invalid PPTX slide XML")
+				}
+				root = true
+			}
+			switch element.Name.Local {
+			case "p":
+				inParagraph = true
+				paragraph.Reset()
+			case "cNvPr":
+				for _, a := range element.Attr {
+					if (a.Name.Local == "descr" || a.Name.Local == "title") && a.Value != "" {
+						lines = append(lines, a.Value)
+					}
+				}
+			case "t":
+				var value string
+				if err := decoder.DecodeElement(&value, &element); err != nil {
+					return nil, err
+				}
+				if inParagraph {
+					paragraph.WriteString(value)
+				} else {
+					lines = append(lines, value)
 				}
 			}
-		}
-		if start.Name.Local == "t" {
-			var value string
-			if err := decoder.DecodeElement(&value, &start); err != nil {
-				return nil, err
+		case xml.EndElement:
+			if element.Name.Local == "p" && inParagraph {
+				if text := strings.TrimSpace(paragraph.String()); text != "" {
+					lines = append(lines, text)
+				}
+				inParagraph = false
 			}
-			lines = append(lines, value)
 		}
 	}
 }
 
-var parcelToken = regexp.MustCompile(`(?i)\b(?:\d{2}[.\-])?\d{3}[.\-]\d{3}[A-Z0-9]*\b|\b\d{8}[A-Z0-9]*\b`)
+var parcelToken = regexp.MustCompile(`(?i)\b(?:\d{2}[.\-])?\d{3}[.\-]\d{3}[A-Z0-9]*(?: +\d{1,3})?\b|\b\d{8}[A-Z0-9]*(?: +\d{1,3})?\b`)
 var moneyPipeline = regexp.MustCompile(`^\d+\.\d{2}$`)
 var fullDatePipeline = regexp.MustCompile(`(?i)\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b`)
 
 func pipelineProperties(lines []string) ([]PipelineProperty, error) {
 	var rows []PipelineProperty
-	var current PipelineProperty
-	flush := func() {
-		if current.ParcelKey != "" {
-			rows = append(rows, current)
+	var property PipelineProperty
+	groupStart, hasFields := 0, false
+	finish := func() {
+		for i := groupStart; i < len(rows); i++ {
+			key := rows[i].ParcelKey
+			rows[i] = property
+			rows[i].ParcelKey = key
 		}
 	}
 	for _, line := range lines {
@@ -405,104 +552,68 @@ func pipelineProperties(lines []string) ([]PipelineProperty, error) {
 			lower := strings.ToLower(part)
 			if strings.Contains(lower, "parcel") {
 				tokens := parcelToken.FindAllString(part, -1)
+				if len(tokens) == 0 {
+					continue
+				}
+				if hasFields && len(rows) > groupStart {
+					finish()
+					groupStart = len(rows)
+					property = PipelineProperty{}
+					hasFields = false
+				}
 				for _, token := range tokens {
-					if current.ParcelKey != "" {
-						flush()
-					}
-					previous := current
-					current = PipelineProperty{ParcelKey: normalizeDelinquentKey(token)}
-					if len(rows) == 0 {
-						current.OwnerName, current.SitusLine, current.Township, current.Acreage = previous.OwnerName, previous.SitusLine, previous.Township, previous.Acreage
-						current.TaxValue, current.CaseNumber, current.SaleOn, current.ScheduleText, current.Status, current.Redeemed = previous.TaxValue, previous.CaseNumber, previous.SaleOn, previous.ScheduleText, previous.Status, previous.Redeemed
-					}
+					rows = append(rows, PipelineProperty{ParcelKey: normalizeDelinquentKey(token)})
 				}
 				continue
 			}
-			value := func() string {
-				if i := strings.Index(part, ":"); i >= 0 {
-					return strings.TrimSpace(part[i+1:])
-				}
-				return part
-			}()
+			value := part
+			if index := strings.Index(part, ":"); index >= 0 {
+				value = strings.TrimSpace(part[index+1:])
+			}
 			switch {
 			case strings.Contains(lower, "owner"):
-				current.OwnerName = value
+				property.OwnerName = value
 			case strings.Contains(lower, "situs") || strings.Contains(lower, "property address"):
-				current.SitusLine = value
+				property.SitusLine = value
 			case strings.Contains(lower, "township"):
-				current.Township = value
+				property.Township = value
 			case strings.Contains(lower, "acreage"):
-				current.Acreage = value
+				property.Acreage = value
 			case strings.Contains(lower, "tax value"):
 				if !strings.Contains(part, ":") {
 					value = strings.TrimSpace(part[strings.Index(lower, "tax value")+len("tax value"):])
 				}
-				if value == "" {
-					continue
+				if value != "" {
+					amount := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(value, "$", ""), ",", ""), " ", "")
+					if !moneyPipeline.MatchString(amount) {
+						return nil, fmt.Errorf("invalid pipeline Tax Value %q", value)
+					}
+					cents, err := parseDelinquentBalance(amount)
+					if err != nil {
+						return nil, err
+					}
+					property.TaxValue = &cents
 				}
-				amount := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(value, "$", ""), ",", ""), " ", "")
-				if !moneyPipeline.MatchString(amount) {
-					return nil, fmt.Errorf("invalid pipeline Tax Value %q", value)
-				}
-				cents, err := parseDelinquentBalance(amount)
-				if err != nil {
-					return nil, err
-				}
-				current.TaxValue = &cents
 			case strings.Contains(lower, "complaint filed") || strings.Contains(lower, "judicial foreclosure case") || strings.Contains(lower, "court case"):
-				current.CaseNumber = value
+				property.CaseNumber = value
 			case strings.Contains(lower, "redeemed") || strings.Contains(lower, "upset bid") || strings.Contains(lower, "status"):
-				current.Status = part
-				current.Redeemed = strings.Contains(lower, "redeemed")
+				property.Status = part
+				property.Redeemed = property.Redeemed || strings.Contains(lower, "redeemed")
 			case strings.Contains(lower, "sale") || fullDatePipeline.MatchString(part):
-				current.ScheduleText = part
+				property.ScheduleText = part
 				if date := fullDatePipeline.FindString(part); date != "" {
-					date = strings.ReplaceAll(date, ",", "")
-					parsed, err := time.Parse("January 2 2006", date)
+					parsed, err := time.Parse("January 2 2006", strings.ReplaceAll(date, ",", ""))
 					if err == nil {
-						current.SaleOn = &parsed
+						property.SaleOn = &parsed
 					}
 				}
+			default:
+				continue
 			}
+			hasFields = len(rows) > groupStart
 		}
 	}
-	flush()
-	// All PINs on one slide share its property evidence.
-	if len(rows) > 1 {
-		shared := PipelineProperty{}
-		for _, row := range rows {
-			if row.OwnerName != "" {
-				shared.OwnerName = row.OwnerName
-			}
-			if row.SitusLine != "" {
-				shared.SitusLine = row.SitusLine
-			}
-			if row.Township != "" {
-				shared.Township = row.Township
-			}
-			if row.Acreage != "" {
-				shared.Acreage = row.Acreage
-			}
-			if row.TaxValue != nil {
-				shared.TaxValue = row.TaxValue
-			}
-			if row.CaseNumber != "" {
-				shared.CaseNumber = row.CaseNumber
-			}
-			if row.ScheduleText != "" {
-				shared.ScheduleText, shared.SaleOn = row.ScheduleText, row.SaleOn
-			}
-			if row.Status != "" {
-				shared.Status = row.Status
-			}
-			shared.Redeemed = shared.Redeemed || row.Redeemed
-		}
-		for i := range rows {
-			rows[i].OwnerName, rows[i].SitusLine, rows[i].Township, rows[i].Acreage = shared.OwnerName, shared.SitusLine, shared.Township, shared.Acreage
-			rows[i].TaxValue, rows[i].CaseNumber, rows[i].ScheduleText, rows[i].SaleOn = shared.TaxValue, shared.CaseNumber, shared.ScheduleText, shared.SaleOn
-			rows[i].Status, rows[i].Redeemed = shared.Status, shared.Redeemed
-		}
-	}
+	finish()
 	seen := make(map[string]bool, len(rows))
 	unique := rows[:0]
 	for _, row := range rows {
