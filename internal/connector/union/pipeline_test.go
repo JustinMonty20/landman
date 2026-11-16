@@ -221,6 +221,10 @@ func pipelineTestPDF(content []byte, compressed bool) []byte {
 		[]byte("<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"),
 		append([]byte(fmt.Sprintf("<< /Length %d%s >>\nstream\n", len(content), filter)), append(content, []byte("\nendstream")...)...),
 	}
+	return pipelineTestPDFObjects(objects)
+}
+
+func pipelineTestPDFObjects(objects [][]byte) []byte {
 	var pdf bytes.Buffer
 	pdf.WriteString("%PDF-1.4\n")
 	offsets := []int{0}
@@ -453,6 +457,154 @@ func TestPipelineCorruptDocumentStructure(t *testing.T) {
 			_, err := list.Read(context.Background(), func(PipelineProperty) error { n++; return nil })
 			if err == nil || n != 0 {
 				t.Fatalf("err=%v rows=%d", err, n)
+			}
+		})
+	}
+}
+
+func TestPipelinePDFStarLineBreaks(t *testing.T) {
+	cases := []struct {
+		name, content string
+		bad           bool
+	}{
+		{"owner and amount", "BT (Parcel: 02.239.077) Tj T* (Owner: First) Tj T* (Tax Value: $10.00) Tj ET", false},
+		{"invalid amount", "BT (Parcel: 02.239.077) Tj T* (Owner: First) Tj T* (Tax Value: invalid) Tj ET", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "star.pdf")
+			if err := os.WriteFile(path, pipelineTestPDF([]byte(tc.content), false), 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			var rows []PipelineProperty
+			_, err := list.Read(context.Background(), func(row PipelineProperty) error { rows = append(rows, row); return nil })
+			if tc.bad {
+				if err == nil || len(rows) != 0 {
+					t.Fatalf("invalid amount err=%v rows=%+v", err, rows)
+				}
+				return
+			}
+			if err != nil || len(rows) != 1 || rows[0].OwnerName != "First" || rows[0].TaxValue == nil || *rows[0].TaxValue != 1000 {
+				t.Fatalf("err=%v rows=%+v", err, rows)
+			}
+		})
+	}
+}
+
+func TestPipelinePPTXRootValidation(t *testing.T) {
+	for _, tc := range []struct{ name, slide string }{
+		{"second root", `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sp/></p:sld><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>`},
+		{"trailing junk", `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sp/></p:sld>junk`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var contents bytes.Buffer
+			archive := zip.NewWriter(&contents)
+			for name, body := range map[string]string{
+				"[Content_Types].xml":   `<Types><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>`,
+				"ppt/presentation.xml":  `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>`,
+				"ppt/slides/slide1.xml": tc.slide,
+			} {
+				file, err := archive.Create(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := file.Write([]byte(body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := archive.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "extra-root.pptx")
+			if err := os.WriteFile(path, contents.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			count := 0
+			_, err := list.Read(context.Background(), func(PipelineProperty) error { count++; return nil })
+			if err == nil || count != 0 {
+				t.Fatalf("err=%v rows=%d", err, count)
+			}
+		})
+	}
+}
+
+func TestPipelinePDFPageTreeAndXref(t *testing.T) {
+	valid := pipelineTestPDF([]byte("BT (Parcel: 02.239.077) Tj ET"), false)
+	pageOffset := bytes.Index(valid, []byte("3 0 obj"))
+	if pageOffset < 0 {
+		t.Fatal("missing fixture page object")
+	}
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"missing Kids", bytes.Replace(valid, []byte("/Kids"), []byte("/NOPE"), 1)},
+		{"unreferenced page", bytes.Replace(valid, []byte("/Kids [3 0 R]"), []byte("/Kids [9 0 R]"), 1)},
+		{"corrupt xref entry", bytes.Replace(valid, []byte(fmt.Sprintf("%010d 00000 n", pageOffset)), []byte("0000000001 00000 n"), 1)},
+		{"invalid xref section", bytes.Replace(valid, []byte("xref\n0 5\n"), []byte("xref\nx 5\n"), 1)},
+		{"wrong page parent", bytes.Replace(valid, []byte("/Parent 2 0 R"), []byte("/Parent 9 0 R"), 1)},
+		{"missing xref trailer", bytes.Replace(valid, []byte("trailer\n"), []byte("notrail\n"), 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "bad.pdf")
+			if err := os.WriteFile(path, tc.body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			count := 0
+			_, err := list.Read(context.Background(), func(PipelineProperty) error { count++; return nil })
+			if err == nil || count != 0 {
+				t.Fatalf("err=%v rows=%d", err, count)
+			}
+		})
+	}
+	orphanContent := []byte("BT (Parcel: 07.027.002J80) Tj ET")
+	objects := [][]byte{
+		[]byte("<< /Type /Catalog /Pages 2 0 R >>"),
+		[]byte("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		[]byte("<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"),
+		append([]byte("<< /Length 29 >>\nstream\n"), []byte("BT (Parcel: 02.239.077) Tj ET\nendstream")...),
+		[]byte("<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>"),
+		append([]byte(fmt.Sprintf("<< /Length %d >>\nstream\n", len(orphanContent))), append(orphanContent, []byte("\nendstream")...)...),
+	}
+	path := filepath.Join(t.TempDir(), "orphan.pdf")
+	if err := os.WriteFile(path, pipelineTestPDFObjects(objects), 0600); err != nil {
+		t.Fatal(err)
+	}
+	list := pipelineFixture(t, path)
+	var rows []PipelineProperty
+	_, err := list.Read(context.Background(), func(row PipelineProperty) error { rows = append(rows, row); return nil })
+	if err != nil || len(rows) != 1 || rows[0].ParcelKey != "02239077" {
+		t.Fatalf("err=%v rows=%+v", err, rows)
+	}
+}
+
+func TestPipelinePDFAlternativePropertyOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		bad           bool
+	}{
+		{"distinct owner blocks", `BT (Parcel: 02.239.077) Tj /Span << /ActualText (Owner: First) >> BDC T* (Parcel: 07.027.002J80) Tj /Span << /Alt (Owner: Second) >> BDC ET`, false},
+		{"invalid first value", `BT (Parcel: 02.239.077) Tj /Span << /Alt (Tax Value: invalid) >> BDC T* (Parcel: 07.027.002J80) Tj /Span << /ActualText (Owner: Second) >> BDC ET`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "alt.pdf")
+			if err := os.WriteFile(path, pipelineTestPDF([]byte(tc.content), false), 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			var rows []PipelineProperty
+			_, err := list.Read(context.Background(), func(row PipelineProperty) error { rows = append(rows, row); return nil })
+			if tc.bad {
+				if err == nil || len(rows) != 0 {
+					t.Fatalf("err=%v rows=%+v", err, rows)
+				}
+				return
+			}
+			if err != nil || len(rows) != 2 || rows[0].OwnerName != "First" || rows[1].OwnerName != "Second" {
+				t.Fatalf("err=%v rows=%+v", err, rows)
 			}
 		})
 	}

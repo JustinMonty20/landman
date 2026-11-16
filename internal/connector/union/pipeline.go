@@ -2,6 +2,7 @@ package union
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"compress/zlib"
 	"context"
@@ -142,13 +143,15 @@ func (s *PipelineList) parse(ctx context.Context, artifact taxartifact.Artifact)
 	return rows, skipped, nil
 }
 
-var pdfObject = regexp.MustCompile(`(?s)(\d+)\s+\d+\s+obj\b(.*?)endobj`)
+var pdfObject = regexp.MustCompile(`(?s)(\d+)\s+(\d+)\s+obj\b(.*?)endobj`)
 var pdfContents = regexp.MustCompile(`/Contents\s+(?:\[((?:\s*\d+\s+\d+\s+R)+)\]|(\d+\s+\d+\s+R))`)
 var pdfReference = regexp.MustCompile(`(\d+)\s+\d+\s+R`)
 var pdfPage = regexp.MustCompile(`/Type\s*/Page\b`)
+var pdfKids = regexp.MustCompile(`(?s)/Kids\s*\[([^\]]+)\]`)
+var pdfParent = regexp.MustCompile(`/Parent\s+(\d+)\s+\d+\s+R`)
 var pdfOperand = `(?:\[(?:[^\]]|\\.)*\]|\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>)`
 var pdfShow = regexp.MustCompile(`(?s)(` + pdfOperand + `)\s*(TJ|Tj|'|")`)
-var pdfTextToken = regexp.MustCompile(`(?s)` + pdfOperand + `\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}(?:Td|TD)\b|(?:[-+\d.]+\s+){6}Tm\b|T\*\b`)
+var pdfTextToken = regexp.MustCompile(`(?s)` + pdfOperand + `\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}(?:Td|TD)\b|(?:[-+\d.]+\s+){6}Tm\b|(?:^|\s)T\*(?:\s|$)|` + pdfAlternative.String())
 var pdfString = regexp.MustCompile(`\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>`)
 var pdfTJSpacing = regexp.MustCompile(`^(?:\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*)*$`)
 var pdfRoot = regexp.MustCompile(`/Root\s+(\d+)\s+\d+\s+R`)
@@ -168,26 +171,24 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 	if err != nil || offset < 0 || offset >= len(data) || !(bytes.HasPrefix(data[offset:], []byte("xref\n")) || bytes.HasPrefix(data[offset:], []byte("xref\r\n"))) || !bytes.Contains(data[offset:], []byte("trailer")) {
 		return nil, errors.New("invalid PDF cross-reference")
 	}
-	objects := map[string][]byte{}
-	order := []string{}
-	for _, match := range pdfObject.FindAllSubmatch(data, -1) {
-		key := string(match[1])
-		objects[key] = match[2]
-		order = append(order, key)
+	objects, err := pdfXrefObjects(data, offset)
+	if err != nil {
+		return nil, err
 	}
 	root := pdfRoot.FindSubmatch(data[bytes.LastIndex(data, []byte("trailer")):])
 	if root == nil || !bytes.Contains(objects[string(root[1])], []byte("/Type /Catalog")) {
 		return nil, errors.New("invalid PDF catalog")
 	}
 	pagesRef := pdfPagesRef.FindSubmatch(objects[string(root[1])])
-	if pagesRef == nil || !bytes.Contains(objects[string(pagesRef[1])], []byte("/Type /Pages")) {
+	if pagesRef == nil {
 		return nil, errors.New("invalid PDF page tree")
+	}
+	order, err := pdfPageOrder(objects, string(pagesRef[1]))
+	if err != nil {
+		return nil, err
 	}
 	var pages [][]string
 	for _, id := range order {
-		if !pdfPage.Match(objects[id]) {
-			continue
-		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -244,6 +245,15 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 				return nil, errors.New("unsupported PDF text operand")
 			}
 			for _, token := range pdfTextToken.FindAll(content, -1) {
+				if alternate := pdfAlternative.FindSubmatch(token); alternate != nil {
+					flush()
+					value, err := decodePDFText(alternate[1])
+					if err != nil {
+						return nil, err
+					}
+					lines = append(lines, value)
+					continue
+				}
 				match := pdfShow.FindSubmatch(token)
 				if match == nil {
 					flush()
@@ -282,13 +292,6 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 				}
 			}
 			flush()
-			for _, match := range pdfAlternative.FindAllSubmatch(content, -1) {
-				value, err := decodePDFText(match[1])
-				if err != nil {
-					return nil, err
-				}
-				lines = append(lines, value)
-			}
 		}
 		pages = append(pages, lines)
 	}
@@ -297,6 +300,118 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 	}
 	return pages, nil
 }
+func pdfXrefObjects(data []byte, offset int) (map[string][]byte, error) {
+	at := make(map[int][]byte)
+	for _, match := range pdfObject.FindAllSubmatchIndex(data, -1) {
+		at[match[0]] = data[match[6]:match[7]]
+	}
+	objects := make(map[string][]byte)
+	scanner := bufio.NewScanner(bytes.NewReader(data[offset:]))
+	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "xref" {
+		return nil, errors.New("invalid PDF cross-reference")
+	}
+	foundTrailer := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "trailer" {
+			foundTrailer = true
+			break
+		}
+		section := strings.Fields(line)
+		if len(section) != 2 {
+			return nil, errors.New("invalid PDF cross-reference section")
+		}
+		first, firstErr := strconv.Atoi(section[0])
+		count, countErr := strconv.Atoi(section[1])
+		if firstErr != nil || countErr != nil || first < 0 || count <= 0 || count > pipelineLimit {
+			return nil, errors.New("invalid PDF cross-reference section")
+		}
+		for id := first; id < first+count; id++ {
+			if !scanner.Scan() {
+				return nil, errors.New("truncated PDF cross-reference")
+			}
+			entry := strings.Fields(scanner.Text())
+			if len(entry) != 3 || len(entry[0]) != 10 || len(entry[1]) != 5 {
+				return nil, errors.New("invalid PDF cross-reference entry")
+			}
+			position, posErr := strconv.Atoi(entry[0])
+			generation, genErr := strconv.Atoi(entry[1])
+			if posErr != nil || genErr != nil || position < 0 {
+				return nil, errors.New("invalid PDF cross-reference entry")
+			}
+			if entry[2] == "f" {
+				continue
+			}
+			if entry[2] != "n" {
+				return nil, errors.New("invalid PDF cross-reference entry")
+			}
+			body, ok := at[position]
+			if !ok {
+				return nil, errors.New("PDF cross-reference points outside an object")
+			}
+			header := fmt.Sprintf("%d %d obj", id, generation)
+			if !bytes.HasPrefix(data[position:], []byte(header)) {
+				return nil, errors.New("PDF cross-reference points to the wrong object")
+			}
+			objects[strconv.Itoa(id)] = body
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if !foundTrailer {
+		return nil, errors.New("missing PDF cross-reference trailer")
+	}
+	return objects, nil
+}
+
+func pdfPageOrder(objects map[string][]byte, root string) ([]string, error) {
+	seen := make(map[string]bool)
+	var pages []string
+	var visit func(string, string) error
+	visit = func(id, parent string) error {
+		body, ok := objects[id]
+		if !ok || seen[id] {
+			return errors.New("missing or repeated PDF page tree node")
+		}
+		seen[id] = true
+		if parent != "" {
+			ref := pdfParent.FindSubmatch(body)
+			if ref == nil || string(ref[1]) != parent {
+				return errors.New("invalid PDF page parent")
+			}
+		}
+		if pdfPage.Match(body) {
+			pages = append(pages, id)
+			return nil
+		}
+		if !bytes.Contains(body, []byte("/Type /Pages")) {
+			return errors.New("invalid PDF page tree")
+		}
+		kids := pdfKids.FindSubmatch(body)
+		if kids == nil {
+			return errors.New("PDF page tree missing Kids")
+		}
+		refs := pdfReference.FindAllSubmatch(kids[1], -1)
+		if len(refs) == 0 {
+			return errors.New("PDF page tree missing Kids")
+		}
+		for _, ref := range refs {
+			if err := visit(string(ref[1]), id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(root, ""); err != nil {
+		return nil, err
+	}
+	if len(pages) == 0 {
+		return nil, errors.New("PDF has no pages")
+	}
+	return pages, nil
+}
+
 func decodePDFText(operand []byte) (string, error) {
 	if len(operand) < 2 {
 		return "", errors.New("unsupported PDF text operand")
@@ -473,14 +588,15 @@ func readPipelineEntry(file *zip.File) ([]byte, error) {
 }
 func pipelineXML(data []byte, expected string) ([]string, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
-	root := false
+	depth := 0
+	closed := false
 	var lines []string
 	var paragraph strings.Builder
 	inParagraph := false
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
-			if !root {
+			if !closed {
 				return nil, errors.New("missing PPTX slide XML")
 			}
 			return lines, nil
@@ -490,12 +606,13 @@ func pipelineXML(data []byte, expected string) ([]string, error) {
 		}
 		switch element := token.(type) {
 		case xml.StartElement:
-			if !root {
-				if element.Name.Local != expected || element.Name.Space != "http://schemas.openxmlformats.org/presentationml/2006/main" {
-					return nil, errors.New("invalid PPTX slide XML")
-				}
-				root = true
+			if closed {
+				return nil, errors.New("multiple PPTX slide roots")
 			}
+			if depth == 0 && (element.Name.Local != expected || element.Name.Space != "http://schemas.openxmlformats.org/presentationml/2006/main") {
+				return nil, errors.New("invalid PPTX slide XML")
+			}
+			depth++
 			switch element.Name.Local {
 			case "p":
 				inParagraph = true
@@ -511,6 +628,7 @@ func pipelineXML(data []byte, expected string) ([]string, error) {
 				if err := decoder.DecodeElement(&value, &element); err != nil {
 					return nil, err
 				}
+				depth--
 				if inParagraph {
 					paragraph.WriteString(value)
 				} else {
@@ -518,11 +636,19 @@ func pipelineXML(data []byte, expected string) ([]string, error) {
 				}
 			}
 		case xml.EndElement:
+			depth--
+			if depth == 0 {
+				closed = true
+			}
 			if element.Name.Local == "p" && inParagraph {
 				if text := strings.TrimSpace(paragraph.String()); text != "" {
 					lines = append(lines, text)
 				}
 				inParagraph = false
+			}
+		case xml.CharData:
+			if depth == 0 && len(bytes.TrimSpace(element)) != 0 {
+				return nil, errors.New("text outside PPTX slide root")
 			}
 		}
 	}
