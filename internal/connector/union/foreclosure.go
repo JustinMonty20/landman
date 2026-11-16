@@ -18,7 +18,7 @@ import (
 
 const (
 	ForeclosureURL    = "https://www.unioncountync.gov/home/showdocument?id=4787"
-	foreclosureSource = "union_foreclosure_sales"
+	foreclosureSource = "union_foreclosure"
 	foreclosureLimit  = 16 << 20
 )
 
@@ -67,6 +67,13 @@ func (s *ForeclosureList) Read(ctx context.Context, yield func(ForeclosureCase) 
 	if err := ctx.Err(); err != nil {
 		return taxsource.Meta{}, err
 	}
+	pathInfo, err := os.Lstat(s.path)
+	if err != nil {
+		return taxsource.Meta{}, fmt.Errorf("stat operator-supplied foreclosure PDF: %w", err)
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return taxsource.Meta{}, errors.New("operator-supplied foreclosure PDF must be a regular file")
+	}
 	body, err := os.Open(s.path)
 	if err != nil {
 		return taxsource.Meta{}, fmt.Errorf("open operator-supplied foreclosure PDF: %w", err)
@@ -74,6 +81,9 @@ func (s *ForeclosureList) Read(ctx context.Context, yield func(ForeclosureCase) 
 	info, err := body.Stat()
 	if err != nil {
 		return taxsource.Meta{}, errors.Join(err, body.Close())
+	}
+	if !info.Mode().IsRegular() {
+		return taxsource.Meta{}, errors.Join(errors.New("operator-supplied foreclosure PDF must be a regular file"), body.Close())
 	}
 	if info.Size() > foreclosureLimit {
 		return taxsource.Meta{}, errors.Join(errors.New("foreclosure PDF exceeds size limit"), body.Close())
@@ -185,16 +195,18 @@ func (b *boundedForeclosureText) Write(p []byte) (int, error) {
 }
 
 var (
-	caseStart    = regexp.MustCompile(`(?m)^[\f \t]*Sale Date:[ \t]*`)
-	pinLabel     = regexp.MustCompile(`(?i)Parcel Identification Number\s*\([^)]*\)\s*:`)
-	pinToken     = regexp.MustCompile(`\b[0-9]{2}[-.][0-9]{3}[-.][0-9]{3}[A-Za-z]?(?: [0-9]{2})?\b`)
-	caseNumber   = regexp.MustCompile(`(?i)Case\s*#\s*([A-Za-z0-9-]+)`)
-	moneyField   = regexp.MustCompile(`(?im)^\s*(?:ESTIMATED\s+)?(Opening Bid|Current Bid|Required Min\. Upset Bid)\s*:?\s*\$?\s*([^\r\n]*)`)
-	taxField     = regexp.MustCompile(`(?im)^\s*Tax Value:\s*\$?\s*([^\r\n]*)`)
-	ownerField   = regexp.MustCompile(`(?im)^\s*Current Property Owner:\s*(.+)`)
-	addressField = regexp.MustCompile(`(?im)^\s*Address:\s*(.+)`)
-	dateField    = regexp.MustCompile(`(?i)^([^\r\n]*?)(?:\s+Case\s*#|\r?\n)`)
-	taxPINValue  = regexp.MustCompile(`\$([0-9,]+(?:\.[0-9]{2})?)\s+\(+([0-9]{2}[-.][0-9]{3}[-.][0-9]{3}[A-Za-z]?)\)`)
+	caseStart      = regexp.MustCompile(`(?m)^[\f \t]*Sale Date:[ \t]*`)
+	pinLabel       = regexp.MustCompile(`(?i)Parcel Identification Number\s*\([^)]*\)\s*:`)
+	pinToken       = regexp.MustCompile(`\b[0-9]{2}[-.][0-9]{3}[-.][0-9]{3}[A-Za-z]?(?: [0-9]{2})?\b`)
+	caseNumber     = regexp.MustCompile(`(?i)Case\s*#\s*([A-Za-z0-9-]+)`)
+	moneyField     = regexp.MustCompile(`(?im)^\s*(?:ESTIMATED\s+)?(Opening Bid|Current Bid|Required Min\. Upset Bid)\s*:?\s*\$?\s*([^\r\n]*)`)
+	taxField       = regexp.MustCompile(`(?im)^\s*Tax Value:\s*\$?\s*([^\r\n]*)`)
+	ownerField     = regexp.MustCompile(`(?im)^\s*Current Property Owner:\s*(.+)`)
+	addressField   = regexp.MustCompile(`(?im)^\s*Address:\s*(.+)`)
+	dateField      = regexp.MustCompile(`(?i)^([^\r\n]*?)(?:\s+Case\s*#|\r?\n)`)
+	taxPINValue    = regexp.MustCompile(`(?m)^([^\r\n]*?)\(+([0-9]{2}[-.][0-9]{3}[-.][0-9]{3}[A-Za-z]?)\)`)
+	redeemedStatus = regexp.MustCompile(`(?im)^[ \t]*REDEEMED(?:[ \t]*/[ \t]*SATISFIED)?[ \t]*$`)
+	closedStatus   = regexp.MustCompile(`(?im)^[ \t]*BIDDING[ \t]+PHASE[ \t]+CLOSED[ \t]*$|\bBIDDING\s+Book\s+\d+,\s*PHASE[ \t]+CLOSED\b`)
 )
 
 func parseForeclosure(ctx context.Context, text string) ([]ForeclosureCase, int, error) {
@@ -249,8 +261,8 @@ func parseForeclosure(ctx context.Context, text string) ([]ForeclosureCase, int,
 			}
 		}
 		upper := strings.ToUpper(block)
-		sale.Redeemed = strings.Contains(upper, "REDEEMED")
-		sale.BiddingClosed = strings.Contains(upper, "BIDDING") && strings.Contains(upper, "CLOSED")
+		sale.Redeemed = redeemedStatus.MatchString(block)
+		sale.BiddingClosed = closedStatus.MatchString(block)
 		switch {
 		case sale.Redeemed:
 			sale.Status = "redeemed"
@@ -298,9 +310,9 @@ func foreclosurePINs(block string) ([]ForeclosurePIN, error) {
 	}
 	var taxValue *int64
 	pinValues := make(map[string]*int64)
-	if m := taxField.FindStringSubmatch(block); m != nil {
-		// Parenthesized PIN-specific amounts are handled below; otherwise the listed value applies to each PIN.
-		value := strings.TrimSpace(strings.Split(m[1], "per lot")[0])
+	if m := taxField.FindStringSubmatchIndex(block); m != nil {
+		// A value without a parenthesized PIN applies to every PIN in the case.
+		value := strings.TrimSpace(strings.Split(block[m[2]:m[3]], "per lot")[0])
 		if idx := strings.Index(value, "("); idx >= 0 {
 			value = strings.TrimSpace(value[:idx])
 		}
@@ -309,10 +321,21 @@ func foreclosurePINs(block string) ([]ForeclosurePIN, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tax value: %w", err)
 		}
-		for _, match := range taxPINValue.FindAllStringSubmatch(block, -1) {
-			amount, err := foreclosureMoney(match[1])
+		for _, line := range strings.Split(block[m[0]:], "\n") {
+			if moneyField.MatchString(line) {
+				break
+			}
+			match := taxPINValue.FindStringSubmatch(line)
+			if match == nil {
+				continue
+			}
+			amountText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(match[1]), "Tax Value:"))
+			amount, err := foreclosureMoney(amountText)
 			if err != nil {
 				return nil, fmt.Errorf("PIN tax value: %w", err)
+			}
+			if amount == nil {
+				return nil, fmt.Errorf("missing PIN tax value %q", amountText)
 			}
 			pinValues[strings.NewReplacer("-", "", ".", "").Replace(match[2])] = amount
 		}

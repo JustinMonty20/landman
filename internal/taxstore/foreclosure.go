@@ -28,7 +28,7 @@ type ForeclosureResult struct {
 // The caller rolls back on failure and commits only after the entire file succeeds.
 func SaveForeclosure(ctx context.Context, tx pgx.Tx, cases []union.ForeclosureCase, meta taxsource.Meta, skippedBlocks int) (ForeclosureResult, error) {
 	var result ForeclosureResult
-	if meta.Name != "union_foreclosure_sales" || meta.URL != union.ForeclosureURL || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedBlocks < 0 {
+	if meta.Name != "union_foreclosure" || meta.URL != union.ForeclosureURL || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedBlocks < 0 {
 		return result, errors.New("invalid foreclosure import evidence")
 	}
 	result.SkippedBlocks = skippedBlocks
@@ -41,19 +41,21 @@ func SaveForeclosure(ctx context.Context, tx pgx.Tx, cases []union.ForeclosureCa
 		if len(sale.PINs) == 0 || !foreclosureAmountValid(sale.OpeningBid) || !foreclosureAmountValid(sale.CurrentBid) || !foreclosureAmountValid(sale.UpsetBid) {
 			return result, errors.New("invalid foreclosure case")
 		}
-		keys := make([]string, 0, len(sale.PINs))
-		legal := make([]string, 0, len(sale.PINs))
+		ordered := append([]union.ForeclosurePIN(nil), sale.PINs...)
 		for _, pin := range sale.PINs {
 			if pin.ParcelKey == "" || !foreclosureAmountValid(pin.TaxValue) {
 				return result, errors.New("invalid foreclosure PIN")
 			}
+		}
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i].ParcelKey < ordered[j].ParcelKey })
+		keys := make([]string, 0, len(ordered))
+		legal := make([]string, 0, len(ordered))
+		for _, pin := range ordered {
 			keys = append(keys, pin.ParcelKey)
 			legal = append(legal, pin.LegalDescription)
 		}
-		sort.Strings(keys)
-		sort.Strings(legal)
-		pinHash := sha256.Sum256([]byte(strings.Join(keys, "\x00")))
-		legalHash := sha256.Sum256([]byte(strings.Join(legal, "\x00")))
+		pinHash := sha256.Sum256([]byte(strings.Join(keys, "\n")))
+		legalHash := sha256.Sum256([]byte(strings.Join(legal, "\n")))
 		var caseID string
 		var number any
 		if sale.CaseNumber != "" && !strings.EqualFold(sale.CaseNumber, "TBD") {
@@ -156,7 +158,7 @@ func (s Foreclosures) Latest(ctx context.Context) (time.Time, bool, error) {
 		return time.Time{}, false, errors.New("foreclosure database required")
 	}
 	var latest *time.Time
-	if err := s.pool.QueryRow(ctx, `SELECT max(fetched_at) FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name=$2`, county.Union, "union_foreclosure_sales").Scan(&latest); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT max(fetched_at) FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name=$2`, county.Union, "union_foreclosure").Scan(&latest); err != nil {
 		return time.Time{}, false, fmt.Errorf("latest foreclosure case: %w", err)
 	}
 	if latest == nil {

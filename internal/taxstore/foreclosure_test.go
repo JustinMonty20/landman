@@ -3,13 +3,16 @@
 package taxstore_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
+	"github.com/JustinMonty20/landman/internal/taxsource"
 	"github.com/JustinMonty20/landman/internal/taxstore"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -100,6 +103,40 @@ VALUES ('union','179','union_county_gis',$1,false) RETURNING id::text`, sales[2]
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_owed WHERE parcel_id=$1`, ids[0]).Scan(&owed); err != nil || owed != 0 {
 		t.Fatalf("foreclosure changed tax_owed=%d err=%v", owed, err)
 	}
+	// Legal text follows sorted PIN order, not its own lexical order.
+	unnumbered := sales[0]
+	unnumbered.CaseNumber = ""
+	unnumbered.PINs = append([]union.ForeclosurePIN(nil), sales[0].PINs[:2]...)
+	unnumbered.PINs[0].LegalDescription = "Z legal"
+	unnumbered.PINs[1].LegalDescription = "A legal"
+	if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{unnumbered}, meta, 0); err != nil {
+		t.Fatal(err)
+	}
+	pinHash := sha256.Sum256([]byte("07129160\n07129161"))
+	legalHash := sha256.Sum256([]byte("Z legal\nA legal"))
+	var legalID string
+	var storedPINHash, storedLegalHash []byte
+	if err := tx.QueryRow(ctx, `SELECT id::text,parcel_set_sha256,legal_sha256 FROM tax_foreclosure_cases
+WHERE case_number IS NULL AND parcel_set_sha256=$1 AND legal_sha256=$2`, pinHash[:], legalHash[:]).Scan(&legalID, &storedPINHash, &storedLegalHash); err != nil || !bytes.Equal(storedPINHash, pinHash[:]) || !bytes.Equal(storedLegalHash, legalHash[:]) {
+		t.Fatalf("PIN order hash: id=%s err=%v", legalID, err)
+	}
+	unnumbered.PINs[0], unnumbered.PINs[1] = unnumbered.PINs[1], unnumbered.PINs[0]
+	if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{unnumbered}, meta, 0); err != nil {
+		t.Fatal(err)
+	}
+	var sameOrderID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_cases WHERE case_number IS NULL AND parcel_set_sha256=$1 AND legal_sha256=$2`, pinHash[:], legalHash[:]).Scan(&sameOrderID); err != nil || sameOrderID != legalID {
+		t.Fatalf("PIN order changed identity: %s/%s err=%v", sameOrderID, legalID, err)
+	}
+	unnumbered.PINs[0].LegalDescription, unnumbered.PINs[1].LegalDescription = unnumbered.PINs[1].LegalDescription, unnumbered.PINs[0].LegalDescription
+	if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{unnumbered}, meta, 0); err != nil {
+		t.Fatal(err)
+	}
+	var swappedID string
+	swappedHash := sha256.Sum256([]byte("A legal\nZ legal"))
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_cases WHERE case_number IS NULL AND parcel_set_sha256=$1 AND legal_sha256=$2`, pinHash[:], swappedHash[:]).Scan(&swappedID); err != nil || swappedID == legalID {
+		t.Fatalf("swapped legal identity: %s/%s err=%v", swappedID, legalID, err)
+	}
 	// A later numbered case does not absorb the earlier null-number identity.
 	numbered := sales[2]
 	numbered.CaseNumber = "26M000998-890"
@@ -124,13 +161,67 @@ VALUES ('union','179','union_county_gis',$1,false) RETURNING id::text`, sales[2]
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM parcels WHERE id::text = ANY($1)`, ids)
-		_, _ = pool.Exec(ctx, `DELETE FROM tax_foreclosure_cases WHERE county_id='union' AND source_name='union_foreclosure_sales' AND file_sha256=$1`, meta.SHA256[:])
-		_, _ = pool.Exec(ctx, `DELETE FROM tax_file_imports WHERE county_id='union' AND source_name='union_foreclosure_sales' AND source_url=$1`, meta.URL)
+		_, _ = pool.Exec(ctx, `DELETE FROM tax_foreclosure_cases WHERE county_id='union' AND source_name='union_foreclosure' AND file_sha256=$1`, meta.SHA256[:])
+		_, _ = pool.Exec(ctx, `DELETE FROM tax_file_imports WHERE county_id='union' AND source_name='union_foreclosure' AND source_url=$1`, meta.URL)
 	})
 }
 
 func TestSaveForeclosureRejectsInvalidEvidence(t *testing.T) {
-	if _, ok, err := taxstore.NewForeclosures(nil).Latest(context.Background()); err == nil || ok {
+	ctx := context.Background()
+	if _, ok, err := taxstore.NewForeclosures(nil).Latest(ctx); err == nil || ok {
 		t.Fatalf("nil database ok=%v err=%v", ok, err)
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL must name a disposable migrated database")
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	store, err := taxartifact.NewLocal(filepath.Join(t.TempDir(), "private"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := union.NewForeclosureList(filepath.Join("..", "connector", "union", "testdata", "tax", "foreclosure.pdf"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sale union.ForeclosureCase
+	meta, err := list.Read(ctx, func(item union.ForeclosureCase) error { sale = item; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		meta    taxsource.Meta
+		sale    union.ForeclosureCase
+		skipped int
+	}{
+		{"wrong source", func() taxsource.Meta { bad := meta; bad.Name = "union_billing"; return bad }(), sale, 0},
+		{"negative skip", meta, sale, -1},
+		{"no PIN", meta, union.ForeclosureCase{}, 0},
+		{"empty parcel key", meta, union.ForeclosureCase{PINs: []union.ForeclosurePIN{{}}}, 0},
+		{"negative bid", meta, union.ForeclosureCase{PINs: sale.PINs, CurrentBid: func() *int64 { v := int64(-1); return &v }()}, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{test.sale}, test.meta, test.skipped); err == nil {
+				t.Fatal("invalid foreclosure input accepted")
+			}
+		})
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := taxstore.SaveForeclosure(cancelled, tx, nil, meta, 0); err == nil {
+		t.Fatal("canceled import accepted")
+	}
+	if _, ok, err := taxstore.NewForeclosures(pool).Latest(cancelled); err == nil || ok {
+		t.Fatalf("canceled latest: ok=%v err=%v", ok, err)
 	}
 }
