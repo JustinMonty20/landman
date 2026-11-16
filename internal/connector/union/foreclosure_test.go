@@ -216,16 +216,27 @@ func TestForeclosureRejectsMalformedPINAmountBeforeYield(t *testing.T) {
 	}
 }
 
+func TestForeclosureRejectsMalformedSpacedPINAmountBeforeYield(t *testing.T) {
+	list, _ := foreclosureTestList(t, foreclosureTextPDF(
+		"Sale Date: TBD Case # 26M000471-890", "Parcel Identification Number (PIN): 09-125-043", "Tax Value: $10.00", "Current Bid: TBD",
+		"Sale Date: TBD Case # TBD", "Parcel Identification Number (PIN): 07-129-160 and 02-176-011 60", "Tax Value: $10,000 (07-129-160) $bad (02-176-011 60)", "Current Bid: TBD"))
+	yielded := 0
+	_, err := list.Read(context.Background(), func(ForeclosureCase) error { yielded++; return nil })
+	if err == nil || !strings.Contains(err.Error(), "PIN tax value") || yielded != 0 {
+		t.Fatalf("malformed spaced PIN amount: yielded=%d err=%v", yielded, err)
+	}
+}
+
 func TestForeclosurePINAmountsIncludeTBDAndMultipleValues(t *testing.T) {
 	list, _ := foreclosureTestList(t, foreclosureTextPDF(
 		"Sale Date: TBD Case # TBD", "Parcel Identification Number (PIN): 07-129-160", "Tax Value: TBD (07-129-160)", "Current Bid: TBD",
-		"Sale Date: TBD Case # 26M000471-890", "Parcel Identification Number (PIN): 09-125-042 and 09-125-043", "Tax Value: $10.00 (09-125-042) $20.00 (09-125-043)", "Current Bid: TBD"))
+		"Sale Date: TBD Case # 26M000471-890", "Parcel Identification Number (PIN): 09-125-042 and 02-176-011 60", "Tax Value: $10.00 (09-125-042) $20.00 (02-176-011 60)", "Current Bid: TBD"))
 	var cases []ForeclosureCase
 	_, err := list.Read(context.Background(), func(sale ForeclosureCase) error { cases = append(cases, sale); return nil })
 	if err != nil || len(cases) != 2 {
 		t.Fatalf("PIN tax amounts: cases=%+v err=%v", cases, err)
 	}
-	if len(cases[0].PINs) != 1 || cases[0].PINs[0].TaxValue != nil || len(cases[1].PINs) != 2 || cases[1].PINs[0].TaxValue == nil || *cases[1].PINs[0].TaxValue != 1000 || cases[1].PINs[1].TaxValue == nil || *cases[1].PINs[1].TaxValue != 2000 {
+	if len(cases[0].PINs) != 1 || cases[0].PINs[0].TaxValue != nil || len(cases[1].PINs) != 2 || cases[1].PINs[0].TaxValue == nil || *cases[1].PINs[0].TaxValue != 1000 || cases[1].PINs[1].ParcelKey != "02176011 60" || cases[1].PINs[1].TaxValue == nil || *cases[1].PINs[1].TaxValue != 2000 {
 		t.Fatalf("PIN tax amounts: %+v", cases)
 	}
 }

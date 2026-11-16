@@ -204,7 +204,7 @@ var (
 	ownerField     = regexp.MustCompile(`(?im)^\s*Current Property Owner:\s*(.+)`)
 	addressField   = regexp.MustCompile(`(?im)^\s*Address:\s*(.+)`)
 	dateField      = regexp.MustCompile(`(?i)^([^\r\n]*?)(?:\s+Case\s*#|\r?\n)`)
-	taxPINValue    = regexp.MustCompile(`(?m)^([^\r\n]*?)\(+([0-9]{2}[-.][0-9]{3}[-.][0-9]{3}[A-Za-z]?)\)`)
+	taxPINValue    = regexp.MustCompile(`(?m)^([^\r\n]*?)\(+([0-9]{2}[-.][0-9]{3}[-.][0-9]{3}[A-Za-z]?(?: [0-9]{2})?)\)`)
 	redeemedStatus = regexp.MustCompile(`(?im)^[ \t]*REDEEMED(?:[ \t]*/[ \t]*SATISFIED)?[ \t]*$`)
 	closedStatus   = regexp.MustCompile(`(?im)^[ \t]*BIDDING[ \t]+PHASE[ \t]+CLOSED[ \t]*$|\bBIDDING\s+Book\s+\d+,\s*PHASE[ \t]+CLOSED\b`)
 )
