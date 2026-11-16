@@ -17,6 +17,9 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# Python test cache
+__pycache__/
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
