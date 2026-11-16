@@ -1,0 +1,44 @@
+# Browser parcel application
+
+## Purpose and delivery order
+
+Build one browser application for parcel discovery and personal lead tracking. Use the delivery order in [v1.md](v1.md): start the UI when parcel and tax ingestion work, then add owner labels and the required zoning, road, and flood evidence as those sources become available. This plan records the selected UI design; it does not claim that the application or its API exists today.
+
+Keep the Go service, PostGIS migrations, and the UI in one repository. Put the UI in a separate folder. Build the Go service and UI as separate artifacts. Use SvelteKit for the application UI and MapLibre GL JS to draw the map. This is a browser application; do not add a desktop or mobile client. Establish the exact application and API folders at the start of the UI work.
+
+## Discovery view
+
+Show a map and a matching-parcel list side by side. Give both views the same county-wide search and filter state. The list includes all county matches in stable, paged order; it must not depend on the current map area. Show the county match count. Let the buyer switch the list between all matches and matches in the current map view, and label the two counts clearly.
+
+Draw matching parcels in the visible map area. Apply the same filters when the buyer moves the map; do not require a second Apply action. At county-wide zoom, show match counts or density instead of every parcel outline. Show individual colored parcel shapes when the buyer moves closer. Keep the selected parcel outline distinct from filter colors. Give every color and highlight a text label in the legend and list; color alone must not carry meaning.
+
+Support combinations of parcel and evidence filters as data becomes available. Examples include the provisional `likely_vacant` signal, the later validated vacancy tier, mailing outside North Carolina, entity-name matches, and corporation-name matches. Follow [parcel-owner-labels.md](parcel-owner-labels.md): an out-of-state mailing address does not prove owner residence; an LLC is an entity match, not a corporation match. Display unknown and stale states separately. Do not turn a missing result into a favorable match. Use stored parcel IDs to join list rows, map shapes, and details.
+
+Let the buyer use Tab to reach list controls and use keyboard controls or a click to select a result. A list selection highlights its parcel on the map and opens its detail panel. If that parcel is outside the map view, move the map to it. A map selection selects the same parcel in the list. Keep list and map selection synchronized when filters or map position change. Provide a usable text list and parcel details when the map cannot be used.
+
+## Parcel review and actions
+
+Open a parcel detail and action panel when the buyer selects a parcel. Show source facts, dates, and uncertainty beside the relevant facts. Show available tax evidence and, as required sources arrive, zoning and jurisdiction, road proximity, and flood evidence. Use the map groups, legends, and evidence rules in [parcel-qualification-layers.md](parcel-qualification-layers.md). Do not imply that mapped evidence certifies legal access, flood safety, or permitted use.
+
+In the panel, let the buyer save the parcel to a private list, add a scratchpad entry, set an explicit lead state, record dated personal activity, exclude a lead with a reason, and set a personal follow-up reminder. Show the reminder queue and controls to snooze, reschedule, and cancel. Follow the reminder and user-isolation contract in [v1.md](v1.md). The buyer writes handwritten notes and contacts owners outside the application. Do not generate owner messages, mailing files, or campaigns.
+
+For a saved parcel, show a **Request tax info** action. Each explicit action makes one bounded DevNet parcel-page request; saving, viewing, filtering, or moving the map does not make that request. Store each successful displayed observation for that buyer and parcel with its source URL and observation time. Show the observation as dated evidence, not a current payoff quote. Show denied, unclear, or failed results as errors, not zero balances. Apply the request and access limits in [tax-data-ingest.md](tax-data-ingest.md#saved-parcel-request-tax-info-action). Define retention for repeated explicit requests and removal of a saved parcel during implementation. Do not put private observations or personal lead data in shared map data.
+
+## Map and performance contract
+
+Use PostGIS for county-wide matching, counts, list pages, and full-resolution spatial calculations. The browser must not load every county parcel to calculate a filter. Request bounded geometry for the visible area from stored data; do not query county or FEMA services on each map move or parcel selection. Limit response size, cancel obsolete map requests, and simplify display shapes by zoom. Display simplification must not change filter results or evidence calculations.
+
+Start with bounded viewport geometry queries. Keep the map-data boundary suitable for a later vector-tile endpoint if measurements justify it. Vector tiles are small map-data files for one map area and zoom level. Do not add a separate tile service by default. If measurements show that tiles are needed, use only the small public parcel IDs and status fields needed for map styles; cache by source generation. Fetch private actions and parcel detail through authenticated API requests. Keep source generations and freshness consistent between displayed shapes and parcel facts.
+
+Before UI acceptance, agree target budgets and measure request count, response size, browser drawing time, and p50/p95 latency for initial map load, map move, filter change, list page, and parcel selection with a representative Union County dataset. Test county-wide and close zoom, repeated moves, and combined filters. Investigate slow queries and large map responses before adding tile infrastructure. Do not describe a framework choice alone as proof of map speed.
+
+## Acceptance checks
+
+- [ ] The UI and Go service build as separate artifacts in one repository. The UI runs in a browser and uses one application API and map stack.
+- [ ] One county-wide filter produces the same match IDs and county count for list and map. Moving the map shows matches in the new view without changing the filter. The all-matches and in-view list modes show their different counts.
+- [ ] At county-wide zoom, the map shows aggregate match information; at close zoom, it shows matching parcel shapes. The selected parcel remains distinct. Legend text and list labels explain each highlight.
+- [ ] Keyboard or click selection in the list selects and locates the parcel on the map. Map selection selects the same list item. The buyer can inspect a result without using map controls.
+- [ ] A selected parcel opens details, a private scratchpad, lead actions, and personal reminder controls. Source dates, unknown states, and stale evidence are visible. A source refresh does not change private buyer records.
+- [ ] Request tax info is available for a saved parcel only. Each explicit action makes one request. Save, view, filter, and map movement make no DevNet request. Stored observations are dated, private, and separate from county tax files; a failure is not a zero balance.
+- [ ] Full-resolution stored data determines filters and spatial evidence. Visible geometry is bounded and simplified for display. Repeated map work makes no live county or FEMA request.
+- [ ] Measure and record the agreed interactive budgets with representative county data. Add vector tiles only when measured results justify them. Verify user isolation, keyboard use, and the end-to-end map-to-follow-up workflow.

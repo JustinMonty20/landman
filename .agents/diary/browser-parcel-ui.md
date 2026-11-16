@@ -1,0 +1,1 @@
+- [Out-of-scope decision] The operator selected a focused UI plan PR. Leave the existing agent configuration edits and unrelated tax artifact-storage edits outside this PR so the review covers the browser workflow and its related plan updates.
