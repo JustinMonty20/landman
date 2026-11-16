@@ -56,3 +56,7 @@ The operator selected one scheduled `union.tax` runner job. Keep the four ordere
 ## Scope tangent
 
 A shallow file scan missed `internal/connector/shared/httpclient/`. The full Go test run confirmed that the package exists and passes. No HTTP limiter change belongs in the tax source work.
+
+## Out-of-scope decision
+
+The operator approved isolated local verification lanes instead of separate cloud VMs. Keep the ten-lane behavior checks and use disposable databases. Do not claim that local lanes ran in the cloud.

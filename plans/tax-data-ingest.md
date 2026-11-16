@@ -117,7 +117,7 @@ flowchart LR
 
 ### Boot recipe, for every live lane
 
-Each live lane runs on its own cloud VM at the PR head. This repo has no browser UI for tax ingest. Drive `go test`, `curl`, and `psql`. There is no `control-cli` skill in the repo. Appendix C records that gap. The commands in the lane are the drive.
+Each live lane runs in its own isolated local worktree at the PR head. Use a separate disposable database for each database lane. Do not use the operator database. This repo has no browser UI for tax ingest. Drive `go test`, `curl`, and `psql`. There is no `control-cli` skill in the repo. Appendix C records that gap. The commands in the lane are the drive. The operator approved local lanes instead of cloud VMs; do not report a local lane as a cloud run. In the verification blocks below, the old model label `grok-4.7-xhigh-fast` means the available `xai/grok-4.7` model with high thinking.
 
 - [ ] `git fetch origin <head-branch> && git checkout <head SHA>`.
 - [ ] For tax-1, run the `go test -race` command in the lane. For tax-2, tax-3, tax-4, tax-5, tax-7, and tax-6, start Postgres and PostGIS the way `make migrate-up` does, apply migrations through the head, and wait until `psql` accepts a query. Parser tests that do not open a database stay on `go test` without `DATABASE_URL`.
