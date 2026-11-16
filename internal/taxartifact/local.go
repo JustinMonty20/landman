@@ -28,7 +28,11 @@ func NewLocal(root string) (Store, error) {
 	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return nil, errors.New("local artifact directory must be private")
 	}
-	if err := os.MkdirAll(filepath.Join(root, ".staging"), 0700); err != nil {
+	staging := filepath.Join(root, ".staging")
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		return nil, err
+	}
+	if err := syncDirectoryChain(staging); err != nil {
 		return nil, err
 	}
 	return &localStore{root: root}, nil
@@ -56,17 +60,36 @@ func (s *localStore) Put(ctx context.Context, source string, body io.Reader) (Ar
 	if err := Verify(ctx, s, artifact); err != nil {
 		return Artifact{}, err
 	}
-	dir, err := os.Open(parent)
-	if err != nil {
-		return Artifact{}, err
-	}
-	defer dir.Close()
-	if err := dir.Sync(); err != nil {
+	if err := syncDirectoryChain(parent); err != nil {
 		return Artifact{}, err
 	}
 	artifact.mode = s.Mode()
 	artifact.verified = true
 	return artifact, nil
+}
+
+// syncDirectoryChain persists new directory entries, including entries left by a failed retry.
+func syncDirectoryChain(path string) error {
+	dir, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	for {
+		file, err := os.Open(dir)
+		if err != nil {
+			return fmt.Errorf("open tax artifact directory %q: %w", dir, err)
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if err := errors.Join(syncErr, closeErr); err != nil {
+			return fmt.Errorf("sync tax artifact directory %q: %w", dir, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 func (s *localStore) Get(ctx context.Context, artifact Artifact) (io.ReadCloser, error) {
