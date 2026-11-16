@@ -325,19 +325,22 @@ func foreclosurePINs(block string) ([]ForeclosurePIN, error) {
 			if moneyField.MatchString(line) {
 				break
 			}
-			match := taxPINValue.FindStringSubmatch(line)
-			if match == nil {
-				continue
+			for {
+				match := taxPINValue.FindStringSubmatchIndex(line)
+				if match == nil {
+					break
+				}
+				amountText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line[match[2]:match[3]]), "Tax Value:"))
+				amount, err := foreclosureMoney(amountText)
+				if err != nil {
+					return nil, fmt.Errorf("PIN tax value: %w", err)
+				}
+				if amount == nil && !strings.EqualFold(amountText, "TBD") {
+					return nil, fmt.Errorf("missing PIN tax value %q", amountText)
+				}
+				pinValues[strings.NewReplacer("-", "", ".", "").Replace(line[match[4]:match[5]])] = amount
+				line = line[match[1]:]
 			}
-			amountText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(match[1]), "Tax Value:"))
-			amount, err := foreclosureMoney(amountText)
-			if err != nil {
-				return nil, fmt.Errorf("PIN tax value: %w", err)
-			}
-			if amount == nil {
-				return nil, fmt.Errorf("missing PIN tax value %q", amountText)
-			}
-			pinValues[strings.NewReplacer("-", "", ".", "").Replace(match[2])] = amount
 		}
 	}
 	pins := make([]ForeclosurePIN, 0, len(tokens))
