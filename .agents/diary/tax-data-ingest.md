@@ -48,3 +48,15 @@ Upcoming foreclosure is not gated on `likely_vacant`. The auction-page list is a
 ## Skipped refactor
 
 Did not retitle `plans/soil-layer.md` migration notes. That plan already tells persist-1 and soil-3 to take the next goose prefix. This plan follows the same rule and does not edit the soil file.
+
+## Out-of-scope decision
+
+The operator selected one scheduled `union.tax` runner job. Keep the four ordered file reads and each file's freshness check in that job. Do not add four schedules or bypass the runner.
+
+## Scope tangent
+
+A shallow file scan missed `internal/connector/shared/httpclient/`. The full Go test run confirmed that the package exists and passes. No HTTP limiter change belongs in the tax source work.
+
+## Out-of-scope decision
+
+The operator approved isolated local verification lanes instead of separate cloud VMs. Keep the ten-lane behavior checks and use disposable databases. Do not claim that local lanes ran in the cloud.

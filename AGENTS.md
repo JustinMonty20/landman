@@ -19,6 +19,7 @@ You are a principal engineer.
 - Route every new Union County ingestion entry point through `jobs.Runner.Run` with a stable job ID. Keep fetch, storage, and source-specific order inside the job definition or an explicit ordered caller. Do not call source ingestion directly from an executable or scheduler.
 - Keep independent calendar schedules for Union source jobs. When parcel or soil data changes, update derived soil overlaps and screening from the stored soil set without forcing an extra county soil fetch. Do not replace source-specific schedules with one combined import schedule.
 - Verify parcel-import performance on an empty migrated database and after a failed first import. Include foreign-key checks and omitted-sale deletes in query measurements. Removing an explicit lookup does not prove that cached query plans remain efficient.
+- Before selecting project commands or files, inspect the repository root and its build manifest. Do not assume a Node.js project or `package.json` exists.
 
 ## Agent Diary
 
@@ -47,6 +48,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Use the type system to eliminate impossible states and exhaust cases (see Verification Hierarchy).
 - Prefer patterns and tools that shift verification earlier and provide guardrails for correctness.
 - Follow existing code patterns unless they are explicitly deprecated in the repository.
+- Use `gpt-6-sol` as the base model for this work. Assign independent code reviews to a different model with high thinking; do not let a reviewer inherit the base model. Check the available model IDs before delegation.
 - Before a verification swarm, check that each selected agent can read the repository and run the required commands. A reviewer profile with no Git or shell tools cannot verify a committed PR or run tests. Do not report a tooling failure as a project verification result.
 - For pi-subagents parallel workflows, put `worktree` on the parent call, not on each task. The pstack adapter does not resolve `pstack:<role>` in `workflow: "parallel"` `args.tasks`; use exact available `provider/model` IDs for those tasks, or use separate direct subagent calls with role models. Check `subagent({ action: "models" })` before selecting an ID. An invalid model does not mean the agent is unavailable.
 - Before recommending implementation or release sequencing, re-list `plans/` and read any newly added relevant plans; carry forward their explicit V1 commitments and release gates.

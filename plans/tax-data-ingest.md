@@ -117,7 +117,7 @@ flowchart LR
 
 ### Boot recipe, for every live lane
 
-Each live lane runs on its own cloud VM at the PR head. This repo has no browser UI for tax ingest. Drive `go test`, `curl`, and `psql`. There is no `control-cli` skill in the repo. Appendix C records that gap. The commands in the lane are the drive.
+Each live lane runs in its own isolated local worktree at the PR head. Use a separate disposable database for each database lane. Do not use the operator database. This repo has no browser UI for tax ingest. Drive `go test`, `curl`, and `psql`. There is no `control-cli` skill in the repo. Appendix C records that gap. The commands in the lane are the drive. The operator approved local lanes instead of cloud VMs; do not report a local lane as a cloud run. In the verification blocks below, the old model label `grok-4.7-xhigh-fast` means the available `xai/grok-4.7` model with high thinking.
 
 - [ ] `git fetch origin <head-branch> && git checkout <head SHA>`.
 - [ ] For tax-1, run the `go test -race` command in the lane. For tax-2, tax-3, tax-4, tax-5, tax-7, and tax-6, start Postgres and PostGIS the way `make migrate-up` does, apply migrations through the head, and wait until `psql` accepts a query. Parser tests that do not open a database stay on `go test` without `DATABASE_URL`.
@@ -501,7 +501,8 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 **Build.**
 
 - [ ] Add `taxRunConfig` in `main.go` with `Enabled bool`, `Period time.Duration`, and `PipelineURL string`. The zero value of `Enabled` is false. The zero value of `PipelineURL` is empty. When `Enabled` is false, `main` does what trunk does. It does not download a county file. Do not add `func init`. Do not read `PipelineURL` from the environment.
-- [ ] When `Enabled` is true and `Period` is zero, use 180 days. This is an automatically applied default, not a county-published or measured cadence and not evidence that the CSV updates every 180 days. It is a stand-in for checking about twice a year; the operator changes `Period` in this struct when observed file hashes establish a different cadence. Do not read the period from the environment. Do not add a cron entry, and do not sleep for the period. The process still exits when the run finishes.
+- [ ] When `Enabled` is true and `Period` is zero, use 180 days. This is an automatically applied default, not a county-published or measured cadence and not evidence that the CSV updates every 180 days. It is a stand-in for checking about twice a year; the operator changes `Period` in this struct when observed file hashes establish a different cadence. Do not read the period from the environment or sleep for the period. A manual run exits when it finishes.
+- [ ] Register one `union.tax` job with a separate calendar schedule and an explicit timezone. Read `UNION_TAX_CRON` when tax scheduling is enabled. Do not default to the parcel or soil schedule. Manual and scheduled tax runs use `jobs.Runner.Run` with the same stable job ID and ordered four-file function. Keep each file's `Latest` and 180-day freshness check inside that function. The scheduler does not fetch a file or call a tax parser directly. This scheduling decision replaces the prior no-cron instruction; it does not create four tax jobs.
 - [ ] When `Enabled` is true, call `Latest` for `tax_delinquent_balances`, then `tax_bills`, then `tax_foreclosure_cases`, then `tax_foreclosure_pipeline`. If the returned time is inside `Period`, skip that file. Otherwise call `Read` and the matching save. One file at a time. No worker pool. A canceled context stops the next file. An error from a file is returned. Do not log it and return nil. Print the saved count and the skip counts from each save, including the foreclosure join count, the pipeline saved count, and the unmatched count. The pipeline `Read` discovers its URL from the auction page unless that page has no anchor, in which case it uses `PipelineURL`.
 - [ ] Do not insert parcels. Do not call `IsLikelyVacantGISRecord` from the tax functions. Do not write `likely_vacant`. Do not import `internal/taxsource` from `main` if `main` only calls the union parsers and the taxstore functions.
 
@@ -514,6 +515,7 @@ Each live lane runs on its own cloud VM at the PR head. This repo has no browser
 - [ ] A test with `Enabled` false does not call `Read`. A test with `Enabled` true and an empty `Latest` uses local files and writes a delinquent row, a bill row, a foreclosure case, a join row, and a pipeline row for a parcel with `likely_vacant` false. A test with `fetched_at` inside 180 days does not call `Read`. A test with `fetched_at` older than `Period` does call `Read`. Run `go test -race . -count=1` from the module root for the main package tests, and `go test -race -tags postgres ./internal/taxstore/ -count=1`.
 - [ ] Run `go vet ./...` and `staticcheck ./...`. Both print no findings.
 - [ ] `rg -n "devnetwedge|func init\\(" --glob '*.go'` prints nothing.
+- [ ] Test that manual and scheduled tax runs use `jobs.Runner.Run` with ID `union.tax`. Test that `UNION_TAX_CRON` is required only when tax scheduling is enabled, has an explicit timezone, and is independent of the parcel and soil schedules. The test does not request a county URL.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `grok-4.7-xhigh-fast` at the PR head, per the boot recipe.
 
@@ -712,7 +714,7 @@ The operator first excluded DevNet and chose a fetch-and-parse program for four 
 
 On the open questions he said, "Don't worry about the schedule yet because we are still building that should just be configurable somewhere down the line. Probably should store likely-vacant somewhere. don't think we care about the personal property not sure where that is coming from and idk about renamed columns just yet."
 
-The schedule is config. tax-6 keeps the run off unless `Enabled` is set. The automatically applied 180-day default checks about twice a year; it is not a claim about the county's publication schedule. The process does not loop. A later runner can read `Period`. This plan does not add cron.
+The schedule is config. tax-6 keeps the run off unless `Enabled` is set. The automatically applied 180-day default checks about twice a year; it is not a claim about the county's publication schedule. The process does not loop. The earlier no-cron decision is superseded. One `union.tax` calendar schedule triggers `jobs.Runner.Run`; the job checks each file's `Latest` against the 180-day `Period`. The scheduler does not read `Period`.
 
 Likely-vacant is `parcels.likely_vacant`, written by persist-1, not by this program. Delinquent, billing, foreclosure, and pipeline rows are stored for every matched parcel. `tax_owed` sums `balance_due` where that flag is true and is the likely-seller flag. The operator confirmed dropping the write-time gate. A house on the foreclosure list can join its balance. The view still hides that balance from the seller flag until the parcel is likely vacant.
 
