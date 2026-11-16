@@ -84,3 +84,5 @@ The tax-2 verification provider returned HTTP 402 after one behavior lane and th
 [Out-of-scope decision] Later on 2026-11-16 the operator downloaded both foreclosure files. The sales source is a 10-page PDF (`b8406ff8dcdd927bbb681c21b5a97be8ca1c957ac665969e7d054614cd537a68`); the pipeline source is a 27-page PDF (`b0f8926a4d9d893dc022c0225649d9752f2c905ecb8b0ffcf4813d845e5b801b`). Both now reside in the private ignored input directory; no full county document belongs in Git.
 
 [Skipped refactor] Billing needs the same parcel-key normalization as delinquent. Reuse `normalizeDelinquentKey` in tax-4 rather than rename tax-3 code outside this unit; review the name when tax-5 and tax-7 share the rule.
+
+[Out-of-scope decision] Hold tax-7 outside tax-5 PR #62. The tax plan requires one PR per tax unit and the plan branch name is shared; open tax-7 after tax-5 lands.
