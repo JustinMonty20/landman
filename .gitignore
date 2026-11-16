@@ -27,6 +27,7 @@ go.work.sum
 # env file
 .env
 artifacts/verify/
+artifacts/tax-input/
 
 # git worktrees
 .worktrees
