@@ -60,6 +60,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Prefer modules with small public surfaces hiding substantial behaviour. Forwarding-only modules earn nothing — merge them.
 - Before adding an abstraction layer, imagine deleting it. If complexity vanishes rather than relocating, fold it away.
 - Require two implementations before introducing a swappable interface (e.g., production + test double). One implementation is indirection without flexibility.
+- Describe one configured storage interface with alternative backends as one store, not as multiple active stores. Select one backend at composition time.
 - Never expose private wiring publicly for testability. Tests that need internals belong inside the module.
 
 ## Verification Hierarchy
