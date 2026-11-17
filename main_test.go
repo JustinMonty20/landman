@@ -299,18 +299,53 @@ func TestDerivedRefreshOverlapHonorsCancellation(t *testing.T) {
 	}
 }
 
-func TestDisabledTaxStopsBeforeDependencies(t *testing.T) {
-	previousConfig, previousArgs := taxConfig, os.Args
-	defer func() { taxConfig, os.Args = previousConfig, previousArgs }()
-	missing := t.TempDir() + "/absent.csv"
-	taxConfig = taxRunConfig{Config: taxjob.Config{DelinquentPath: missing, BillingPath: missing, ForeclosurePath: missing, PipelinePath: missing, ArtifactDir: missing}}
+func setManualTaxEnv(t *testing.T, config taxjob.Config) {
+	t.Helper()
+	for _, entry := range []struct{ name, value string }{
+		{"UNION_TAX_ARTIFACT_DIR", config.ArtifactDir},
+		{"UNION_TAX_DELINQUENT_PATH", config.DelinquentPath},
+		{"UNION_TAX_BILLING_PATH", config.BillingPath},
+		{"UNION_TAX_FORECLOSURE_PATH", config.ForeclosurePath},
+		{"UNION_TAX_PIPELINE_PATH", config.PipelinePath},
+		{"UNION_TAX_BILLING_SOURCE_URL", config.BillingSourceURL},
+		{"UNION_TAX_PIPELINE_SOURCE_URL", config.PipelineSourceURL},
+	} {
+		t.Setenv(entry.name, entry.value)
+	}
+}
+
+func TestManualTaxRequiresAllInputsBeforeDatabase(t *testing.T) {
+	previousArgs := os.Args
+	defer func() { os.Args = previousArgs }()
 	os.Args = []string{"landman", "run", taxJobID}
 	t.Setenv("DATABASE_URL", "invalid://database")
-	if err := run(context.Background()); err == nil || err.Error() != "union.tax is disabled" {
-		t.Fatalf("disabled job error=%v", err)
+	missing := t.TempDir() + "/absent.csv"
+	config := taxjob.Config{
+		ArtifactDir: missing, DelinquentPath: missing, BillingPath: missing,
+		ForeclosurePath: missing, PipelinePath: missing,
+		BillingSourceURL: "https://example.org/billing", PipelineSourceURL: "https://example.org/pipeline",
+	}
+	setManualTaxEnv(t, config)
+	for _, name := range []string{
+		"UNION_TAX_ARTIFACT_DIR", "UNION_TAX_DELINQUENT_PATH", "UNION_TAX_BILLING_PATH",
+		"UNION_TAX_FORECLOSURE_PATH", "UNION_TAX_PIPELINE_PATH",
+		"UNION_TAX_BILLING_SOURCE_URL", "UNION_TAX_PIPELINE_SOURCE_URL",
+	} {
+		t.Setenv(name, "")
+		if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+		setManualTaxEnv(t, config)
+	}
+	got, err := manualTaxConfig(os.Getenv)
+	if err != nil || got != config {
+		t.Fatalf("configured tax job: %+v %v", got, err)
+	}
+	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "database") {
+		t.Fatalf("configured tax job did not reach database: %v", err)
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
-		t.Fatalf("disabled tax accessed local file path: %v", err)
+		t.Fatalf("manual tax accessed missing file: %v", err)
 	}
 }
 

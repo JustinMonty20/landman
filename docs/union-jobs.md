@@ -2,7 +2,7 @@
 
 ## Manual commands
 
-Build with `go build -o landman .`. Set `DATABASE_URL` to a PostGIS database migrated through `000016_job_attempt_kind.sql`.
+Build with `go build -o landman .`. Set `DATABASE_URL` to a PostGIS database migrated through `000018_tax_file_imports.sql`.
 
 These commands contact the live Union GIS or USDA services. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
@@ -63,6 +63,25 @@ ORDER BY finished_at DESC LIMIT 1;
 
 A quarantined import or repair records `success_with_quarantine` and exits unsuccessfully as required work. It is not clean freshness evidence. See [controlled ingestion verification](ingestion-gaps-verification.md) for fixture coverage and unverified live gates.
 
+## Import the four manual tax files
+
+Download each complete county file outside the application. Do not change an input file during a run. Set these seven variables in the shell that starts the job. Choose a persistent private directory for retained source files. Confirm that its filesystem supports directory sync. Set private permissions and a retention duration before the first run. Keep the input files and artifact directory outside Git.
+
+```sh
+export UNION_TAX_ARTIFACT_DIR="$TAX_ARTIFACT_DIR"
+export UNION_TAX_DELINQUENT_PATH="$TAX_INPUT_DIR/delinquent.csv"
+export UNION_TAX_BILLING_PATH="$TAX_INPUT_DIR/billing.zip"
+export UNION_TAX_FORECLOSURE_PATH="$TAX_INPUT_DIR/foreclosure-sales.pdf"
+export UNION_TAX_PIPELINE_PATH="$TAX_INPUT_DIR/foreclosure-pipeline.pdf"
+export UNION_TAX_BILLING_SOURCE_URL='https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000'
+export UNION_TAX_PIPELINE_SOURCE_URL='https://www.unioncountync.gov/home/showdocument?id=4784'
+./landman run union.tax
+```
+
+Set `TAX_INPUT_DIR` and `TAX_ARTIFACT_DIR` to directories you selected before you run these commands. The two URLs declare county provenance; they do not cause an HTTP download. Check them against the files you supply. The job checks all four files before its first typed write. It retains and verifies their exact bytes, then imports delinquent, billing, foreclosure sales, and foreclosure pipeline in that order. A changed file replaces its prior active version only after a complete successful publication. A failed file stops later files. A repeated identical file can link parcels added since the prior run. Check `job_attempts` for `union.tax` and the tax import records for source and storage evidence. Do not set a tax schedule in this local mode.
+
+This command selects local artifact storage. S3 (cloud object storage) support in the artifact package is not an S3 input path or a bucket trigger. A later cloud change must define the upload event, four-file identity and order, retries, access controls, and explicit S3 selection. Do not use `s3://` paths with this command.
+
 ## Start the scheduler
 
 Stop old executable versions before enabling the new scheduler. Use the same migrated database for all processes that must share exclusion and attempt history.
@@ -110,4 +129,4 @@ Offset paging and upserts do not prove a complete remote snapshot. Absent parcel
 
 Define a stable ID and a `jobs.Definition`. Invoke it through `jobs.Runner.Run`, directly or through scheduler composition. Keep source fetching, ordering, and transaction rules inside the definition or its explicit ordered caller. Do not call Union ingestion directly from an executable or scheduler callback.
 
-Future Union tax work remains one ordered tax job with per-file freshness checks. Calendar scheduling does not replace its 180-day freshness rule. Read [the source-job plan](../plans/source-jobs-runner-scheduler.md) and [the tax plan](../plans/tax-data-ingest.md) before wiring that source.
+The manual `union.tax` job uses verified file hashes and parcel links to decide whether a file needs a new publication. It does not use a 180-day timer. Read [the source-job plan](../plans/source-jobs-runner-scheduler.md) and [the tax plan](../plans/tax-data-ingest.md) before you add another input path.
