@@ -728,12 +728,13 @@ func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 	// File identity includes URL, digest and retrieval time; an old row from an inactive import is not current evidence.
 	const active = `JOIN tax_file_imports i ON i.active AND i.county_id=t.county_id AND i.source_name=t.source_name AND i.source_url=t.source_url AND i.file_sha256=t.file_sha256 AND i.fetched_at=t.fetched_at`
 	var bills, balances, pipeline, cases []byte
+	var reportedTotal *string
 	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('year',t.tax_year,'total_taxes',t.total_taxes::text,'source',t.source_name,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex')) ORDER BY t.tax_year),'[]'::jsonb) FROM tax_bills t `+active+` WHERE t.parcel_id=$1`, id).Scan(&bills)
 	if e != nil {
 		unavailable(w)
 		return
 	}
-	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('year',t.tax_year,'balance_due',t.balance_due::text,'source',t.source_name,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex')) ORDER BY t.tax_year),'[]'::jsonb) FROM tax_delinquent_balances t `+active+` WHERE t.parcel_id=$1`, id).Scan(&balances)
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('year',t.tax_year,'balance_due',t.balance_due::text,'source',t.source_name,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex')) ORDER BY t.tax_year),'[]'::jsonb),sum(t.balance_due)::text FROM tax_delinquent_balances t `+active+` WHERE t.parcel_id=$1`, id).Scan(&balances, &reportedTotal)
 	if e != nil {
 		unavailable(w)
 		return
@@ -757,5 +758,5 @@ func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
-	respond(w, map[string]any{"bills": json.RawMessage(bills), "delinquent_balances": json.RawMessage(balances), "pipeline": json.RawMessage(pipeline), "foreclosure_cases": json.RawMessage(cases), "source_stamp": s, "note": "Missing evidence is not a verified zero or a payoff quote"})
+	respond(w, map[string]any{"bills": json.RawMessage(bills), "delinquent_balances": json.RawMessage(balances), "reported_delinquent_total": reportedTotal, "pipeline": json.RawMessage(pipeline), "foreclosure_cases": json.RawMessage(cases), "source_stamp": s, "note": "Missing evidence is not a verified zero or a payoff quote"})
 }
