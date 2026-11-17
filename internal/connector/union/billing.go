@@ -20,6 +20,8 @@ import (
 )
 
 const (
+	// BillingURL identifies the county reference for operator-supplied billing files; it is not a download record.
+	BillingURL    = "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000"
 	billingSource = "union_billing"
 	billingLimit  = 256 << 20
 )

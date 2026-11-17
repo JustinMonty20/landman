@@ -25,6 +25,9 @@ import (
 	"github.com/JustinMonty20/landman/internal/taxsource"
 )
 
+// PipelineURL identifies the county reference for operator-supplied pipeline files; it is not a download record.
+const PipelineURL = "https://www.unioncountync.gov/home/showdocument?id=4784"
+
 const pipelineSource = "union_foreclosure_pipeline"
 const pipelineLimit = 64 << 20
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/jobs"
 )
@@ -299,18 +300,91 @@ func TestDerivedRefreshOverlapHonorsCancellation(t *testing.T) {
 	}
 }
 
-func TestDisabledTaxStopsBeforeDependencies(t *testing.T) {
-	previousConfig, previousArgs := taxConfig, os.Args
-	defer func() { taxConfig, os.Args = previousConfig, previousArgs }()
-	missing := t.TempDir() + "/absent.csv"
-	taxConfig = taxRunConfig{Config: taxjob.Config{DelinquentPath: missing, BillingPath: missing, ForeclosurePath: missing, PipelinePath: missing, ArtifactDir: missing}}
+func setManualTaxEnv(t *testing.T, config taxjob.Config) {
+	t.Helper()
+	for _, entry := range []struct{ name, value string }{
+		{"UNION_TAX_ARTIFACT_DIR", config.ArtifactDir},
+		{"UNION_TAX_DELINQUENT_PATH", config.DelinquentPath},
+		{"UNION_TAX_BILLING_PATH", config.BillingPath},
+		{"UNION_TAX_FORECLOSURE_PATH", config.ForeclosurePath},
+		{"UNION_TAX_PIPELINE_PATH", config.PipelinePath},
+	} {
+		t.Setenv(entry.name, entry.value)
+	}
+}
+
+func TestManualTaxRequiresAllInputsBeforeDatabase(t *testing.T) {
+	previousArgs := os.Args
+	defer func() { os.Args = previousArgs }()
 	os.Args = []string{"landman", "run", taxJobID}
 	t.Setenv("DATABASE_URL", "invalid://database")
-	if err := run(context.Background()); err == nil || err.Error() != "union.tax is disabled" {
-		t.Fatalf("disabled job error=%v", err)
+	missing := t.TempDir() + "/absent.csv"
+	config := taxjob.Config{
+		ArtifactDir: missing, DelinquentPath: missing, BillingPath: missing,
+		ForeclosurePath: missing, PipelinePath: missing,
+		BillingSourceURL: union.BillingURL, PipelineSourceURL: union.PipelineURL,
+	}
+	setManualTaxEnv(t, config)
+	for _, name := range []string{
+		"UNION_TAX_ARTIFACT_DIR", "UNION_TAX_DELINQUENT_PATH", "UNION_TAX_BILLING_PATH",
+		"UNION_TAX_FORECLOSURE_PATH", "UNION_TAX_PIPELINE_PATH",
+	} {
+		t.Setenv(name, "")
+		for _, args := range [][]string{{"landman", "run", taxJobID}, {"landman"}} {
+			os.Args = args
+			if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("missing %s for %v: %v", name, args, err)
+			}
+		}
+		setManualTaxEnv(t, config)
+	}
+	got, err := manualTaxConfig(os.Getenv)
+	if err != nil || got != config {
+		t.Fatalf("configured tax job: %+v %v", got, err)
+	}
+	for _, args := range [][]string{{"landman", "run", taxJobID}, {"landman"}} {
+		os.Args = args
+		if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "database") {
+			t.Fatalf("configured job %v did not reach database: %v", args, err)
+		}
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
-		t.Fatalf("disabled tax accessed local file path: %v", err)
+		t.Fatalf("manual tax accessed missing file: %v", err)
+	}
+}
+
+func TestDefaultManualRunsAllJobsOnce(t *testing.T) {
+	runner := &executingRunner{}
+	definitions := []jobs.Definition{
+		{ID: parcelJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: soilJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: taxJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+	}
+	refresh := func(ctx context.Context) error {
+		return runRequired(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }})
+	}
+	if err := runManual(context.Background(), "all", runner, unionExecutor{}, definitions, refresh); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(runner.ids, ","), parcelJobID+","+soilJobID+","+screeningJobID+","+taxJobID; got != want {
+		t.Fatalf("default job order %q, want %q", got, want)
+	}
+}
+
+func TestDefaultTaxFailureKeepsCompletedScreening(t *testing.T) {
+	runner := &executingRunner{outcomes: map[string]jobs.Outcome{taxJobID: jobs.OutcomeFailed}}
+	definitions := []jobs.Definition{
+		{ID: parcelJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: soilJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: taxJobID},
+	}
+	refreshes := 0
+	refresh := func(context.Context) error { refreshes++; return nil }
+	if err := runManual(context.Background(), "all", runner, unionExecutor{}, definitions, refresh); err == nil || !strings.Contains(err.Error(), taxJobID) {
+		t.Fatalf("tax failure: %v", err)
+	}
+	if got, want := strings.Join(runner.ids, ","), parcelJobID+","+soilJobID+","+taxJobID; got != want || refreshes != 1 {
+		t.Fatalf("source order=%q screening runs=%d", got, refreshes)
 	}
 }
 
