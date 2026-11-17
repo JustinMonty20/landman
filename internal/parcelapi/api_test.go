@@ -11,7 +11,7 @@ import (
 
 func TestFilters(t *testing.T) {
 	for _, tc := range []string{
-		"unknown=x", "likely_vacant=true&likely_vacant=false", "min_acres=NaN", "max_acres=+Inf", "min_acres=-1", "min_acres=3&max_acres=2", "bbox=1,2,1,3", "bbox=181,0,182,1", "bbox=0,0,1", "bbox=0,0,1,NaN", "page_size=101", "page_size=0", "likely_vacant=1", "cursor=" + strings.Repeat("x", 2049),
+		"unknown=x", "zoom=14", "likely_vacant=true&likely_vacant=false", "min_acres=NaN", "max_acres=+Inf", "min_acres=-1", "min_acres=3&max_acres=2", "bbox=1,2,1,3", "bbox=181,0,182,1", "bbox=-180,-90,180,90", "bbox=0,85.051129,1,86", "bbox=0,-86,1,-85.051129", "bbox=0,0,1", "bbox=0,0,1,NaN", "page_size=101", "page_size=0", "likely_vacant=1", "cursor=" + strings.Repeat("x", 2049),
 	} {
 		q, e := url.ParseQuery(tc)
 		if e != nil {

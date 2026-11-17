@@ -403,7 +403,7 @@ func TestProtectedParcelRoutes(t *testing.T) {
 	if w := f.request("GET", "/api/v1/parcels", &http.Cookie{Name: session.Name, Value: "bad"}); w.Code != http.StatusUnauthorized {
 		t.Fatal("malformed session accepted")
 	}
-	if _, err := f.pool.Exec(context.Background(), "UPDATE auth_sessions SET expires_at=now()-interval '1 second' WHERE token_hash=$1", digest(session.Value)); err != nil {
+	if _, err := f.pool.Exec(context.Background(), "UPDATE auth_sessions SET created_at=now()-interval '8 days',expires_at=now()-interval '1 second' WHERE token_hash=$1", digest(session.Value)); err != nil {
 		t.Fatal(err)
 	}
 	if f.request("GET", "/api/v1/parcels", session).Code != 401 {

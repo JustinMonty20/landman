@@ -90,7 +90,7 @@ func parseBounds(raw string) (*Bounds, error) {
 	for i, s := range a {
 		min, max := -180.0, 180.0
 		if i%2 == 1 {
-			min, max = -90, 90
+			min, max = -85.05112878, 85.05112878
 		}
 		v, e := finite(s, min, max)
 		if e != nil {
@@ -104,8 +104,16 @@ func parseBounds(raw string) (*Bounds, error) {
 	return &b, nil
 }
 func parseFilters(q url.Values) (Filters, error) {
+	return parseFilterValues(q, false)
+}
+
+func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	f := Filters{PageSize: 50}
-	if err := parse(q, "min_acres", "max_acres", "likely_vacant", "delinquent", "bbox", "page_size", "cursor"); err != nil {
+	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "bbox", "page_size", "cursor"}
+	if mapQuery {
+		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "bbox", "zoom"}
+	}
+	if err := parse(q, allowed...); err != nil {
 		return f, err
 	}
 	for _, item := range []struct {
@@ -285,7 +293,14 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts)))
+	var soilHeads string
+	err = tx.QueryRow(ctx, `SELECT concat_ws(':',h.run_id::text,rs.failed_at::text,s.set_id::text,r.fresh_until::text) FROM soil_screening_heads h LEFT JOIN soil_polygon_set_heads s ON s.county_id=h.county_id AND s.source_name=h.source_name LEFT JOIN soil_screening_runs r ON r.id=h.run_id LEFT JOIN soil_screening_refresh_status rs ON rs.county_id=h.county_id AND rs.source_name=h.source_name WHERE h.county_id=$1 AND h.source_name=$2`, countyID, parcelSource).Scan(&soilHeads)
+	if errors.Is(err, pgx.ErrNoRows) {
+		soilHeads = ""
+	} else if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads)))
 	return hex.EncodeToString(h[:]), nil
 }
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -421,7 +436,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		bad(w, errors.New("zoom must be 0..22"))
 		return
 	}
-	f, e := parseFilters(q)
+	f, e := parseFilterValues(q, true)
 	if e != nil {
 		bad(w, e)
 		return
@@ -668,6 +683,7 @@ func (h *Handler) soil(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
+	a.Freshness.RefreshError = nil
 	respond(w, a)
 }
 func (h *Handler) sources(w http.ResponseWriter, r *http.Request) {
@@ -703,11 +719,25 @@ func (h *Handler) sources(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
+	var soilPublished []byte
+	e = tx.QueryRow(r.Context(), `SELECT jsonb_build_object('soil_set_id',s.set_id,'run_id',h.run_id,'fresh_until',r.fresh_until,'refresh_failed_at',COALESCE(h.refresh_failed_at,rs.failed_at)) FROM soil_screening_heads h LEFT JOIN soil_polygon_set_heads s ON s.county_id=h.county_id AND s.source_name=h.source_name LEFT JOIN soil_screening_runs r ON r.id=h.run_id LEFT JOIN soil_screening_refresh_status rs ON rs.county_id=h.county_id AND rs.source_name=h.source_name WHERE h.county_id=$1 AND h.source_name=$2`, countyID, parcelSource).Scan(&soilPublished)
+	if errors.Is(e, pgx.ErrNoRows) {
+		soilPublished = []byte("null")
+	} else if e != nil {
+		unavailable(w)
+		return
+	}
+	var successes []byte
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('job_id',job_id,'outcome',outcome,'started_at',started_at,'finished_at',finished_at) ORDER BY job_id),'[]'::jsonb) FROM (SELECT DISTINCT ON (job_id) job_id,outcome,started_at,finished_at FROM job_attempts WHERE job_id IN ('union.gis.parcels','union.gis.soil','union.soil.screening','union.tax') AND outcome='success' ORDER BY job_id,started_at DESC) last_success`).Scan(&successes)
+	if e != nil {
+		unavailable(w)
+		return
+	}
 	if e = tx.Commit(r.Context()); e != nil {
 		unavailable(w)
 		return
 	}
-	respond(w, map[string]any{"county": countyID, "parcel_source": parcelSource, "parcel_updated_at": parcelUpdated, "active_tax_files": json.RawMessage(data), "import_status": json.RawMessage(statuses), "source_stamp": s})
+	respond(w, map[string]any{"county": countyID, "parcel_source": parcelSource, "parcel_updated_at": parcelUpdated, "active_tax_files": json.RawMessage(data), "import_status": json.RawMessage(statuses), "last_clean_success": json.RawMessage(successes), "published_soil": json.RawMessage(soilPublished), "source_stamp": s})
 }
 func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 	tx, e := h.tx(r.Context())
@@ -729,22 +759,23 @@ func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 	const active = `JOIN tax_file_imports i ON i.active AND i.county_id=t.county_id AND i.source_name=t.source_name AND i.source_url=t.source_url AND i.file_sha256=t.file_sha256 AND i.fetched_at=t.fetched_at`
 	var bills, balances, pipeline, cases []byte
 	var reportedTotal *string
-	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('year',t.tax_year,'total_taxes',t.total_taxes::text,'source',t.source_name,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex')) ORDER BY t.tax_year),'[]'::jsonb) FROM tax_bills t `+active+` WHERE t.parcel_id=$1`, id).Scan(&bills)
+	var delinquentYears int64
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('year',t.tax_year,'total_taxes',t.total_taxes::text,'source',t.source_name,'source_url',t.source_url,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex')) ORDER BY t.tax_year),'[]'::jsonb) FROM tax_bills t `+active+` WHERE t.parcel_id=$1`, id).Scan(&bills)
 	if e != nil {
 		unavailable(w)
 		return
 	}
-	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('year',t.tax_year,'balance_due',t.balance_due::text,'source',t.source_name,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex')) ORDER BY t.tax_year),'[]'::jsonb),sum(t.balance_due)::text FROM tax_delinquent_balances t `+active+` WHERE t.parcel_id=$1`, id).Scan(&balances, &reportedTotal)
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('year',t.tax_year,'balance_due',t.balance_due::text,'source',t.source_name,'source_url',t.source_url,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex')) ORDER BY t.tax_year),'[]'::jsonb),sum(t.balance_due)::text,count(DISTINCT t.tax_year) FROM tax_delinquent_balances t `+active+` WHERE t.parcel_id=$1`, id).Scan(&balances, &reportedTotal, &delinquentYears)
 	if e != nil {
 		unavailable(w)
 		return
 	}
-	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('case_number',t.case_number,'status',t.status,'sale_on',t.sale_on,'tax_value',t.tax_value::text,'source',t.source_name,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex'))),'[]'::jsonb) FROM tax_foreclosure_pipeline t `+active+` WHERE t.parcel_id=$1`, id).Scan(&pipeline)
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('case_number',t.case_number,'status',t.status,'sale_on',t.sale_on,'tax_value',t.tax_value::text,'redeemed',t.redeemed,'source',t.source_name,'source_url',t.source_url,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex'))),'[]'::jsonb) FROM tax_foreclosure_pipeline t `+active+` WHERE t.parcel_id=$1`, id).Scan(&pipeline)
 	if e != nil {
 		unavailable(w)
 		return
 	}
-	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('case_number',t.case_number,'status',t.status,'sale_on',t.sale_on,'opening_bid',t.opening_bid::text,'current_bid',t.current_bid::text,'upset_bid',t.upset_bid::text,'source',t.source_name,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex'))),'[]'::jsonb) FROM tax_foreclosure_cases t JOIN tax_foreclosure_parcels fp ON fp.case_id=t.id `+active+` WHERE fp.parcel_id=$1`, id).Scan(&cases)
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('case_number',t.case_number,'status',t.status,'sale_on',t.sale_on,'opening_bid',t.opening_bid::text,'current_bid',t.current_bid::text,'upset_bid',t.upset_bid::text,'redeemed',t.redeemed,'bidding_closed',t.bidding_closed,'source',t.source_name,'source_url',t.source_url,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex'))),'[]'::jsonb) FROM tax_foreclosure_cases t JOIN tax_foreclosure_parcels fp ON fp.case_id=t.id `+active+` WHERE fp.parcel_id=$1`, id).Scan(&cases)
 	if e != nil {
 		unavailable(w)
 		return
@@ -758,5 +789,5 @@ func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
-	respond(w, map[string]any{"bills": json.RawMessage(bills), "delinquent_balances": json.RawMessage(balances), "reported_delinquent_total": reportedTotal, "pipeline": json.RawMessage(pipeline), "foreclosure_cases": json.RawMessage(cases), "source_stamp": s, "note": "Missing evidence is not a verified zero or a payoff quote"})
+	respond(w, map[string]any{"bills": json.RawMessage(bills), "delinquent_balances": json.RawMessage(balances), "reported_delinquent_total": reportedTotal, "delinquent_year_count": delinquentYears, "pipeline": json.RawMessage(pipeline), "foreclosure_cases": json.RawMessage(cases), "source_stamp": s, "note": "Missing evidence is not a verified zero or a payoff quote"})
 }
