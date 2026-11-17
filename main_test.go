@@ -73,7 +73,7 @@ func TestCommands(t *testing.T) {
 	}{
 		{nil, "all"}, {[]string{"schedule"}, "schedule"},
 		{[]string{"run", parcelJobID}, parcelJobID}, {[]string{"run", soilJobID}, soilJobID},
-		{[]string{"run", screeningJobID}, screeningJobID},
+		{[]string{"run", screeningJobID}, screeningJobID}, {[]string{"run", taxJobID}, taxJobID},
 	} {
 		mode, err := command(tc.args)
 		if err != nil || mode != tc.mode {

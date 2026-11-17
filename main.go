@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/soil"
@@ -39,6 +40,7 @@ const (
 	parcelJobID    = "union.gis.parcels"
 	soilJobID      = "union.gis.soil"
 	screeningJobID = "union.soil.screening"
+	taxJobID       = "union.tax"
 	jobTimeout     = 10 * time.Minute
 )
 
@@ -67,7 +69,7 @@ func command(args []string) (string, error) {
 	}
 	if len(args) == 2 && args[0] == "run" {
 		switch args[1] {
-		case parcelJobID, soilJobID, screeningJobID:
+		case parcelJobID, soilJobID, screeningJobID, taxJobID:
 			return args[1], nil
 		}
 	}
@@ -77,7 +79,7 @@ func command(args []string) (string, error) {
 		}
 		return "reprocess", nil
 	}
-	return "", fmt.Errorf("usage: landman [schedule | run <%s|%s|%s> | reprocess %s --limit N]", parcelJobID, soilJobID, screeningJobID, parcelJobID)
+	return "", fmt.Errorf("usage: landman [schedule | run <%s|%s|%s|%s> | reprocess %s --limit N]", parcelJobID, soilJobID, screeningJobID, taxJobID, parcelJobID)
 }
 
 func schedules(getenv func(string) string) (map[string]string, error) {
@@ -98,6 +100,14 @@ func schedules(getenv func(string) string) (map[string]string, error) {
 	}
 	return values, nil
 }
+
+// Tax files are supplied by the operator. Select private paths before enabling the manual job.
+type taxRunConfig struct {
+	Enabled bool
+	taxjob.Config
+}
+
+var taxConfig taxRunConfig
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -163,6 +173,14 @@ func run(ctx context.Context) error {
 			return jobs.Result{Processed: len(polygons)}, err
 		}},
 	}
+	if taxConfig.Enabled && mode != "schedule" {
+		definitions = append(definitions, jobs.Definition{ID: taxJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			return taxjob.Run(ctx, pool, taxConfig.Config)
+		}})
+	}
+	if mode == taxJobID && !taxConfig.Enabled {
+		return errors.New("union.tax is disabled")
+	}
 	refresh := func(ctx context.Context) error {
 		return withRefreshLock(ctx, dsn, func(ctx context.Context) error {
 			return runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
@@ -190,6 +208,9 @@ func run(ctx context.Context) error {
 		<-ctx.Done()
 		<-scheduler.Stop().Done()
 		return nil
+	}
+	if mode == taxJobID {
+		return runRequired(ctx, runner, definitions[len(definitions)-1])
 	}
 	return runManual(ctx, mode, runner, executor, definitions, refresh)
 }
