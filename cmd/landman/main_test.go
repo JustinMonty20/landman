@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +14,11 @@ import (
 )
 
 func repositoryPath(parts ...string) string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		panic("find repository path")
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		panic(err)
 	}
-	return filepath.Join(append([]string{filepath.Dir(file), "..", ".."}, parts...)...)
+	return filepath.Join(append([]string{workingDirectory, "..", ".."}, parts...)...)
 }
 
 func TestMain(m *testing.M) {

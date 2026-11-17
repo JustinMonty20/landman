@@ -2,7 +2,7 @@
 
 ## Manual commands
 
-Build with `go build -o landman .`. Set `DATABASE_URL` to a PostGIS database migrated through `000016_job_attempt_kind.sql`.
+Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000016_job_attempt_kind.sql`.
 
 These commands contact the live Union GIS or USDA services. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
