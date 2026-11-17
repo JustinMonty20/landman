@@ -122,6 +122,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if mode == taxJobID && !taxConfig.Enabled {
+		return errors.New("union.tax is disabled")
+	}
 	var calendar map[string]string
 	if mode == "schedule" {
 		calendar, err = schedules(os.Getenv)
@@ -177,9 +180,6 @@ func run(ctx context.Context) error {
 		definitions = append(definitions, jobs.Definition{ID: taxJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 			return taxjob.Run(ctx, pool, taxConfig.Config)
 		}})
-	}
-	if mode == taxJobID && !taxConfig.Enabled {
-		return errors.New("union.tax is disabled")
 	}
 	refresh := func(ctx context.Context) error {
 		return withRefreshLock(ctx, dsn, func(ctx context.Context) error {
