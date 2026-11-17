@@ -74,7 +74,7 @@ func TestParcelRealData(t *testing.T) {
 	}
 	t.Logf("database=%s postgres=%s postgis=%s parcels=%d assessments=%d active_files=%d cpus=%d", db, postgresVersion, postgisVersion, parcels, assessments, imports, runtime.NumCPU())
 	var parcelID, taxID, soilID, lookup string
-	if err = pool.QueryRow(context.Background(), `SELECT id::text,coalesce(parcel_number,'') FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND length(parcel_number)>=2 ORDER BY id LIMIT 1`).Scan(&parcelID, &lookup); err != nil {
+	if err = pool.QueryRow(context.Background(), `SELECT id::text,coalesce(parcel_number,'') FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND length(parcel_number)>=2 AND mapped_acres BETWEEN 1 AND 3 ORDER BY id LIMIT 1`).Scan(&parcelID, &lookup); err != nil {
 		t.Fatal(err)
 	}
 	if err = pool.QueryRow(context.Background(), `SELECT p.id::text FROM parcels p JOIN tax_delinquent_balances d ON d.parcel_id=p.id JOIN tax_file_imports i ON i.active AND i.county_id=d.county_id AND i.source_name=d.source_name AND i.source_url=d.source_url AND i.file_sha256=d.file_sha256 AND i.fetched_at=d.fetched_at WHERE p.county_id='union' AND p.source_name='union_county_gis' AND d.balance_due>0 LIMIT 1`).Scan(&taxID); err != nil {
@@ -89,6 +89,10 @@ func TestParcelRealData(t *testing.T) {
 	}
 	closeBox := fmt.Sprintf("%.6f,%.6f,%.6f,%.6f", west-.002, south-.002, east+.002, north+.002)
 	broadBox := fmt.Sprintf("%.6f,%.6f,%.6f,%.6f", west-.04, south-.04, east+.04, north+.04)
+	var countyBox string
+	if err = pool.QueryRow(context.Background(), `SELECT concat(ST_XMin(b)-0.001,',',ST_YMin(b)-0.001,',',ST_XMax(b)+0.001,',',ST_YMax(b)+0.001) FROM (SELECT ST_Transform(ST_SetSRID(ST_Extent(shape)::geometry,3857),4326) AS b FROM parcels WHERE county_id='union' AND source_name='union_county_gis') extent`).Scan(&countyBox); err != nil {
+		t.Fatal(err)
+	}
 	origin := httptest.NewServer(s)
 	defer origin.Close()
 	client := origin.Client()
@@ -101,12 +105,12 @@ func TestParcelRealData(t *testing.T) {
 		r.AddCookie(&http.Cookie{Name: "landman_session", Value: token})
 		start := time.Now()
 		res, e := client.Do(r)
-		elapsed := time.Since(start)
 		if e != nil {
-			return elapsed, 0, 0, nil
+			return time.Since(start), 0, 0, nil
 		}
 		defer res.Body.Close()
 		data, e := io.ReadAll(io.LimitReader(res.Body, 2<<20))
+		elapsed := time.Since(start)
 		if e != nil {
 			return elapsed, 0, len(data), nil
 		}
@@ -127,7 +131,7 @@ func TestParcelRealData(t *testing.T) {
 	if err = json.Unmarshal(first, &page); err != nil || page.NextCursor == "" {
 		t.Fatal("no later page")
 	}
-	routes = append(routes, route{"list-later", routes[3].path + "&cursor=" + page.NextCursor, -1})
+	routes = append(routes, route{"list-later", routes[3].path + "&cursor=" + page.NextCursor, -1}, route{"grid-county", "/api/v1/parcels/map?bbox=" + countyBox + "&zoom=8&likely_vacant=true", -1})
 	for _, r := range routes {
 		firstLatency, code, size, body := request(r.path)
 		if code != 200 || !json.Valid(body) {
@@ -168,7 +172,7 @@ func TestParcelRealData(t *testing.T) {
 			if err = json.Unmarshal(body, &a); err != nil || a.ParcelID != soilID || !a.Available {
 				t.Fatal("missing published soil")
 			}
-		case "grid", "shape":
+		case "grid", "shape", "grid-county":
 			var count int64
 			if err = json.Unmarshal(result["context_count"], &count); err != nil || count == 0 {
 				t.Fatal("empty map viewport")
@@ -189,7 +193,8 @@ func TestParcelRealData(t *testing.T) {
 				t.Logf("route=%s expected_rows=%d", r.label, expected)
 			}
 		}
-		t.Logf("first_use route=%s duration=%s bytes=%d errors=0", r.label, firstLatency, size)
+		t.Logf("first_observed route=%s duration=%s bytes=%d errors=0", r.label, firstLatency, size)
+		expectedBody := sha256.Sum256(body)
 		for _, parallel := range []int{1, 4} {
 			lat := make([]time.Duration, 0, 5*parallel)
 			totalBytes := 0
@@ -206,7 +211,7 @@ func TestParcelRealData(t *testing.T) {
 						defer mu.Unlock()
 						lat = append(lat, d)
 						totalBytes += n
-						if status != 200 || !json.Valid(data) {
+						if status != 200 || !json.Valid(data) || sha256.Sum256(data) != expectedBody {
 							errors++
 						}
 					}()
