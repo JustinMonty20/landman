@@ -47,13 +47,14 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d landman_test"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d landman_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
     env:
       DATABASE_URL: postgres://postgres:disposable@localhost:5432/landman_test?sslmode=disable
       TAX_GOLDEN_DB: "1"
+      AUTH_TEST_DATABASE_URL: postgres://postgres:disposable@localhost:5432/landman_auth_test_ci?sslmode=disable
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,8 +63,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install PDF text tool
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends poppler-utils
+      - name: Install database and PDF tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends poppler-utils postgresql-client
       - name: Install migration tool
         run: go install github.com/pressly/goose/v3/cmd/goose@v3.30.0
       - name: Apply migrations
@@ -72,3 +73,44 @@ jobs:
       # These packages share one database; run them in sequence for stable row counts.
       - name: Race tests with PostgreSQL
         run: go test -p 1 -race -tags postgres ./cmd/landman ./internal/parcelstore/ ./internal/taxstore/ -count=1
+      - name: Create and migrate authentication test database
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE landman_auth_test_ci'
+          "$(go env GOPATH)/bin/goose" -dir db/migrations postgres "$AUTH_TEST_DATABASE_URL" up
+      - name: Authentication database tests
+        run: go test -race -tags postgres ./internal/auth -count=1
+
+  ui:
+    name: Browser UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install UI dependencies
+        run: npm ci
+      - name: Check Svelte types
+        run: npm run check
+      - name: Unit tests
+        run: npm test
+      - name: Build UI
+        run: npm run build
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ui-test-results
+          path: ui/test-results
+          if-no-files-found: ignore

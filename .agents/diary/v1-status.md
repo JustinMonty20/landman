@@ -1,0 +1,1 @@
+[Unrelated code smell] `docs/union-jobs.md` still says that the latest required migration is `000016` and describes a future 180-day tax refresh rule. `main.go` now has migration `000018` and a manual file-hash tax job. Update the operator guide in a separate documentation change.
