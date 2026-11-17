@@ -17,7 +17,7 @@ GOOSE_IMAGE ?= golang:1.26-alpine
 GOOSE_VERSION ?= v3.30.0
 GOOSE_CMD = $(DOCKER) run --rm --network container:$(DB_CONTAINER) -v "$(CURDIR)/$(MIGRATIONS_PATH):/migrations" -e GOOSE_DRIVER=postgres -e GOOSE_DBSTRING="$(DATABASE_URL)" -e GOCACHE=/tmp/.cache/go-build -e GOMODCACHE=/tmp/pkg/mod -e GOBIN=/tmp/bin -u "$$(id -u):$$(id -g)" $(GOOSE_IMAGE) sh -c 'go install github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION) >/dev/null 2>&1 && /tmp/bin/goose -dir /migrations "$$@"' goose
 
-.PHONY: all build test clean run deps db-create db-drop migrate-up migrate-down migrate-create migrate-version migrate-status check-db-container check-postgres-url check-database-url help
+.PHONY: all build test clean run api deps db-create db-drop migrate-up migrate-down migrate-create migrate-version migrate-status check-db-container check-postgres-url check-database-url help
 
 all: test build
 
@@ -31,6 +31,9 @@ clean: ## Remove build artifacts
 	$(GOCLEAN)
 	rm -f $(BINARY_NAME)
 	rm -f $(BINARY_UNIX)
+
+api: ## Run the local application API with server-only settings from .env
+	$(GOCMD) run ./cmd/api
 
 run: ## Run the application
 	$(GOBUILD) -o $(BINARY_NAME) -v .
