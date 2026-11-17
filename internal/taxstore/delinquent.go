@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
@@ -25,11 +26,29 @@ type DelinquentResult struct {
 // SaveDelinquent replaces balances from a complete retained file and links its evidence.
 // The caller rolls the transaction back on any error and commits only after success.
 func SaveDelinquent(ctx context.Context, tx pgx.Tx, rows []union.DelinquentRow, meta taxsource.Meta, skippedPP, skippedRR int) (DelinquentResult, error) {
-	return SaveDelinquentBatch(ctx, tx, rows, meta, skippedPP, skippedRR, true)
+	return saveDelinquentBatch(ctx, tx, rows, meta, skippedPP, skippedRR, true)
 }
 
-// SaveDelinquentBatch writes one bounded batch. Complete must be true only after every row is written in the same transaction.
-func SaveDelinquentBatch(ctx context.Context, tx pgx.Tx, rows []union.DelinquentRow, meta taxsource.Meta, skippedPP, skippedRR int, complete bool) (DelinquentResult, error) {
+// PublishDelinquentFile replaces balances from a complete Gob-encoded DelinquentRow stream in one transaction.
+// The caller must parse and validate the retained source file before it supplies the stream.
+func PublishDelinquentFile(ctx context.Context, pool *pgxpool.Pool, input io.Reader, meta taxsource.Meta, skippedPP, skippedRR int) (DelinquentResult, error) {
+	add := func(total *DelinquentResult, batch DelinquentResult) {
+		total.Saved += batch.Saved
+		total.Unmatched += batch.Unmatched
+		total.Deleted += batch.Deleted
+		total.SkippedPP = batch.SkippedPP
+		total.SkippedRR = batch.SkippedRR
+	}
+	return publishStagedRows[union.DelinquentRow, DelinquentResult](ctx, pool, input,
+		func(tx pgx.Tx, rows []union.DelinquentRow) (DelinquentResult, error) {
+			return saveDelinquentBatch(ctx, tx, rows, meta, skippedPP, skippedRR, false)
+		},
+		func(tx pgx.Tx) (DelinquentResult, error) {
+			return saveDelinquentBatch(ctx, tx, nil, meta, skippedPP, skippedRR, true)
+		}, add)
+}
+
+func saveDelinquentBatch(ctx context.Context, tx pgx.Tx, rows []union.DelinquentRow, meta taxsource.Meta, skippedPP, skippedRR int, complete bool) (DelinquentResult, error) {
 	var result DelinquentResult
 	if meta.Name != "union_delinquent" || meta.URL == "" || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedPP < 0 || skippedRR < 0 {
 		return result, errors.New("invalid delinquent import evidence")
