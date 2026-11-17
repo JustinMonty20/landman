@@ -561,8 +561,27 @@ func pipelinePPTX(ctx context.Context, data []byte) ([][]string, error) {
 				} `xml:"Override"`
 			}
 			decoder := xml.NewDecoder(bytes.NewReader(b))
-			if err := decoder.Decode(&types); err != nil || types.XMLName.Local != "Types" {
-				return nil, errors.New("invalid PPTX content types XML")
+			rootRead := false
+			for !rootRead {
+				token, err := decoder.Token()
+				if err != nil {
+					return nil, fmt.Errorf("invalid PPTX content types XML: %w", err)
+				}
+				switch value := token.(type) {
+				case xml.StartElement:
+					if err := decoder.DecodeElement(&types, &value); err != nil || types.XMLName.Local != "Types" {
+						return nil, errors.New("invalid PPTX content types XML")
+					}
+					rootRead = true
+				case xml.CharData:
+					if len(bytes.TrimSpace(value)) != 0 {
+						return nil, errors.New("text before PPTX content types root")
+					}
+				case xml.Comment, xml.ProcInst, xml.Directive:
+					continue
+				default:
+					return nil, errors.New("invalid PPTX content types XML")
+				}
 			}
 			for {
 				token, err := decoder.Token()
