@@ -1,6 +1,14 @@
 # Review verification
 
-Use this procedure before a review that needs Git or shell commands. Use it again before you reuse a test result after a commit changes.
+Use this procedure for every PR. Select checks before review, and use it again before you reuse a result after a commit changes.
+
+## Select checks for a PR
+
+Before the first PR-facing push, run the local equivalent of the repository's CI checks and focused tests for each changed behavior. Open the PR after this candidate passes; let CI check the pushed head. Add a PostgreSQL test when code changes database behavior. Use checked-in fixtures in CI when possible. Keep private-file tests separate and use only an approved disposable database.
+
+At the code-ready head, choose independent checks for the changed behavior and its main failure risks. For new PRs, use relevant plan lane lists as catalogs, not fixed ten-lane requirements. Completed plans remain historical records; do not edit them to change this policy. Record the chosen checks and the reason for any relevant lane not selected in the PR body. One final independent review must inspect the diff and the saved results. Add more lanes or a full swarm only when the change crosses independent components, changes a destructive database path, or leaves a failure risk that focused checks cannot measure. State that reason before the extra work starts. The live gate passes when the selected lanes pass; unselected catalog entries are not failures.
+
+After a small fix, check saved receipts and run one focused verifier for the affected behavior at the new head. Repeat the full selection only for new behavior, a redesign, or a large diff. A wording-only change needs no new test. Do not call a PR ready while a selected check is incomplete. A plan's explicit release inputs, performance limits, and acceptance behavior still apply; selection changes the number of independent lanes, not the product contract.
 
 A **profile** is the file that lists an agent's tools. A **receipt** is a saved file with test output. A **patch ID** is a Git value for the content of a change. It can stay the same when a rebase changes a commit ID.
 

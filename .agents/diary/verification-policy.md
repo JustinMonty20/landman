@@ -1,0 +1,1 @@
+[Out-of-scope decision] Leave completed tax and soil plans unchanged. The operator asked for a rule for future PRs, not a new rule for completed plans. Keep this rule in `AGENTS.md` and `docs/review-verification.md`.
