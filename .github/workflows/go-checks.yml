@@ -71,4 +71,4 @@ jobs:
           "$(go env GOPATH)/bin/goose" -dir db/migrations postgres "$DATABASE_URL" up
       # These packages share one database; run them in sequence for stable row counts.
       - name: Race tests with PostgreSQL
-        run: go test -p 1 -race -tags postgres . ./internal/parcelstore/ ./internal/taxstore/ -count=1
+        run: go test -p 1 -race -tags postgres ./cmd/landman ./internal/parcelstore/ ./internal/taxstore/ -count=1

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,21 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/jobs"
 )
+
+func repositoryPath(parts ...string) string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("find repository path")
+	}
+	return filepath.Join(append([]string{filepath.Dir(file), "..", ".."}, parts...)...)
+}
+
+func TestMain(m *testing.M) {
+	if err := os.Chdir(repositoryPath()); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
 
 type fakeRequiredRunner struct {
 	outcome jobs.Outcome

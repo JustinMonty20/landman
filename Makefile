@@ -22,7 +22,7 @@ GOOSE_CMD = $(DOCKER) run --rm --network container:$(DB_CONTAINER) -v "$(CURDIR)
 all: test build
 
 build: ## Build the binary
-	$(GOBUILD) -o $(BINARY_NAME) -v .
+	$(GOBUILD) -o $(BINARY_NAME) -v ./cmd/landman
 
 test: ## Run tests
 	$(GOTEST) -v -race ./...
@@ -33,7 +33,7 @@ clean: ## Remove build artifacts
 	rm -f $(BINARY_UNIX)
 
 run: ## Run the application
-	$(GOBUILD) -o $(BINARY_NAME) -v .
+	$(GOBUILD) -o $(BINARY_NAME) -v ./cmd/landman
 	./$(BINARY_NAME)
 
 deps: ## Get dependencies

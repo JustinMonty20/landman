@@ -34,7 +34,7 @@ env -u DATABASE_URL go build ./...
 DATABASE_URL="$DISPOSABLE_DATABASE_URL" go test -tags postgres -race ./... -count=1 -timeout 15m
 
 # Separate county-sized synthetic gate. Each import has a ten-minute deadline.
-DATABASE_URL="$DISPOSABLE_DATABASE_URL" go test -tags 'postgres ingestionfixture' . \
+DATABASE_URL="$DISPOSABLE_DATABASE_URL" go test -tags 'postgres ingestionfixture' ./cmd/landman \
     -run '^TestCountySizedParcelRepeatability$' -count=1 -timeout 35m -v
 ```
 
@@ -58,13 +58,13 @@ The opt-in 118,000-feature gate passed twice on the disposable PostGIS database.
 
 The correctness follow-up passed the offline race suite, vet, build, and relevant PostGIS race tests for the runner, jobs, parcel writer, and Union source. Its 118,000-feature gate also passed with the observed-identity check enabled. The one-record repair left 100 of 101 same-PID entries pending while publishing all 101 parts. A separate same-OBJECTID case resolved only one of two reasons, and changed last-seen tokens stayed pending. The unchanged rerun again matched all 117,999 parcel IDs and 353,995 sale IDs. This follow-up did not rerun the unchanged PostGIS soil suite.
 
-Parcel runner fixtures share database-level job exclusion even when their tables use separate schemas. Run the root PostGIS suite and county-sized gate serially against one disposable database.
+Parcel runner fixtures share database-level job exclusion even when their tables use separate schemas. Run the command-package PostGIS suite and county-sized gate serially against one disposable database.
 
 Migration 16 defaults prior attempts to `full_scan`. Its rollback refuses existing repair history rather than silently making repairs eligible as full-import freshness evidence. The fixture checks that refusal and preserved history.
 
 ## Approved live parcel capture
 
-`parcel_capture_postgres_test.go` requires both `postgres` and `ingestioncapture` build tags. Without `UNION_PARCEL_CAPTURE_MODE`, the live test skips. Capture mode also requires `UNION_PARCEL_ALLOW_LIVE=1`. Both capture and replay require `UNION_PARCEL_DISPOSABLE_DB=1` and an explicit `DATABASE_URL` for an empty migrated disposable database.
+`cmd/landman/parcel_capture_postgres_test.go` requires both `postgres` and `ingestioncapture` build tags. Without `UNION_PARCEL_CAPTURE_MODE`, the live test skips. Capture mode also requires `UNION_PARCEL_ALLOW_LIVE=1`. Both capture and replay require `UNION_PARCEL_DISPOSABLE_DB=1` and an explicit `DATABASE_URL` for an empty migrated disposable database.
 
 The recorder sends only the normal `GISSource` count and page queries to its code-defined official layer 215 URL. It follows no redirects and accepts no external endpoint from the environment. Capture runs through `jobs.Runner.Run` as `union.parcels.capture`. Imports use the existing `union.gis.parcels` job. Both source paths retain 2,000-feature pages and the 1 request/sec limiter. Each import has its own unchanged ten-minute deadline.
 
@@ -106,7 +106,7 @@ docker exec "$container" psql -X -h 127.0.0.1 -v ON_ERROR_STOP=1 \
 
 UNION_PARCEL_DISPOSABLE_DB=1 UNION_PARCEL_CAPTURE_MODE=capture \
 UNION_PARCEL_ALLOW_LIVE=1 UNION_PARCEL_CAPTURE_DIR="$root/capture" \
-    go test -tags 'postgres ingestioncapture' . \
+    go test -tags 'postgres ingestioncapture' ./cmd/landman \
     -run '^TestLiveParcelCaptureRepeatability$' -count=1 -timeout 35m -v \
     > "$root/live-capture-replay.log" 2>&1
 ```
@@ -119,12 +119,12 @@ For another offline verification, create another empty migrated disposable datab
 env -u UNION_PARCEL_ALLOW_LIVE UNION_PARCEL_DISPOSABLE_DB=1 \
     UNION_PARCEL_CAPTURE_MODE=replay \
     UNION_PARCEL_CAPTURE_DIR=artifacts/verify/ingestion-gaps-live/capture \
-    go test -tags 'postgres ingestioncapture' . \
+    go test -tags 'postgres ingestioncapture' ./cmd/landman \
     -run '^TestLiveParcelCaptureRepeatability$' -count=1 -timeout 25m -v
 
 # Local checksum, incomplete-capture, and overwrite checks. No DB or live feed.
 env -u DATABASE_URL -u UNION_PARCEL_CAPTURE_MODE \
-    go test -tags 'postgres ingestioncapture' -race . \
+    go test -tags 'postgres ingestioncapture' -race ./cmd/landman \
     -run '^TestParcelCaptureIntegrity$' -count=1 -v
 ```
 
