@@ -1,0 +1,36 @@
+[data-theme='cerberus'] {
+  --app-header: #2b2e32;
+  --radius-base: 5px;
+  --radius-container: 8px;
+  --corner-shape-base: round;
+  --corner-shape-container: round;
+  --typo-base--font-family: system-ui, -apple-system, sans-serif;
+  --typo-base--line-height: normal;
+  --color-surface-50: #edf0f2;
+  --color-surface-100: #e0e5e9;
+  --color-surface-200: #d3d9df;
+  --color-surface-300: #bec6cf;
+  --color-surface-400: #a4adb7;
+  --color-surface-500: #808994;
+  --color-surface-600: #69727c;
+  --color-surface-700: #555c65;
+  --color-surface-800: #3b4046;
+  --color-surface-900: #303438;
+  --color-surface-950: #24272b;
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+  --color-primary-950: #172554;
+  --color-brand-dark: var(--color-primary-400);
+  --color-brand-contrast-dark: var(--color-surface-950);
+  --color-root-bg-dark: var(--color-surface-950);
+  --color-surface-50-950: var(--color-surface-900);
+  --color-surface-950-50: var(--color-surface-50);
+}
