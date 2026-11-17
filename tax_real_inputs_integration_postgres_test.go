@@ -188,6 +188,10 @@ func oneCaseForeclosurePDF() []byte {
 
 func TestGoldenUnionTaxJobDisposable(t *testing.T) {
 	requireDisposableTaxDB(t)
+	testGoldenUnionTaxJob(t)
+}
+
+func testGoldenUnionTaxJob(t *testing.T) {
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {

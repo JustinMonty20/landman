@@ -53,6 +53,7 @@ jobs:
           --health-retries 20
     env:
       DATABASE_URL: postgres://postgres:disposable@localhost:5432/landman_test?sslmode=disable
+      TAX_GOLDEN_DB: "1"
     steps:
       - uses: actions/checkout@v4
         with:
