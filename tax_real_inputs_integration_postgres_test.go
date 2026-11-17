@@ -279,6 +279,17 @@ SELECT $1::uuid,p.id FROM parcels p WHERE p.county_id='union' AND p.source_name=
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_parcels WHERE case_id=$1`, caseID).Scan(&retained); err != nil || retained != currentLink {
 		t.Fatalf("current foreclosure PIN changed link ID: before=%s after=%s err=%v", currentLink, retained, err)
 	}
+	var caseVersion, linkVersion string
+	if err := pool.QueryRow(ctx, `SELECT c.xmin::text,j.xmin::text FROM tax_foreclosure_cases c JOIN tax_foreclosure_parcels j ON j.case_id=c.id WHERE c.id=$1`, caseID).Scan(&caseVersion, &linkVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var unchangedCaseVersion, unchangedLinkVersion string
+	if err := pool.QueryRow(ctx, `SELECT c.xmin::text,j.xmin::text FROM tax_foreclosure_cases c JOIN tax_foreclosure_parcels j ON j.case_id=c.id WHERE c.id=$1`, caseID).Scan(&unchangedCaseVersion, &unchangedLinkVersion); err != nil || caseVersion != unchangedCaseVersion || linkVersion != unchangedLinkVersion {
+		t.Fatalf("unchanged retry wrote foreclosure rows: case=%s/%s link=%s/%s err=%v", caseVersion, unchangedCaseVersion, linkVersion, unchangedLinkVersion, err)
+	}
 }
 
 func TestDuplicateBillingRetry(t *testing.T) {

@@ -43,26 +43,13 @@ func SaveForeclosure(ctx context.Context, tx pgx.Tx, cases []union.ForeclosureCa
 		if len(sale.PINs) == 0 || !foreclosureAmountValid(sale.OpeningBid) || !foreclosureAmountValid(sale.CurrentBid) || !foreclosureAmountValid(sale.UpsetBid) {
 			return result, errors.New("invalid foreclosure case")
 		}
-		ordered := append([]union.ForeclosurePIN(nil), sale.PINs...)
 		for _, pin := range sale.PINs {
 			if pin.ParcelKey == "" || !foreclosureAmountValid(pin.TaxValue) {
 				return result, errors.New("invalid foreclosure PIN")
 			}
 		}
-		sort.Slice(ordered, func(i, j int) bool { return ordered[i].ParcelKey < ordered[j].ParcelKey })
-		keys := make([]string, 0, len(ordered))
-		legal := make([]string, 0, len(ordered))
-		for _, pin := range ordered {
-			keys = append(keys, pin.ParcelKey)
-			legal = append(legal, pin.LegalDescription)
-		}
-		pinHash := sha256.Sum256([]byte(strings.Join(keys, "\n")))
-		legalHash := sha256.Sum256([]byte(strings.Join(legal, "\n")))
+		identity := foreclosureIdentityFor(sale)
 		var caseID string
-		var number any
-		if sale.CaseNumber != "" && !strings.EqualFold(sale.CaseNumber, "TBD") {
-			number = sale.CaseNumber
-		}
 		var on any
 		if sale.SaleOn != nil {
 			on = sale.SaleOn.Format("2006-01-02")
@@ -77,12 +64,12 @@ owner_name=EXCLUDED.owner_name,sale_on=EXCLUDED.sale_on,opening_bid=EXCLUDED.ope
 current_bid=EXCLUDED.current_bid,upset_bid=EXCLUDED.upset_bid,status=EXCLUDED.status,
 redeemed=EXCLUDED.redeemed,bidding_closed=EXCLUDED.bidding_closed,source_url=EXCLUDED.source_url,
 file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now() RETURNING id::text`
-		if number == nil {
+		if identity.number == nil {
 			query = strings.Replace(query,
 				"ON CONFLICT (county_id,source_name,case_number) WHERE case_number IS NOT NULL",
 				"ON CONFLICT (county_id,source_name,parcel_set_sha256,legal_sha256) WHERE case_number IS NULL", 1)
 		}
-		err := tx.QueryRow(ctx, query, county.Union, meta.Name, number, pinHash[:], legalHash[:], foreclosureNullable(sale.OwnerName), on,
+		err := tx.QueryRow(ctx, query, county.Union, meta.Name, identity.number, identity.pinHash[:], identity.legalHash[:], foreclosureNullable(sale.OwnerName), on,
 			foreclosureDollars(sale.OpeningBid), foreclosureDollars(sale.CurrentBid), foreclosureDollars(sale.UpsetBid),
 			foreclosureNullable(sale.Status), sale.Redeemed, sale.BiddingClosed, meta.URL, digest[:], meta.FetchedAt).Scan(&caseID)
 		if err != nil {
@@ -111,7 +98,7 @@ VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
 			result.SavedJoins++
 			matched = append(matched, parcelID)
 		}
-		if number != nil {
+		if identity.number != nil {
 			if _, ok := numbered[caseID]; !ok {
 				caseOrder = append(caseOrder, caseID)
 				numbered[caseID] = make([]string, 0, len(sale.PINs))
@@ -129,6 +116,30 @@ VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
 		return result, err
 	}
 	return result, nil
+}
+
+type foreclosureIdentity struct {
+	number    *string
+	pinHash   [32]byte
+	legalHash [32]byte
+	keys      []string
+}
+
+func foreclosureIdentityFor(sale union.ForeclosureCase) foreclosureIdentity {
+	ordered := append([]union.ForeclosurePIN(nil), sale.PINs...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ParcelKey < ordered[j].ParcelKey })
+	identity := foreclosureIdentity{keys: make([]string, 0, len(ordered))}
+	legal := make([]string, 0, len(ordered))
+	for _, pin := range ordered {
+		identity.keys = append(identity.keys, pin.ParcelKey)
+		legal = append(legal, pin.LegalDescription)
+	}
+	identity.pinHash = sha256.Sum256([]byte(strings.Join(identity.keys, "\n")))
+	identity.legalHash = sha256.Sum256([]byte(strings.Join(legal, "\n")))
+	if sale.CaseNumber != "" && !strings.EqualFold(sale.CaseNumber, "TBD") {
+		identity.number = &sale.CaseNumber
+	}
+	return identity
 }
 
 func foreclosureAmountValid(amount *int64) bool {
@@ -166,10 +177,62 @@ WHERE county_id=$1 AND source_name=$2 AND source_url=$3 AND file_sha256=$4 AND f
 		FetchedAt: meta.FetchedAt, Artifact: meta.Artifact, Validation: ImportValid})
 }
 
-// Foreclosures reads the latest stored case time, not proof of a fully imported file.
+// Foreclosures checks active file evidence and parcel links without changing stored rows.
+// Latest reports case time only; it does not prove a complete import.
 type Foreclosures struct{ pool *pgxpool.Pool }
 
 func NewForeclosures(pool *pgxpool.Pool) Foreclosures { return Foreclosures{pool: pool} }
+
+// Current reports whether the active foreclosure file has every current parcel link.
+// It does not change stored rows, so an unchanged retry does not write.
+func (s Foreclosures) Current(ctx context.Context, meta taxsource.Meta, cases []union.ForeclosureCase) (bool, error) {
+	if s.pool == nil {
+		return false, errors.New("foreclosure database required")
+	}
+	digest := meta.Artifact.SHA256()
+	var active bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_file_imports WHERE county_id=$1 AND source_name=$2 AND source_url=$3 AND active AND file_sha256=$4)`, county.Union, meta.Name, meta.URL, digest[:]).Scan(&active); err != nil || !active {
+		return false, err
+	}
+	numbered := make(map[string][]string)
+	for _, sale := range cases {
+		identity := foreclosureIdentityFor(sale)
+		var id string
+		err := s.pool.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name=$2 AND file_sha256=$3 AND ((case_number=$4 AND case_number IS NOT NULL) OR (case_number IS NULL AND $4::text IS NULL AND parcel_set_sha256=$5 AND legal_sha256=$6))`, county.Union, meta.Name, digest[:], identity.number, identity.pinHash[:], identity.legalHash[:]).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, pin := range sale.PINs {
+			var missing bool
+			err = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcels p LEFT JOIN tax_foreclosure_parcels j ON j.case_id=$1::uuid AND j.parcel_id=p.id WHERE p.county_id=$2 AND p.source_name='union_county_gis' AND p.source_parcel_id=$3 AND j.id IS NULL)`, id, county.Union, pin.ParcelKey).Scan(&missing)
+			if err != nil {
+				return false, err
+			}
+			if missing {
+				return false, nil
+			}
+		}
+		if identity.number != nil {
+			numbered[id] = append(numbered[id], identity.keys...)
+		}
+	}
+	for id, keys := range numbered {
+		var obsolete bool
+		err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_foreclosure_parcels j JOIN parcels p ON p.id=j.parcel_id
+WHERE j.case_id=$1::uuid AND (p.county_id <> $2 OR p.source_name <> 'union_county_gis' OR NOT (p.source_parcel_id = ANY($3::text[]))))`, id, county.Union, keys).Scan(&obsolete)
+		if err != nil {
+			return false, err
+		}
+		if obsolete {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (s Foreclosures) Latest(ctx context.Context) (time.Time, bool, error) {
 	if s.pool == nil {
 		return time.Time{}, false, errors.New("foreclosure database required")
