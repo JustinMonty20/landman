@@ -161,6 +161,31 @@ func TestRealTaxInputsDisposable(t *testing.T) {
 	// Rollback removes all test writes. The whole container is also removed after the test.
 }
 
+func oneCaseForeclosurePDF() []byte {
+	var content strings.Builder
+	content.WriteString("BT /F1 9 Tf 40 760 Td 12 TL\n")
+	for _, line := range []string{"Sale Date: November 4, 2026 Case # 26M000471-890", "Current Property Owner: TEST OWNER", "Parcel Identification Number (PIN): 09-125-043", "Lot 1", "Address: 1 SAMPLE ROAD", "Tax Value: $10,000.00"} {
+		line = strings.NewReplacer(`\`, `\\`, `(`, `\(`, `)`, `\)`).Replace(line)
+		fmt.Fprintf(&content, "(%s) Tj T*\n", line)
+	}
+	content.WriteString("ET\n")
+	objects := []string{"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", content.Len(), content.String())}
+	var pdf bytes.Buffer
+	pdf.WriteString("%PDF-1.4\n%\xff\x00\xff\n")
+	var offsets []int
+	for i, obj := range objects {
+		offsets = append(offsets, pdf.Len())
+		fmt.Fprintf(&pdf, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	start := pdf.Len()
+	fmt.Fprintf(&pdf, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, offset := range offsets {
+		fmt.Fprintf(&pdf, "%010d 00000 n \n", offset)
+	}
+	fmt.Fprintf(&pdf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, start)
+	return pdf.Bytes()
+}
+
 func TestGoldenUnionTaxJobDisposable(t *testing.T) {
 	requireDisposableTaxDB(t)
 	ctx := context.Background()
@@ -183,6 +208,10 @@ func TestGoldenUnionTaxJobDisposable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	foreclosurePath := filepath.Join(t.TempDir(), "foreclosure.pdf")
+	if err = os.WriteFile(foreclosurePath, oneCaseForeclosurePDF(), 0600); err != nil {
+		t.Fatal(err)
+	}
 	billingPath := filepath.Join(t.TempDir(), "billing.zip")
 	file, err := os.Create(billingPath)
 	if err != nil {
@@ -203,7 +232,7 @@ func TestGoldenUnionTaxJobDisposable(t *testing.T) {
 		t.Fatal(err)
 	}
 	previousConfig, previousArgs := taxConfig, os.Args
-	taxConfig = taxRunConfig{Enabled: true, Config: taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "internal/connector/union/testdata/tax/delinquent.csv", BillingPath: billingPath, ForeclosurePath: "internal/connector/union/testdata/tax/foreclosure.pdf", PipelinePath: "internal/connector/union/testdata/tax/pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}}
+	taxConfig = taxRunConfig{Enabled: true, Config: taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "internal/connector/union/testdata/tax/delinquent.csv", BillingPath: billingPath, ForeclosurePath: foreclosurePath, PipelinePath: "internal/connector/union/testdata/tax/pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}}
 	os.Args = []string{"landman", "run", taxJobID}
 	defer func() { taxConfig, os.Args = previousConfig, previousArgs }()
 	start := time.Now()
@@ -211,7 +240,7 @@ func TestGoldenUnionTaxJobDisposable(t *testing.T) {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(start)
-	for table, want := range map[string]int{"tax_delinquent_balances": 1, "tax_bills": 1, "tax_foreclosure_cases": 3, "tax_foreclosure_parcels": 1, "tax_foreclosure_pipeline": 1} {
+	for table, want := range map[string]int{"tax_delinquent_balances": 1, "tax_bills": 1, "tax_foreclosure_cases": 1, "tax_foreclosure_parcels": 1, "tax_foreclosure_pipeline": 1} {
 		var got int
 		if err = pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&got); err != nil || got != want {
 			t.Fatalf("%s rows=%d want=%d err=%v", table, got, want, err)
