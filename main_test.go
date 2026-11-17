@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/jobs"
 )
 
@@ -73,7 +74,7 @@ func TestCommands(t *testing.T) {
 	}{
 		{nil, "all"}, {[]string{"schedule"}, "schedule"},
 		{[]string{"run", parcelJobID}, parcelJobID}, {[]string{"run", soilJobID}, soilJobID},
-		{[]string{"run", screeningJobID}, screeningJobID},
+		{[]string{"run", screeningJobID}, screeningJobID}, {[]string{"run", taxJobID}, taxJobID},
 	} {
 		mode, err := command(tc.args)
 		if err != nil || mode != tc.mode {
@@ -295,6 +296,21 @@ func TestDerivedRefreshOverlapHonorsCancellation(t *testing.T) {
 	}
 	if runner.calls != 1 {
 		t.Fatalf("derived runner calls = %d, want 1", runner.calls)
+	}
+}
+
+func TestDisabledTaxStopsBeforeDependencies(t *testing.T) {
+	previousConfig, previousArgs := taxConfig, os.Args
+	defer func() { taxConfig, os.Args = previousConfig, previousArgs }()
+	missing := t.TempDir() + "/absent.csv"
+	taxConfig = taxRunConfig{Config: taxjob.Config{DelinquentPath: missing, BillingPath: missing, ForeclosurePath: missing, PipelinePath: missing, ArtifactDir: missing}}
+	os.Args = []string{"landman", "run", taxJobID}
+	t.Setenv("DATABASE_URL", "invalid://database")
+	if err := run(context.Background()); err == nil || err.Error() != "union.tax is disabled" {
+		t.Fatalf("disabled job error=%v", err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("disabled tax accessed local file path: %v", err)
 	}
 }
 

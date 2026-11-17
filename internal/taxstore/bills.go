@@ -24,6 +24,11 @@ type BillResult struct {
 // SaveBill replaces billed taxes from a complete retained file in the caller's transaction.
 // The caller rolls back on any error and commits only after success.
 func SaveBill(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta taxsource.Meta, skippedPP int) (BillResult, error) {
+	return SaveBillBatch(ctx, tx, rows, meta, skippedPP, true)
+}
+
+// SaveBillBatch writes one bounded batch. Complete must be true only after every row is written in the same transaction.
+func SaveBillBatch(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta taxsource.Meta, skippedPP int, complete bool) (BillResult, error) {
 	var result BillResult
 	if meta.Name != "union_billing" || meta.URL == "" || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedPP < 0 {
 		return result, errors.New("invalid billing import evidence")
@@ -74,6 +79,9 @@ DO UPDATE SET
 			return result, fmt.Errorf("save billed tax: %w", err)
 		}
 		result.Saved++
+	}
+	if !complete {
+		return result, nil
 	}
 	deleted, err := tx.Exec(ctx, `DELETE FROM tax_bills
 WHERE county_id = $1 AND source_name = $2 AND file_sha256 <> $3`, county.Union, meta.Name, digest[:])
