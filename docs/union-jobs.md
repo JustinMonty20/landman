@@ -4,10 +4,11 @@
 
 Build with `go build -o landman .`. Set `DATABASE_URL` to a PostGIS database migrated through `000018_tax_file_imports.sql`.
 
-These commands contact the live Union GIS or USDA services. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
+The parcel and soil commands contact the live Union GIS or USDA services. The tax job reads operator files; it does not download county files. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
 ```sh
-# Existing ordered import. Parcel source, soil source, then one derived refresh.
+# Import parcels, then soil, then refresh derived screening, then import four tax files.
+# Set the five tax inputs below before this command.
 ./landman
 
 # Import only parcels, then refresh from stored soil. No county soil fetch.
@@ -65,7 +66,7 @@ A quarantined import or repair records `success_with_quarantine` and exits unsuc
 
 ## Import the four manual tax files
 
-Download each complete county file outside the application. Do not change an input file during a run. Set these seven variables in the shell that starts the job. Choose a persistent private directory for retained source files. Confirm that its filesystem supports directory sync. Set private permissions and a retention duration before the first run. Keep the input files and artifact directory outside Git.
+Download each complete county file outside the application. Do not change an input file during a run. Set these five variables in the shell that starts the job. Choose a persistent private directory for retained source files. Confirm that its filesystem supports directory sync. Set private permissions and a retention duration before the first run. Keep the input files and artifact directory outside Git.
 
 ```sh
 export UNION_TAX_ARTIFACT_DIR="$TAX_ARTIFACT_DIR"
@@ -73,12 +74,12 @@ export UNION_TAX_DELINQUENT_PATH="$TAX_INPUT_DIR/delinquent.csv"
 export UNION_TAX_BILLING_PATH="$TAX_INPUT_DIR/billing.zip"
 export UNION_TAX_FORECLOSURE_PATH="$TAX_INPUT_DIR/foreclosure-sales.pdf"
 export UNION_TAX_PIPELINE_PATH="$TAX_INPUT_DIR/foreclosure-pipeline.pdf"
-export UNION_TAX_BILLING_SOURCE_URL='https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000'
-export UNION_TAX_PIPELINE_SOURCE_URL='https://www.unioncountync.gov/home/showdocument?id=4784'
-./landman run union.tax
+./landman
 ```
 
-Set `TAX_INPUT_DIR` and `TAX_ARTIFACT_DIR` to directories you selected before you run these commands. The two URLs declare county provenance; they do not cause an HTTP download. Check them against the files you supply. The job checks all four files before its first typed write. It retains and verifies their exact bytes, then imports delinquent, billing, foreclosure sales, and foreclosure pipeline in that order. A changed file replaces its prior active version only after a complete successful publication. A failed file stops later files. A repeated identical file can link parcels added since the prior run. Check `job_attempts` for `union.tax` and the tax import records for source and storage evidence. Do not set a tax schedule in this local mode.
+Set `TAX_INPUT_DIR` and `TAX_ARTIFACT_DIR` to directories you selected before you run these commands. `./landman` runs the parcel import, soil import, soil screening, and the four-file tax job once each. `./landman run union.tax` runs only the four tax files. Individual parcel, soil, and screening commands remain available for targeted runs. There is no `./landman run` command without a job ID.
+
+The job checks all four files before its first typed write. It retains and verifies their exact bytes, then imports delinquent, billing, foreclosure sales, and foreclosure pipeline in that order. The stored county URLs identify known source references; they are not proof that the application fetched these files. A changed file replaces its prior active version only after a complete successful publication. A failed file stops later files. A repeated identical file can link parcels added since the prior run. Check `job_attempts` for `union.tax` and the tax import records for source and storage evidence. Do not set a tax schedule in this local mode.
 
 This command selects local artifact storage. S3 (cloud object storage) support in the artifact package is not an S3 input path or a bucket trigger. A later cloud change must define the upload event, four-file identity and order, retries, access controls, and explicit S3 selection. Do not use `s3://` paths with this command.
 

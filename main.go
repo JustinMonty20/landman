@@ -103,7 +103,7 @@ func schedules(getenv func(string) string) (map[string]string, error) {
 
 // manualTaxConfig reads only the explicit manual job inputs.
 func manualTaxConfig(getenv func(string) string) (taxjob.Config, error) {
-	var config taxjob.Config
+	config := taxjob.Config{BillingSourceURL: union.BillingURL, PipelineSourceURL: union.PipelineURL}
 	for _, entry := range []struct {
 		name  string
 		value *string
@@ -113,8 +113,6 @@ func manualTaxConfig(getenv func(string) string) (taxjob.Config, error) {
 		{"UNION_TAX_BILLING_PATH", &config.BillingPath},
 		{"UNION_TAX_FORECLOSURE_PATH", &config.ForeclosurePath},
 		{"UNION_TAX_PIPELINE_PATH", &config.PipelinePath},
-		{"UNION_TAX_BILLING_SOURCE_URL", &config.BillingSourceURL},
-		{"UNION_TAX_PIPELINE_SOURCE_URL", &config.PipelineSourceURL},
 	} {
 		*entry.value = getenv(entry.name)
 		if *entry.value == "" {
@@ -138,7 +136,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	var taxInput taxjob.Config
-	if mode == taxJobID {
+	if mode == taxJobID || mode == "all" {
 		taxInput, err = manualTaxConfig(os.Getenv)
 		if err != nil {
 			return err
@@ -195,7 +193,7 @@ func run(ctx context.Context) error {
 			return jobs.Result{Processed: len(polygons)}, err
 		}},
 	}
-	if mode == taxJobID {
+	if mode == taxJobID || mode == "all" {
 		definitions = append(definitions, jobs.Definition{ID: taxJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 			return taxjob.Run(ctx, pool, taxInput)
 		}})
@@ -240,6 +238,12 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 	}
 	for _, definition := range definitions {
 		if mode == "all" {
+			if definition.ID == taxJobID {
+				if err := refresh(ctx); err != nil {
+					return err
+				}
+				return runRequired(ctx, runner, definition)
+			}
 			if err := runRequired(ctx, runner, definition); err != nil {
 				return err
 			}
