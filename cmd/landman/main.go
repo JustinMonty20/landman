@@ -101,13 +101,26 @@ func schedules(getenv func(string) string) (map[string]string, error) {
 	return values, nil
 }
 
-// Tax files are supplied by the operator. Select private paths before enabling the manual job.
-type taxRunConfig struct {
-	Enabled bool
-	taxjob.Config
+// manualTaxConfig reads only the explicit manual job inputs.
+func manualTaxConfig(getenv func(string) string) (taxjob.Config, error) {
+	config := taxjob.Config{BillingSourceURL: union.BillingURL, PipelineSourceURL: union.PipelineURL}
+	for _, entry := range []struct {
+		name  string
+		value *string
+	}{
+		{"UNION_TAX_ARTIFACT_DIR", &config.ArtifactDir},
+		{"UNION_TAX_DELINQUENT_PATH", &config.DelinquentPath},
+		{"UNION_TAX_BILLING_PATH", &config.BillingPath},
+		{"UNION_TAX_FORECLOSURE_PATH", &config.ForeclosurePath},
+		{"UNION_TAX_PIPELINE_PATH", &config.PipelinePath},
+	} {
+		*entry.value = getenv(entry.name)
+		if *entry.value == "" {
+			return taxjob.Config{}, fmt.Errorf("%s is required for %s", entry.name, taxJobID)
+		}
+	}
+	return config, nil
 }
-
-var taxConfig taxRunConfig
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -122,8 +135,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if mode == taxJobID && !taxConfig.Enabled {
-		return errors.New("union.tax is disabled")
+	var taxInput taxjob.Config
+	if mode == taxJobID || mode == "all" {
+		taxInput, err = manualTaxConfig(os.Getenv)
+		if err != nil {
+			return err
+		}
 	}
 	var calendar map[string]string
 	if mode == "schedule" {
@@ -176,9 +193,9 @@ func run(ctx context.Context) error {
 			return jobs.Result{Processed: len(polygons)}, err
 		}},
 	}
-	if taxConfig.Enabled && mode != "schedule" {
+	if mode == taxJobID || mode == "all" {
 		definitions = append(definitions, jobs.Definition{ID: taxJobID, Run: func(ctx context.Context) (jobs.Result, error) {
-			return taxjob.Run(ctx, pool, taxConfig.Config)
+			return taxjob.Run(ctx, pool, taxInput)
 		}})
 	}
 	refresh := func(ctx context.Context) error {
@@ -221,6 +238,12 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 	}
 	for _, definition := range definitions {
 		if mode == "all" {
+			if definition.ID == taxJobID {
+				if err := refresh(ctx); err != nil {
+					return err
+				}
+				return runRequired(ctx, runner, definition)
+			}
 			if err := runRequired(ctx, runner, definition); err != nil {
 				return err
 			}
