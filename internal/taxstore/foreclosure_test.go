@@ -314,8 +314,10 @@ func TestForeclosuresCurrentReconcilesUnchangedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.ConnConfig.Database != "landman_tax_integration" || config.ConnConfig.Host != "127.0.0.1" || config.ConnConfig.Port == 5432 || len(config.ConnConfig.Fallbacks) != 0 {
-		t.Fatal("foreclosure retry test requires an isolated local database on a non-default port")
+	localTest := config.ConnConfig.Database == "landman_tax_integration" && config.ConnConfig.Host == "127.0.0.1" && config.ConnConfig.Port != 5432
+	ciTest := config.ConnConfig.Database == "landman_test" && config.ConnConfig.Host == "localhost" && config.ConnConfig.Port == 5432
+	if len(config.ConnConfig.Fallbacks) != 0 || (!localTest && !ciTest) {
+		t.Fatal("foreclosure retry test requires the isolated local or PostGIS CI database")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
