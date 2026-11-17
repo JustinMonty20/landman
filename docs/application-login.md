@@ -4,7 +4,7 @@
 
 The private alpha uses Google sign-in. Only accounts in `AUTH_ALLOWED_EMAILS` can create or use an application session. Google test-user settings do not replace this application restriction.
 
-The Go application API is in `cmd/api/`. Authentication is in `internal/auth/`. The SvelteKit UI is in `ui/`. The existing ingestion command remains separate in the repository root.
+The Go application API is in `cmd/api/`. Authentication is in `internal/auth/`. The SvelteKit UI is in `ui/`. The ingestion command remains separate in `cmd/landman/`.
 
 Calendar permissions, saved leads, private notes, and reminder delivery are not implemented. The map still uses fictional sample parcels. Authentication establishes user identities; it does not make the sample data real.
 
