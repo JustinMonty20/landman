@@ -258,6 +258,70 @@ func TestDuplicateBillingRetry(t *testing.T) {
 	}
 }
 
+func TestParcelCommitAfterTaxActivation(t *testing.T) {
+	requireDisposableTaxDB(t)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM tax_foreclosure_cases; DELETE FROM tax_file_imports; DELETE FROM parcels`); err != nil {
+			t.Errorf("clean concurrent test rows: %v", err)
+		}
+		pool.Close()
+	}()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis','09336350',true)`); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("internal/connector/union/testdata/tax/billing.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	path := filepath.Join(t.TempDir(), "billing.zip")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	entry, err := archive.Create("WKBILA-concurrent.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = entry.Write([]byte(string(lines[0]) + "\n" + string(lines[1]) + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err = archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "artifacts/tax-input/delinquent.csv", BillingPath: path, ForeclosurePath: "artifacts/tax-input/foreclosure-sales.pdf", PipelinePath: "artifacts/tax-input/foreclosure-pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}
+	if _, err = taxjob.Run(ctx, pool, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var bills int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_bills`).Scan(&bills); err != nil || bills != 0 {
+		t.Fatalf("uncommitted parcel matched: bills=%d err=%v", bills, err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = taxjob.Run(ctx, pool, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_bills`).Scan(&bills); err != nil || bills != 1 {
+		t.Fatalf("parcel committed after activation not relinked: bills=%d err=%v", bills, err)
+	}
+}
+
 func TestRealUnionTaxJobDisposable(t *testing.T) {
 	requireDisposableTaxDB(t)
 	ctx := context.Background()

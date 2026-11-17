@@ -80,7 +80,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 		return result, fmt.Errorf("delinquent: %w", err)
 	}
 	defer releaseRows(balanceFile)
-	if current, err := currentFile(ctx, pool, dm); err != nil {
+	if current, err := currentCSV(ctx, pool, dm, balanceFile, "tax_delinquent_balances", func(row union.DelinquentRow) (string, int16) { return row.ParcelKey, row.Year }); err != nil {
 		return result, err
 	} else if current {
 		log.Printf("union.tax delinquent unchanged: verified local artifact")
@@ -112,7 +112,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 		return result, fmt.Errorf("billing: %w", err)
 	}
 	defer releaseRows(billFile)
-	if current, err := currentFile(ctx, pool, bm); err != nil {
+	if current, err := currentCSV(ctx, pool, bm, billFile, "tax_bills", func(row union.BillRow) (string, int16) { return row.ParcelKey, row.Year }); err != nil {
 		return result, err
 	} else if current {
 		log.Printf("union.tax billing unchanged: verified local artifact")
@@ -145,7 +145,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 	if err != nil {
 		return result, fmt.Errorf("foreclosure: %w", err)
 	}
-	if current, err := currentFile(ctx, pool, fm); err != nil {
+	if current, err := currentForeclosure(ctx, pool, fm, cases); err != nil {
 		return result, err
 	} else if current {
 		cases = nil
@@ -171,7 +171,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 	if err != nil {
 		return result, fmt.Errorf("pipeline: %w", err)
 	}
-	if current, err := currentFile(ctx, pool, pm); err != nil {
+	if current, err := currentPipeline(ctx, pool, pm, properties); err != nil {
 		return result, err
 	} else if current {
 		log.Printf("union.tax pipeline unchanged: verified local artifact")
@@ -193,15 +193,100 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 	return result, nil
 }
 
-// currentFile skips only a complete matched generation with no newer parcel records.
+// currentFile identifies an active version. Callers check current parcel links before skipping.
 func currentFile(ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta) (bool, error) {
 	var activated bool
 	digest := meta.Artifact.SHA256()
-	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_file_imports i WHERE i.county_id=$1 AND i.source_name=$2 AND i.source_url=$4 AND i.active AND i.file_sha256=$3 AND NOT EXISTS(SELECT 1 FROM parcels p WHERE p.county_id=$1 AND p.source_name='union_county_gis' AND p.updated_at>=i.activated_at))`, county.Union, meta.Name, digest[:], meta.URL).Scan(&activated)
+	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_file_imports i WHERE i.county_id=$1 AND i.source_name=$2 AND i.source_url=$4 AND i.active AND i.file_sha256=$3)`, county.Union, meta.Name, digest[:], meta.URL).Scan(&activated)
 	if err != nil || !activated {
 		return false, err
 	}
 	return activated, nil
+}
+
+// currentCSV compares every currently matched source key and year with its typed row.
+func currentCSV[T any](ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta, file *os.File, table string, key func(T) (string, int16)) (current bool, err error) {
+	if table != "tax_bills" && table != "tax_delinquent_balances" {
+		return false, errors.New("unknown tax table")
+	}
+	current, err = currentFile(ctx, pool, meta)
+	if err != nil || !current {
+		return current, err
+	}
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	defer func() { _, rewindErr := file.Seek(0, io.SeekStart); err = errors.Join(err, rewindErr) }()
+	decoder := gob.NewDecoder(file)
+	digest := meta.Artifact.SHA256()
+	query := fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM unnest($1::text[],$2::smallint[]) AS input(key,yr) JOIN parcels p ON p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=input.key LEFT JOIN %s t ON t.parcel_id=p.id AND t.tax_year=input.yr AND t.county_id='union' AND t.source_name=$4 AND t.file_sha256=$3 WHERE t.id IS NULL)`, table)
+	for {
+		keys := make([]string, 0, 512)
+		years := make([]int16, 0, 512)
+		for len(keys) < cap(keys) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			var row T
+			decodeErr := decoder.Decode(&row)
+			if decodeErr == io.EOF {
+				break
+			}
+			if decodeErr != nil {
+				return false, decodeErr
+			}
+			k, y := key(row)
+			keys = append(keys, k)
+			years = append(years, y)
+		}
+		if len(keys) == 0 {
+			return true, nil
+		}
+		var missing bool
+		if err = pool.QueryRow(ctx, query, keys, years, digest[:], meta.Name).Scan(&missing); err != nil {
+			return false, err
+		}
+		if missing {
+			return false, nil
+		}
+	}
+}
+
+func currentForeclosure(ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta, cases []union.ForeclosureCase) (bool, error) {
+	current, err := currentFile(ctx, pool, meta)
+	if err != nil || !current {
+		return current, err
+	}
+	keys := make([]string, 0)
+	for _, c := range cases {
+		for _, p := range c.PINs {
+			keys = append(keys, p.ParcelKey)
+		}
+	}
+	var matched, saved int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM unnest($1::text[]) AS input(key) JOIN parcels p ON p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=input.key`, keys).Scan(&matched); err != nil {
+		return false, err
+	}
+	digest := meta.Artifact.SHA256()
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_parcels j JOIN tax_foreclosure_cases c ON c.id=j.case_id WHERE c.county_id='union' AND c.source_name=$1 AND c.file_sha256=$2`, meta.Name, digest[:]).Scan(&saved); err != nil {
+		return false, err
+	}
+	return matched == saved, nil
+}
+
+func currentPipeline(ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta, rows []union.PipelineProperty) (bool, error) {
+	current, err := currentFile(ctx, pool, meta)
+	if err != nil || !current {
+		return current, err
+	}
+	keys := make([]string, 0, len(rows))
+	for _, r := range rows {
+		keys = append(keys, r.ParcelKey)
+	}
+	digest := meta.Artifact.SHA256()
+	var missing bool
+	err = pool.QueryRow(ctx, `WITH matched AS (SELECT DISTINCT p.id FROM unnest($1::text[]) AS input(key) JOIN parcels p ON p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=input.key), saved AS (SELECT parcel_id AS id FROM tax_foreclosure_pipeline WHERE county_id='union' AND source_name=$2 AND file_sha256=$3) SELECT EXISTS(SELECT id FROM matched EXCEPT SELECT id FROM saved) OR EXISTS(SELECT id FROM saved EXCEPT SELECT id FROM matched)`, keys, meta.Name, digest[:]).Scan(&missing)
+	return !missing, err
 }
 
 // stageRows holds parsed rows on private temporary disk until Read returns verified metadata.
