@@ -322,6 +322,56 @@ func TestParcelCommitAfterTaxActivation(t *testing.T) {
 	}
 }
 
+func TestForeclosureRetryChecksEachCasePIN(t *testing.T) {
+	requireDisposableTaxDB(t)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM tax_foreclosure_cases; DELETE FROM tax_file_imports; DELETE FROM parcels`); err != nil {
+			t.Errorf("clean foreclosure test rows: %v", err)
+		}
+		pool.Close()
+	}()
+	for _, key := range []string{"07129160", "07129161", "07129163"} {
+		if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis',$1,true)`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "artifacts/tax-input/delinquent.csv", BillingPath: "artifacts/tax-input/billing.zip", ForeclosurePath: "artifacts/tax-input/foreclosure-sales.pdf", PipelinePath: "artifacts/tax-input/foreclosure-pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}
+	if _, err = taxjob.Run(ctx, pool, cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(ctx, `INSERT INTO tax_foreclosure_parcels(case_id,parcel_id) SELECT c.id,p.id FROM tax_foreclosure_cases c, parcels p WHERE c.case_number='26M000471-890' AND p.source_parcel_id='07129163'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis','07129162',true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = taxjob.Run(ctx, pool, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = taxjob.Run(ctx, pool, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_parcels j JOIN tax_foreclosure_cases c ON c.id=j.case_id JOIN parcels p ON p.id=j.parcel_id WHERE c.case_number='26M000471-890' AND p.source_parcel_id='07129162'`).Scan(&count)
+	if err != nil || count != 1 {
+		t.Fatalf("new numbered-case PIN not linked: count=%d err=%v", count, err)
+	}
+}
+
 func TestRealUnionTaxJobDisposable(t *testing.T) {
 	requireDisposableTaxDB(t)
 	ctx := context.Background()

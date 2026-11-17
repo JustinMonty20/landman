@@ -3,6 +3,7 @@ package taxjob
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/county"
@@ -257,21 +260,41 @@ func currentForeclosure(ctx context.Context, pool *pgxpool.Pool, meta taxsource.
 	if err != nil || !current {
 		return current, err
 	}
-	keys := make([]string, 0)
-	for _, c := range cases {
-		for _, p := range c.PINs {
-			keys = append(keys, p.ParcelKey)
+	digest := meta.Artifact.SHA256()
+	for _, sale := range cases {
+		ordered := append([]union.ForeclosurePIN(nil), sale.PINs...)
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i].ParcelKey < ordered[j].ParcelKey })
+		keys := make([]string, 0, len(ordered))
+		legal := make([]string, 0, len(ordered))
+		for _, pin := range ordered {
+			keys = append(keys, pin.ParcelKey)
+			legal = append(legal, pin.LegalDescription)
+		}
+		pinHash, legalHash := sha256.Sum256([]byte(strings.Join(keys, "\n"))), sha256.Sum256([]byte(strings.Join(legal, "\n")))
+		var number any
+		if sale.CaseNumber != "" && !strings.EqualFold(sale.CaseNumber, "TBD") {
+			number = sale.CaseNumber
+		}
+		var id string
+		err := pool.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_cases WHERE county_id='union' AND source_name=$1 AND file_sha256=$2 AND ((case_number=$3 AND case_number IS NOT NULL) OR (case_number IS NULL AND $3::text IS NULL AND parcel_set_sha256=$4 AND legal_sha256=$5))`, meta.Name, digest[:], number, pinHash[:], legalHash[:]).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, pin := range sale.PINs {
+			var missing bool
+			err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcels p LEFT JOIN tax_foreclosure_parcels j ON j.case_id=$1::uuid AND j.parcel_id=p.id WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=$2 AND j.id IS NULL)`, id, pin.ParcelKey).Scan(&missing)
+			if err != nil {
+				return false, err
+			}
+			if missing {
+				return false, nil
+			}
 		}
 	}
-	var matched, saved int
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM unnest($1::text[]) AS input(key) JOIN parcels p ON p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=input.key`, keys).Scan(&matched); err != nil {
-		return false, err
-	}
-	digest := meta.Artifact.SHA256()
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_parcels j JOIN tax_foreclosure_cases c ON c.id=j.case_id WHERE c.county_id='union' AND c.source_name=$1 AND c.file_sha256=$2`, meta.Name, digest[:]).Scan(&saved); err != nil {
-		return false, err
-	}
-	return matched == saved, nil
+	return true, nil
 }
 
 func currentPipeline(ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta, rows []union.PipelineProperty) (bool, error) {
