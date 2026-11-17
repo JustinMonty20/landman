@@ -3,14 +3,17 @@ package taxstore
 
 import (
 	"context"
+	"encoding/gob"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ValidationResult describes the outcome of parsing a retained source file.
@@ -68,6 +71,62 @@ RETURNING id::text`, evidence.CountyID, evidence.SourceName, evidence.Publicatio
 		return "", fmt.Errorf("save tax file import evidence: %w", err)
 	}
 	return id, nil
+}
+
+// publishStagedRows consumes verified-file rows before it deletes omitted rows and activates the import.
+// A failed read or write rolls back the transaction and retains the prior active import.
+func publishStagedRows[T any, R any](ctx context.Context, pool *pgxpool.Pool, input io.Reader, write func(pgx.Tx, []T) (R, error), finish func(pgx.Tx) (R, error), add func(*R, R)) (result R, err error) {
+	if pool == nil || input == nil {
+		return result, errors.New("tax publication requires a database and complete row stream")
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+		if err != nil {
+			var zero R
+			result = zero
+		}
+	}()
+	decoder := gob.NewDecoder(input)
+	for {
+		rows := make([]T, 0, 512)
+		for len(rows) < cap(rows) {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			var row T
+			decodeErr := decoder.Decode(&row)
+			if decodeErr == io.EOF {
+				break
+			}
+			if decodeErr != nil {
+				return result, fmt.Errorf("read staged tax rows: %w", decodeErr)
+			}
+			rows = append(rows, row)
+		}
+		if len(rows) == 0 {
+			break
+		}
+		batch, err := write(tx, rows)
+		if err != nil {
+			return result, err
+		}
+		add(&result, batch)
+	}
+	last, err := finish(tx)
+	if err != nil {
+		return result, err
+	}
+	add(&result, last)
+	if err := tx.Commit(ctx); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // ActivateImport publishes a validated import in the caller's typed-row transaction.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
@@ -24,11 +25,27 @@ type BillResult struct {
 // SaveBill replaces billed taxes from a complete retained file in the caller's transaction.
 // The caller rolls back on any error and commits only after success.
 func SaveBill(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta taxsource.Meta, skippedPP int) (BillResult, error) {
-	return SaveBillBatch(ctx, tx, rows, meta, skippedPP, true)
+	return saveBillBatch(ctx, tx, rows, meta, skippedPP, true)
 }
 
-// SaveBillBatch writes one bounded batch. Complete must be true only after every row is written in the same transaction.
-func SaveBillBatch(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta taxsource.Meta, skippedPP int, complete bool) (BillResult, error) {
+// PublishBillFile replaces bills from a complete staged row stream in one transaction.
+func PublishBillFile(ctx context.Context, pool *pgxpool.Pool, input io.Reader, meta taxsource.Meta, skippedPP int) (BillResult, error) {
+	add := func(total *BillResult, batch BillResult) {
+		total.Saved += batch.Saved
+		total.Unmatched += batch.Unmatched
+		total.Deleted += batch.Deleted
+		total.SkippedPP = batch.SkippedPP
+	}
+	return publishStagedRows[union.BillRow, BillResult](ctx, pool, input,
+		func(tx pgx.Tx, rows []union.BillRow) (BillResult, error) {
+			return saveBillBatch(ctx, tx, rows, meta, skippedPP, false)
+		},
+		func(tx pgx.Tx) (BillResult, error) {
+			return saveBillBatch(ctx, tx, nil, meta, skippedPP, true)
+		}, add)
+}
+
+func saveBillBatch(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta taxsource.Meta, skippedPP int, complete bool) (BillResult, error) {
 	var result BillResult
 	if meta.Name != "union_billing" || meta.URL == "" || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedPP < 0 {
 		return result, errors.New("invalid billing import evidence")

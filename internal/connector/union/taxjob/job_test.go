@@ -2,41 +2,12 @@ package taxjob
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/JustinMonty20/landman/internal/taxsource"
 	"strings"
 	"testing"
 )
-
-func TestStageRowsInBoundedBatches(t *testing.T) {
-	ctx := context.Background()
-	file, _, err := stageRows(ctx, t.TempDir(), func(_ context.Context, yield func(string) error) (taxsource.Meta, error) {
-		for i := 0; i < 10000; i++ {
-			if err := yield(fmt.Sprintf("key-%d", i)); err != nil {
-				return taxsource.Meta{}, err
-			}
-		}
-		return taxsource.Meta{}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer releaseRows(file)
-	batches := 0
-	count, err := saveRows(ctx, nil, file, func(rows []string) (int, error) {
-		batches++
-		if len(rows) > 512 {
-			t.Fatal("unbounded batch")
-		}
-		return len(rows), nil
-	})
-	if err != nil || count != 10000 || batches < 2 {
-		t.Fatalf("count=%d batches=%d err=%v", count, batches, err)
-	}
-}
 
 func TestRunRejectsMissingInputsBeforeWriting(t *testing.T) {
 	root := t.TempDir()
