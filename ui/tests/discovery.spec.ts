@@ -34,6 +34,8 @@ test('map starts with neutral parcel boundaries and zero filter matches', async 
   expect(results.x).toBeGreaterThan(viewport.width / 2);
   expect(results.width / viewport.width).toBeLessThan(0.4);
   await expect(page.getByRole('radio')).toHaveCount(0);
+  await expect(page.locator('header')).not.toContainText('Union County');
+  await expect(page.locator('header')).not.toContainText('/ Discovery');
   await expect(page.getByRole('button', { name: 'Go to parcel' })).toHaveCount(0);
   await page.screenshot({ animations: 'disabled', path: `test-results/${test.info().project.name}-map-first.png` });
   await page.getByRole('button', { name: 'Show filters', exact: true }).click();
@@ -303,6 +305,21 @@ test('removing an acreage filter clears its error and preserves keyboard focus',
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: '0 matches', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Show filters', exact: true })).toBeFocused();
+});
+
+test('filter controls use blue keyboard focus rather than amber', async ({ page }) => {
+  await page.goto('/');
+  const arrow = page.getByRole('button', { name: 'Show filters', exact: true });
+  await arrow.focus();
+  await expect(arrow).toHaveCSS('outline-color', 'rgb(96, 165, 250)');
+  await expect(arrow).toHaveCSS('outline-style', 'solid');
+  await page.keyboard.press('Enter');
+  const acreage = page.getByLabel('Minimum acres');
+  await expect(acreage).toBeVisible();
+  await acreage.focus();
+  await expect(acreage).toBeFocused();
+  await expect(acreage).toHaveCSS('outline-color', 'rgb(96, 165, 250)');
+  await expect(page.locator('.legend .selection')).toHaveCSS('border-top-color', 'rgb(237, 186, 113)');
 });
 
 test('dark mode is fixed under light and dark system preferences', async ({ page }) => {

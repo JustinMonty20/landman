@@ -96,7 +96,6 @@
 <div class="app">
   <header>
     <a class="brand" href="/">▧ <span>landman</span></a>
-    <span class="workspace-name">Union County <span class="muted">/ Discovery</span></span>
   </header>
   <main aria-label="Parcel discovery">
     <section class="map-area" aria-label="Parcel map">

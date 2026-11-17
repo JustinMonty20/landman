@@ -7,7 +7,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root { color-scheme: dark; --surface: var(--color-surface-900); --border: var(--color-surface-700); --muted: var(--color-surface-300); --accent: var(--color-primary-400); color: var(--color-surface-50); background: var(--color-surface-950); font-synthesis: none; }
-:focus-visible { outline: 3px solid #edba71; outline-offset: 3px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .btn, .btn-icon { cursor: pointer; min-height: 40px; }
 .input, .select { min-height: 42px; }
 .checkbox { flex-shrink: 0; }
@@ -15,8 +15,6 @@
 header { height: 52px; flex-shrink: 0; display: flex; align-items: center; gap: 28px; padding: 0 16px; background: var(--app-header); border-bottom: 1px solid var(--border); }
 .brand { text-decoration: none; color: #93c5fd; display: flex; align-items: center; gap: 8px; font-size: 24px; }
 .brand span { font-size: 20px; font-weight: 750; letter-spacing: -.7px; }
-.workspace-name { font-size: 12px; }
-.muted { color: var(--muted); }
 main { flex: 1; min-height: 0; position: relative; }
 .map-area { position: absolute; inset: 0; }
 .map-controls { position: absolute; z-index: 2; top: 12px; left: 12px; right: 64px; max-width: 780px; pointer-events: none; }
@@ -102,7 +100,6 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; }
   .left-panels, .right-panel, .edge-toggle { transition: none; }
 }
 @media (max-width: 600px) {
-  .workspace-name { display: none; }
   .search-row { flex-wrap: wrap; }
   .search { flex-basis: 100%; }
   .panels { top: 150px; }

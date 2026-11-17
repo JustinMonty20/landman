@@ -1,5 +1,9 @@
 # Parcel UI
 
+- Keep the application header to the brand and account controls.
+
+- Use blue focus outlines for controls. Keep keyboard focus visible; do not use the selected parcel's amber color for control focus.
+
 - Make active-filter labels removal buttons. They must clear only their own filter, update the map and list, and preserve the filter panel's open state. Clear the corresponding numeric field when removing an acreage bound. Keep keyboard focus on another active filter or the filter arrow after removal.
 
 - Keep all visible parcel boundaries on the map as neutral context. Require at least one active filter before showing match results or blue match highlights. With no active filters, show zero matches. Search and map selection may inspect a nonmatching parcel without adding it to the filter results. Selecting a finder suggestion opens details directly; do not add a separate Go button.
