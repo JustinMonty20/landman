@@ -261,6 +261,7 @@ func currentForeclosure(ctx context.Context, pool *pgxpool.Pool, meta taxsource.
 		return current, err
 	}
 	digest := meta.Artifact.SHA256()
+	numbered := make(map[string][]string)
 	for _, sale := range cases {
 		ordered := append([]union.ForeclosurePIN(nil), sale.PINs...)
 		sort.Slice(ordered, func(i, j int) bool { return ordered[i].ParcelKey < ordered[j].ParcelKey })
@@ -292,6 +293,20 @@ func currentForeclosure(ctx context.Context, pool *pgxpool.Pool, meta taxsource.
 			if missing {
 				return false, nil
 			}
+		}
+		if number != nil {
+			numbered[id] = append(numbered[id], keys...)
+		}
+	}
+	for id, keys := range numbered {
+		var obsolete bool
+		err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_foreclosure_parcels j JOIN parcels p ON p.id=j.parcel_id
+WHERE j.case_id=$1::uuid AND (p.county_id <> 'union' OR p.source_name <> 'union_county_gis' OR NOT (p.source_parcel_id = ANY($2::text[]))))`, id, keys).Scan(&obsolete)
+		if err != nil {
+			return false, err
+		}
+		if obsolete {
+			return false, nil
 		}
 	}
 	return true, nil
