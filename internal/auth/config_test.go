@@ -25,7 +25,7 @@ func TestLoadConfig(t *testing.T) {
 			if err == nil {
 				t.Fatal("accepted unsafe configuration")
 			}
-			if strings.Contains(err.Error(), "secret") && err.Error() != "Google client ID and secret are required" {
+			if strings.Contains(err.Error(), "secret") && err.Error() != "missing Google client ID or client secret" {
 				t.Fatal("error may expose credentials")
 			}
 		})

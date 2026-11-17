@@ -28,7 +28,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 
 func (c Config) validate() error {
 	if c.ClientID == "" || c.ClientSecret == "" {
-		return errors.New("Google client ID and secret are required")
+		return errors.New("missing Google client ID or client secret")
 	}
 	u, err := url.Parse(c.RedirectURI)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/auth/google/callback" {
