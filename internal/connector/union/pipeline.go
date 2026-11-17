@@ -560,8 +560,27 @@ func pipelinePPTX(ctx context.Context, data []byte) ([][]string, error) {
 					ContentType string `xml:"ContentType,attr"`
 				} `xml:"Override"`
 			}
-			if err := xml.Unmarshal(b, &types); err != nil || types.XMLName.Local != "Types" {
+			decoder := xml.NewDecoder(bytes.NewReader(b))
+			if err := decoder.Decode(&types); err != nil || types.XMLName.Local != "Types" {
 				return nil, errors.New("invalid PPTX content types XML")
+			}
+			for {
+				token, err := decoder.Token()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					return nil, fmt.Errorf("invalid PPTX content types XML: %w", err)
+				}
+				switch value := token.(type) {
+				case xml.CharData:
+					if len(bytes.TrimSpace(value)) == 0 {
+						continue
+					}
+				case xml.Comment, xml.ProcInst, xml.Directive:
+					continue
+				}
+				return nil, errors.New("multiple roots or trailing text in PPTX content types XML")
 			}
 			for _, item := range types.Overrides {
 				if item.PartName == "/ppt/presentation.xml" && item.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml" {

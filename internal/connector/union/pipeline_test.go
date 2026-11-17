@@ -330,6 +330,8 @@ func TestPipelinePPTXParagraphAndContentTypes(t *testing.T) {
 		{"paragraph runs", contentType, slide, false},
 		{"spoofed content type", `<Types><!-- presentationml.presentation --></Types>`, slide, true},
 		{"malformed content types", `<Types><Override ContentType="presentationml.presentation"`, slide, true},
+		{"content types trailing junk", contentType + "junk", slide, true},
+		{"content types second root", contentType + `<Types/>`, slide, true},
 		{"malformed slide", contentType, `<p:sld`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
