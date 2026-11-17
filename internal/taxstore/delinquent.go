@@ -25,6 +25,11 @@ type DelinquentResult struct {
 // SaveDelinquent replaces balances from a complete retained file and links its evidence.
 // The caller rolls the transaction back on any error and commits only after success.
 func SaveDelinquent(ctx context.Context, tx pgx.Tx, rows []union.DelinquentRow, meta taxsource.Meta, skippedPP, skippedRR int) (DelinquentResult, error) {
+	return SaveDelinquentBatch(ctx, tx, rows, meta, skippedPP, skippedRR, true)
+}
+
+// SaveDelinquentBatch writes one bounded batch. Complete must be true only after every row is written in the same transaction.
+func SaveDelinquentBatch(ctx context.Context, tx pgx.Tx, rows []union.DelinquentRow, meta taxsource.Meta, skippedPP, skippedRR int, complete bool) (DelinquentResult, error) {
 	var result DelinquentResult
 	if meta.Name != "union_delinquent" || meta.URL == "" || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedPP < 0 || skippedRR < 0 {
 		return result, errors.New("invalid delinquent import evidence")
@@ -67,6 +72,9 @@ DO UPDATE SET
 			return result, fmt.Errorf("save delinquent balance: %w", err)
 		}
 		result.Saved++
+	}
+	if !complete {
+		return result, nil
 	}
 	deleted, err := tx.Exec(ctx, `DELETE FROM tax_delinquent_balances
 WHERE county_id = $1 AND source_name = $2 AND file_sha256 <> $3`, county.Union, meta.Name, digest[:])

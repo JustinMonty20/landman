@@ -3,8 +3,10 @@ package taxjob
 
 import (
 	"context"
+	"encoding/gob"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,6 +44,16 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 		if !info.Mode().IsRegular() {
 			return result, errors.New("tax input must be a regular file")
 		}
+		file, err := os.Open(path)
+		if err != nil {
+			return result, fmt.Errorf("tax input %q: %w", filepath.Base(path), err)
+		}
+		var probe [1]byte
+		_, readErr := file.Read(probe[:])
+		closeErr := file.Close()
+		if readErr != nil && readErr != io.EOF || closeErr != nil {
+			return result, fmt.Errorf("tax input %q unreadable: %w", filepath.Base(path), errors.Join(readErr, closeErr))
+		}
 	}
 	store, err := taxartifact.NewLocal(config.ArtifactDir)
 	if err != nil {
@@ -63,68 +75,77 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 	if err != nil {
 		return result, err
 	}
-	var balances []union.DelinquentRow
-	dm, err := delinquent.Read(ctx, func(row union.DelinquentRow) error { balances = append(balances, row); return nil })
+	balanceFile, dm, err := stageRows(ctx, config.ArtifactDir, delinquent.Read)
 	if err != nil {
 		return result, fmt.Errorf("delinquent: %w", err)
 	}
-	if current, err := currentFile(ctx, pool, dm, "tax_delinquent_balances", len(balances)); err != nil {
+	defer releaseRows(balanceFile)
+	if current, err := currentFile(ctx, pool, dm); err != nil {
 		return result, err
 	} else if current {
-		balances = nil
 		log.Printf("union.tax delinquent unchanged: verified local artifact")
 	} else {
 		pp, rr, err := delinquent.Skipped(ctx, dm)
 		if err != nil {
 			return result, err
 		}
+		var unmatched, deleted int
 		if err := saveFile(ctx, pool, &result, func(tx pgx.Tx) (int, error) {
-			saved, err := taxstore.SaveDelinquent(ctx, tx, balances, dm, pp, rr)
-			if err == nil {
-				log.Printf("union.tax delinquent saved=%d deleted=%d PP=%d RR=%d unmatched=%d store=%s verified=%t", saved.Saved, saved.Deleted, saved.SkippedPP, saved.SkippedRR, saved.Unmatched, dm.Artifact.Mode(), dm.Artifact.Verified())
+			count, err := saveRows(ctx, tx, balanceFile, func(rows []union.DelinquentRow) (int, error) {
+				saved, err := taxstore.SaveDelinquentBatch(ctx, tx, rows, dm, pp, rr, false)
+				unmatched += saved.Unmatched
+				return saved.Saved, err
+			})
+			if err != nil {
+				return count, err
 			}
-			return saved.Saved, err
+			final, err := taxstore.SaveDelinquentBatch(ctx, tx, nil, dm, pp, rr, true)
+			deleted = final.Deleted
+			return count, err
 		}); err != nil {
 			return result, err
 		}
-		balances = nil
+		log.Printf("union.tax delinquent saved=%d deleted=%d PP=%d RR=%d unmatched=%d store=%s verified=%t", result.Processed, deleted, pp, rr, unmatched, dm.Artifact.Mode(), dm.Artifact.Verified())
 	}
-	var bills []union.BillRow
-	bm, err := billing.Read(ctx, func(row union.BillRow) error { bills = append(bills, row); return nil })
+	billFile, bm, err := stageRows(ctx, config.ArtifactDir, billing.Read)
 	if err != nil {
 		return result, fmt.Errorf("billing: %w", err)
 	}
-	if current, err := currentFile(ctx, pool, bm, "tax_bills", len(bills)); err != nil {
+	defer releaseRows(billFile)
+	if current, err := currentFile(ctx, pool, bm); err != nil {
 		return result, err
 	} else if current {
-		bills = nil
 		log.Printf("union.tax billing unchanged: verified local artifact")
 	} else {
 		skippedPP, err := billing.Skipped(ctx, bm)
 		if err != nil {
 			return result, err
 		}
+		var savedCount, unmatched, deleted int
 		if err := saveFile(ctx, pool, &result, func(tx pgx.Tx) (int, error) {
-			saved, err := taxstore.SaveBill(ctx, tx, bills, bm, skippedPP)
-			if err == nil {
-				log.Printf("union.tax billing saved=%d deleted=%d PP=%d unmatched=%d store=%s verified=%t", saved.Saved, saved.Deleted, saved.SkippedPP, saved.Unmatched, bm.Artifact.Mode(), bm.Artifact.Verified())
+			count, err := saveRows(ctx, tx, billFile, func(rows []union.BillRow) (int, error) {
+				saved, err := taxstore.SaveBillBatch(ctx, tx, rows, bm, skippedPP, false)
+				savedCount += saved.Saved
+				unmatched += saved.Unmatched
+				return saved.Saved, err
+			})
+			if err != nil {
+				return count, err
 			}
-			return saved.Saved, err
+			final, err := taxstore.SaveBillBatch(ctx, tx, nil, bm, skippedPP, true)
+			deleted = final.Deleted
+			return count, err
 		}); err != nil {
 			return result, err
 		}
-		bills = nil
+		log.Printf("union.tax billing saved=%d deleted=%d PP=%d unmatched=%d store=%s verified=%t", savedCount, deleted, skippedPP, unmatched, bm.Artifact.Mode(), bm.Artifact.Verified())
 	}
 	var cases []union.ForeclosureCase
 	fm, err := foreclosure.Read(ctx, func(row union.ForeclosureCase) error { cases = append(cases, row); return nil })
 	if err != nil {
 		return result, fmt.Errorf("foreclosure: %w", err)
 	}
-	pinCount := 0
-	for _, c := range cases {
-		pinCount += len(c.PINs)
-	}
-	if current, err := currentForeclosure(ctx, pool, fm, len(cases), pinCount); err != nil {
+	if current, err := currentFile(ctx, pool, fm); err != nil {
 		return result, err
 	} else if current {
 		cases = nil
@@ -150,7 +171,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 	if err != nil {
 		return result, fmt.Errorf("pipeline: %w", err)
 	}
-	if current, err := currentFile(ctx, pool, pm, "tax_foreclosure_pipeline", len(properties)); err != nil {
+	if current, err := currentFile(ctx, pool, pm); err != nil {
 		return result, err
 	} else if current {
 		log.Printf("union.tax pipeline unchanged: verified local artifact")
@@ -173,28 +194,76 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 }
 
 // currentFile skips only a complete matched generation with no newer parcel records.
-func currentFile(ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta, table string, expected int) (bool, error) {
+func currentFile(ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta) (bool, error) {
 	var activated bool
 	digest := meta.Artifact.SHA256()
-	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_file_imports i WHERE i.county_id=$1 AND i.source_name=$2 AND i.active AND i.file_sha256=$3 AND NOT EXISTS(SELECT 1 FROM parcels p WHERE p.county_id=$1 AND p.source_name='union_county_gis' AND p.updated_at>=i.activated_at))`, county.Union, meta.Name, digest[:]).Scan(&activated)
+	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_file_imports i WHERE i.county_id=$1 AND i.source_name=$2 AND i.source_url=$4 AND i.active AND i.file_sha256=$3 AND NOT EXISTS(SELECT 1 FROM parcels p WHERE p.county_id=$1 AND p.source_name='union_county_gis' AND p.updated_at>=i.activated_at))`, county.Union, meta.Name, digest[:], meta.URL).Scan(&activated)
 	if err != nil || !activated {
 		return false, err
 	}
-	// Table is selected from fixed code constants, never from operator input.
-	var count int
-	err = pool.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE county_id=$1 AND source_name=$2 AND file_sha256=$3", county.Union, meta.Name, digest[:]).Scan(&count)
-	return count == expected, err
+	return activated, nil
 }
 
-func currentForeclosure(ctx context.Context, pool *pgxpool.Pool, meta taxsource.Meta, cases, pins int) (bool, error) {
-	current, err := currentFile(ctx, pool, meta, "tax_foreclosure_cases", cases)
-	if err != nil || !current {
-		return false, err
+// stageRows holds parsed rows on private temporary disk until Read returns verified metadata.
+func stageRows[T any](ctx context.Context, dir string, read func(context.Context, func(T) error) (taxsource.Meta, error)) (*os.File, taxsource.Meta, error) {
+	file, err := os.CreateTemp(dir, ".union-tax-rows-*")
+	if err != nil {
+		return nil, taxsource.Meta{}, err
 	}
-	var count int
-	digest := meta.Artifact.SHA256()
-	err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_parcels j JOIN tax_foreclosure_cases c ON c.id=j.case_id WHERE c.county_id=$1 AND c.source_name=$2 AND c.file_sha256=$3`, county.Union, meta.Name, digest[:]).Scan(&count)
-	return count == pins, err
+	encoder := gob.NewEncoder(file)
+	meta, err := read(ctx, func(row T) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return encoder.Encode(row)
+	})
+	if err == nil {
+		_, err = file.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return nil, meta, err
+	}
+	return file, meta, nil
+}
+
+func releaseRows(file *os.File) { file.Close(); os.Remove(file.Name()) }
+
+// saveRows batches typed writes inside one transaction; a failed batch rolls back the file.
+func saveRows[T any](ctx context.Context, tx pgx.Tx, file *os.File, save func([]T) (int, error)) (int, error) {
+	decoder := gob.NewDecoder(file)
+	total := 0
+	seen := false
+	for {
+		rows := make([]T, 0, 512)
+		for len(rows) < cap(rows) {
+			if err := ctx.Err(); err != nil {
+				return total, err
+			}
+			var row T
+			err := decoder.Decode(&row)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return total, err
+			}
+			rows = append(rows, row)
+		}
+		if len(rows) == 0 {
+			if !seen {
+				return save(nil)
+			}
+			return total, nil
+		}
+		seen = true
+		count, err := save(rows)
+		if err != nil {
+			return total, err
+		}
+		total += count
+	}
 }
 
 func saveFile(ctx context.Context, pool *pgxpool.Pool, result *jobs.Result, save func(pgx.Tx) (int, error)) error {

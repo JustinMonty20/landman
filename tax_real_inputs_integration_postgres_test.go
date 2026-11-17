@@ -3,9 +3,14 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
@@ -21,12 +26,30 @@ func requireDisposableTaxDB(t *testing.T) {
 	if os.Getenv("TAX_REAL_INPUTS") != "1" {
 		t.Skip("requires operator files and a disposable migrated database")
 	}
-	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
-	if err != nil {
+	if err := disposableTaxDSN(os.Getenv("DATABASE_URL")); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ConnConfig.Database != "landman_tax_integration" || cfg.ConnConfig.Host != "127.0.0.1" || cfg.ConnConfig.Port == 5432 {
-		t.Fatal("real-file test requires an isolated local database on a non-default port")
+}
+
+func disposableTaxDSN(dsn string) error {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return err
+	}
+	if cfg.ConnConfig.Database != "landman_tax_integration" || cfg.ConnConfig.Host != "127.0.0.1" || cfg.ConnConfig.Port == 5432 || len(cfg.ConnConfig.Fallbacks) != 0 {
+		return errors.New("real-file test requires an isolated local database on a non-default port with no fallback")
+	}
+	return nil
+}
+
+func TestDisposableTaxDSN(t *testing.T) {
+	for _, dsn := range []string{"postgres://review:unused@127.0.0.1:1,example.invalid:5432/landman_tax_integration?sslmode=disable", "postgres://postgres@127.0.0.1:5432/landman_tax_integration?sslmode=disable", "postgres://postgres@example.invalid:5433/landman_tax_integration?sslmode=disable"} {
+		if err := disposableTaxDSN(dsn); err == nil {
+			t.Fatalf("accepted unsafe database URL %q", dsn)
+		}
+	}
+	if err := disposableTaxDSN(fmt.Sprintf("postgres://postgres@127.0.0.1:%d/landman_tax_integration?sslmode=disable", 55433)); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -135,6 +158,104 @@ func TestRealTaxInputsDisposable(t *testing.T) {
 	}
 	t.Logf("pipeline parsed=%d skipped pages=%d saved=%d matched UUID=%s", len(properties), pages, pr.Saved, pid)
 	// Rollback removes all test writes. The whole container is also removed after the test.
+}
+
+func TestDuplicateBillingRetry(t *testing.T) {
+	requireDisposableTaxDB(t)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM tax_foreclosure_cases; DELETE FROM tax_file_imports; DELETE FROM parcels`); err != nil {
+			t.Errorf("clean duplicate test rows: %v", err)
+		}
+		pool.Close()
+	}()
+	if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis','09336350',true)`); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("internal/connector/union/testdata/tax/billing.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	if len(lines) < 3 {
+		t.Fatal("billing fixture lacks a RE row")
+	}
+	path := filepath.Join(t.TempDir(), "billing.zip")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	entry, err := archive.Create("WKBILA-duplicate.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range [][]byte{lines[0], lines[1], lines[1]} {
+		if _, err = entry.Write(append(append([]byte{}, line...), '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "artifacts/tax-input/delinquent.csv", BillingPath: path, ForeclosurePath: "artifacts/tax-input/foreclosure-sales.pdf", PipelinePath: "artifacts/tax-input/foreclosure-pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}
+	for i := 0; i < 2; i++ {
+		if _, err := taxjob.Run(ctx, pool, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var bills, imports int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_bills`).Scan(&bills); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM tax_file_imports WHERE source_name='union_billing'`).Scan(&imports); err != nil {
+		t.Fatal(err)
+	}
+	if bills != 1 || imports != 1 {
+		t.Fatalf("duplicate billing retry: bills=%d imports=%d", bills, imports)
+	}
+	var billID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM tax_bills`).Scan(&billID); err != nil {
+		t.Fatal(err)
+	}
+	changedPath := filepath.Join(t.TempDir(), "changed.zip")
+	changed, err := os.Create(changedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedZIP := zip.NewWriter(changed)
+	row, err := changedZIP.Create("WKBILA-changed.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedLine := strings.Replace(string(lines[1]), "1,359.48", "1,359.49", 1)
+	if changedLine == string(lines[1]) {
+		t.Fatal("fixture tax did not change")
+	}
+	if _, err = row.Write([]byte(string(lines[0]) + "\n" + changedLine + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err = changedZIP.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = changed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.BillingPath = changedPath
+	if _, err = taxjob.Run(ctx, pool, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var retainedID, amount string
+	if err = pool.QueryRow(ctx, `SELECT id::text,total_taxes::text FROM tax_bills`).Scan(&retainedID, &amount); err != nil || retainedID != billID || amount != "1359.49" {
+		t.Fatalf("changed version lost bill id or amount: %s %s -> %s: %v", billID, retainedID, amount, err)
+	}
 }
 
 func TestRealUnionTaxJobDisposable(t *testing.T) {

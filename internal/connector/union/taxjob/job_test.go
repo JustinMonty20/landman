@@ -2,11 +2,41 @@ package taxjob
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/JustinMonty20/landman/internal/taxsource"
 	"strings"
 	"testing"
 )
+
+func TestStageRowsInBoundedBatches(t *testing.T) {
+	ctx := context.Background()
+	file, _, err := stageRows(ctx, t.TempDir(), func(_ context.Context, yield func(string) error) (taxsource.Meta, error) {
+		for i := 0; i < 10000; i++ {
+			if err := yield(fmt.Sprintf("key-%d", i)); err != nil {
+				return taxsource.Meta{}, err
+			}
+		}
+		return taxsource.Meta{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRows(file)
+	batches := 0
+	count, err := saveRows(ctx, nil, file, func(rows []string) (int, error) {
+		batches++
+		if len(rows) > 512 {
+			t.Fatal("unbounded batch")
+		}
+		return len(rows), nil
+	})
+	if err != nil || count != 10000 || batches < 2 {
+		t.Fatalf("count=%d batches=%d err=%v", count, batches, err)
+	}
+}
 
 func TestRunRejectsMissingInputsBeforeWriting(t *testing.T) {
 	root := t.TempDir()
@@ -31,5 +61,20 @@ func TestRunRejectsMissingInputsBeforeWriting(t *testing.T) {
 	cfg.PipelinePath = root
 	if _, err := Run(context.Background(), nil, cfg); err == nil || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("directory as input: %v", err)
+	}
+	cfg.PipelinePath = file
+	if err := os.Chmod(file, 0000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(file, 0600)
+	if probe, err := os.Open(file); err == nil {
+		probe.Close()
+		t.Skip("filesystem permits opening mode-000 file")
+	}
+	if _, err := Run(context.Background(), nil, cfg); err == nil || !strings.Contains(err.Error(), "tax input") {
+		t.Fatalf("unreadable file: %v", err)
+	}
+	if _, err := os.Stat(cfg.ArtifactDir); !os.IsNotExist(err) {
+		t.Fatalf("created artifact directory for unreadable file: %v", err)
 	}
 }
