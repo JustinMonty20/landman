@@ -166,6 +166,145 @@ WHERE case_number IS NULL AND parcel_set_sha256=$1 AND legal_sha256=$2`, pinHash
 	})
 }
 
+func TestSaveForeclosureReplacesNumberedCasePINs(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL must name a disposable migrated database")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := taxartifact.NewLocal(filepath.Join(t.TempDir(), "private"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readCase := func(path string) (union.ForeclosureCase, taxsource.Meta) {
+		t.Helper()
+		list, err := union.NewForeclosureList(path, store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cases []union.ForeclosureCase
+		meta, err := list.Read(ctx, func(sale union.ForeclosureCase) error {
+			cases = append(cases, sale)
+			return nil
+		})
+		if err != nil || len(cases) == 0 {
+			t.Fatalf("read foreclosure case: count=%d err=%v", len(cases), err)
+		}
+		return cases[0], meta
+	}
+	path := filepath.Join("..", "connector", "union", "testdata", "tax", "foreclosure.pdf")
+	original, originalMeta := readCase(path)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.Replace(body, []byte("07-129-160"), []byte("07-129-163"), 1)
+	if bytes.Equal(body, changed) {
+		t.Fatal("fixture PIN did not change")
+	}
+	changedPath := filepath.Join(t.TempDir(), "sales.pdf")
+	if err := os.WriteFile(changedPath, changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	revised, revisedMeta := readCase(changedPath)
+	if original.CaseNumber == "" || revised.CaseNumber != original.CaseNumber || originalMeta.SHA256 == revisedMeta.SHA256 {
+		t.Fatal("fixture must change one PIN of the same numbered case")
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	for _, key := range []string{"07129160", "07129161", "07129162", "07129163"} {
+		if _, err := tx.Exec(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant)
+VALUES ('union','179','union_county_gis',$1,true)`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := func() (string, map[string]string) {
+		t.Helper()
+		rows, err := tx.Query(ctx, `SELECT c.id::text,p.source_parcel_id,j.id::text FROM tax_foreclosure_cases c
+JOIN tax_foreclosure_parcels j ON j.case_id=c.id JOIN parcels p ON p.id=j.parcel_id
+WHERE c.county_id='union' AND c.source_name='union_foreclosure' AND c.case_number=$1`, original.CaseNumber)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var caseID string
+		found := make(map[string]string)
+		for rows.Next() {
+			var key, linkID string
+			if err := rows.Scan(&caseID, &key, &linkID); err != nil {
+				t.Fatal(err)
+			}
+			found[key] = linkID
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return caseID, found
+	}
+	if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{original}, originalMeta, 0); err != nil {
+		t.Fatal(err)
+	}
+	firstCase, first := links()
+	if len(first) != 3 {
+		t.Fatalf("first numbered-case links=%v", first)
+	}
+	if result, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{revised}, revisedMeta, 0); err != nil || result.SavedJoins != 3 {
+		t.Fatalf("revised case=%+v err=%v", result, err)
+	}
+	secondCase, second := links()
+	if firstCase != secondCase || len(second) != 3 || second["07129160"] != "" || second["07129161"] != first["07129161"] || second["07129162"] != first["07129162"] || second["07129163"] == "" {
+		t.Fatalf("numbered-case links after PIN change: case=%s/%s first=%v second=%v", firstCase, secondCase, first, second)
+	}
+	if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{revised}, revisedMeta, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, repeat := links()
+	if repeat["07129163"] != second["07129163"] || len(repeat) != 3 {
+		t.Fatalf("retry changed numbered-case links: %v", repeat)
+	}
+	firstBlock, secondBlock := revised, revised
+	firstBlock.PINs = revised.PINs[:1]
+	secondBlock.PINs = revised.PINs[1:]
+	if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{firstBlock, secondBlock}, revisedMeta, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, split := links()
+	if len(split) != 3 || split["07129161"] != second["07129161"] || split["07129162"] != second["07129162"] || split["07129163"] != second["07129163"] {
+		t.Fatalf("repeated numbered-case blocks lost PINs: %v", split)
+	}
+	unmatchedPDF := changed
+	for old, replacement := range map[string]string{"07-129-163": "07-129-180", "07-129-161": "07-129-181", "129-162": "129-182"} {
+		if !bytes.Contains(unmatchedPDF, []byte(old)) {
+			t.Fatalf("fixture PIN %s not found", old)
+		}
+		unmatchedPDF = bytes.Replace(unmatchedPDF, []byte(old), []byte(replacement), 1)
+	}
+	unmatchedPath := filepath.Join(t.TempDir(), "unmatched.pdf")
+	if err := os.WriteFile(unmatchedPath, unmatchedPDF, 0600); err != nil {
+		t.Fatal(err)
+	}
+	unmatched, unmatchedMeta := readCase(unmatchedPath)
+	if unmatched.CaseNumber != original.CaseNumber || len(unmatched.PINs) != 3 {
+		t.Fatalf("unmatched file must contain three new PINs for the same case: %+v", unmatched)
+	}
+	result, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{unmatched}, unmatchedMeta, 0)
+	if err != nil || result.SavedJoins != 0 || result.Unmatched != 3 {
+		t.Fatalf("unmatched case=%+v err=%v", result, err)
+	}
+	_, empty := links()
+	if len(empty) != 0 {
+		t.Fatalf("all-unmatched revision retained obsolete links: %v", empty)
+	}
+}
+
 func TestSaveForeclosureRejectsInvalidEvidence(t *testing.T) {
 	ctx := context.Background()
 	if _, ok, err := taxstore.NewForeclosures(nil).Latest(ctx); err == nil || ok {

@@ -24,7 +24,7 @@ type ForeclosureResult struct {
 	Unmatched     int
 }
 
-// SaveForeclosure writes complete cases and parcel joins in the caller's transaction.
+// SaveForeclosure writes cases and replaces numbered-case parcel links in the caller's transaction.
 // The caller rolls back on failure and commits only after the entire file succeeds.
 func SaveForeclosure(ctx context.Context, tx pgx.Tx, cases []union.ForeclosureCase, meta taxsource.Meta, skippedBlocks int) (ForeclosureResult, error) {
 	var result ForeclosureResult
@@ -37,6 +37,8 @@ func SaveForeclosure(ctx context.Context, tx pgx.Tx, cases []union.ForeclosureCa
 		return result, err
 	}
 	digest := meta.Artifact.SHA256()
+	numbered := make(map[string][]string)
+	var caseOrder []string
 	for _, sale := range cases {
 		if len(sale.PINs) == 0 || !foreclosureAmountValid(sale.OpeningBid) || !foreclosureAmountValid(sale.CurrentBid) || !foreclosureAmountValid(sale.UpsetBid) {
 			return result, errors.New("invalid foreclosure case")
@@ -87,6 +89,7 @@ file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now()
 			return result, fmt.Errorf("save foreclosure case: %w", err)
 		}
 		result.SavedCases++
+		matched := make([]string, 0, len(sale.PINs))
 		for _, pin := range sale.PINs {
 			var parcelID string
 			err := tx.QueryRow(ctx, `SELECT id FROM parcels WHERE county_id=$1 AND source_name=$2 AND source_parcel_id=$3`, county.Union, "union_county_gis", pin.ParcelKey).Scan(&parcelID)
@@ -106,6 +109,20 @@ VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
 				return result, fmt.Errorf("save foreclosure parcel: %w", err)
 			}
 			result.SavedJoins++
+			matched = append(matched, parcelID)
+		}
+		if number != nil {
+			if _, ok := numbered[caseID]; !ok {
+				caseOrder = append(caseOrder, caseID)
+				numbered[caseID] = make([]string, 0, len(sale.PINs))
+			}
+			numbered[caseID] = append(numbered[caseID], matched...)
+		}
+	}
+	for _, caseID := range caseOrder {
+		_, err = tx.Exec(ctx, `DELETE FROM tax_foreclosure_parcels WHERE case_id=$1 AND NOT (parcel_id = ANY($2::uuid[]))`, caseID, numbered[caseID])
+		if err != nil {
+			return result, fmt.Errorf("remove obsolete foreclosure parcel links: %w", err)
 		}
 	}
 	if err := ActivateImport(ctx, tx, id); err != nil {

@@ -254,6 +254,31 @@ func testGoldenUnionTaxJob(t *testing.T) {
 	if elapsed >= 5*time.Second {
 		t.Fatalf("golden tax job exceeded 5s: %v", elapsed)
 	}
+	var caseID, currentLink string
+	if err := pool.QueryRow(ctx, `SELECT c.id::text,j.id::text FROM tax_foreclosure_cases c
+JOIN tax_foreclosure_parcels j ON j.case_id=c.id JOIN parcels p ON p.id=j.parcel_id
+WHERE c.case_number='26M000471-890' AND p.source_parcel_id='09125043'`).Scan(&caseID, &currentLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant)
+VALUES('union','179','union_county_gis','07129163',true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO tax_foreclosure_parcels(case_id,parcel_id)
+SELECT $1::uuid,p.id FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id='07129163'`, caseID); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var links int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_parcels WHERE case_id=$1`, caseID).Scan(&links); err != nil || links != 1 {
+		t.Fatalf("unchanged foreclosure file retained obsolete link: links=%d err=%v", links, err)
+	}
+	var retained string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_parcels WHERE case_id=$1`, caseID).Scan(&retained); err != nil || retained != currentLink {
+		t.Fatalf("current foreclosure PIN changed link ID: before=%s after=%s err=%v", currentLink, retained, err)
+	}
 }
 
 func TestDuplicateBillingRetry(t *testing.T) {

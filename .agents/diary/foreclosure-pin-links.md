@@ -1,0 +1,2 @@
+[Out-of-scope decision] Keep hash-based, unnumbered case rows when a file changes their PIN list. This fix removes obsolete links only from a numbered case whose stable case number identifies the same case. Reconciling unnumbered case identities needs a separate rule.
+[Scope tangent worth pursuing later] A case that disappears from a complete replacement file can remain in the case table. This task only reconciles PIN links for numbered cases that are present in the file; removal of absent cases needs a separate source rule.
