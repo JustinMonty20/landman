@@ -1,0 +1,1 @@
+- [Out-of-scope decision] Keep the later S3 bucket trigger outside this foreclosure refactor. The reconciliation module uses verified source metadata and database state, so the future trigger can call the same tax job without local-path logic in the module.
