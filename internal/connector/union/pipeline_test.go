@@ -252,6 +252,9 @@ func TestPipelinePDFTextBlocksAndValidation(t *testing.T) {
 		bad           bool
 	}{
 		{name: "hex parcel with suffix space", content: "BT <50617263656C3A2030322E3137362E303131203630> Tj 1 0 0 1 0 20 Tm (Owner: First) Tj ET", keys: []string{"02176011 60"}, owners: []string{"First"}},
+		{name: "horizontal Tm fragments", content: "BT 1 0 0 1 50 700 Tm (Parcel:) Tj 1 0 0 1 120 700 Tm (02.239.077) Tj 1 0 0 1 50 680 Tm (Owner:) Tj 1 0 0 1 130 680 Tm (First) Tj 1 0 0 1 50 660 Tm (Tax Value:) Tj 1 0 0 1 145 660 Tm ($10.00) Tj ET", keys: []string{"02239077"}, owners: []string{"First"}, cents: []int64{1000}},
+		{name: "horizontal Td fragments", content: "BT 1 0 0 1 50 700 Tm (Parcel:) Tj 60 0 Td (02.239.077) Tj 0 -20 Td (Owner:) Tj 60 0 Td (First) Tj 0 -20 Td (Tax Value:) Tj 80 0 Td ($10.00) Tj ET", keys: []string{"02239077"}, owners: []string{"First"}, cents: []int64{1000}},
+		{name: "invalid horizontal value", content: "BT 1 0 0 1 50 700 Tm (Parcel:) Tj 1 0 0 1 120 700 Tm (02.239.077) Tj 1 0 0 1 50 680 Tm (Tax Value:) Tj 1 0 0 1 145 680 Tm (invalid) Tj ET", bad: true},
 		{name: "separate properties", content: "BT (Parcel: 02.239.077) Tj 1 0 0 1 0 20 Tm (Owner: First) Tj 1 0 0 1 0 40 Tm (Tax Value: $10.00) Tj 1 0 0 1 0 60 Tm (Parcel: 07.027.002J80) Tj 1 0 0 1 0 80 Tm (Owner: Second) Tj 1 0 0 1 0 100 Tm (Tax Value: $20.00) Tj ET", keys: []string{"02239077", "07027002J80"}, owners: []string{"First", "Second"}, cents: []int64{1000, 2000}},
 		{name: "invalid second value", content: "BT (Parcel: 02.239.077) Tj 1 0 0 1 0 20 Tm (Tax Value: $10.00) Tj 1 0 0 1 0 40 Tm (Parcel: 07.027.002J80) Tj 1 0 0 1 0 60 Tm (Tax Value: invalid) Tj ET", bad: true},
 		{name: "shared preface", content: "BT (Owner: Common) Tj 1 0 0 1 0 20 Tm (Parcel: 02.239.077) Tj 1 0 0 1 0 40 Tm (Parcel: 07.027.002J80) Tj ET", keys: []string{"02239077", "07027002J80"}, owners: []string{"Common", "Common"}},

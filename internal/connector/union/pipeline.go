@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"regexp"
@@ -236,6 +237,8 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 				content = decoded
 			}
 			var line strings.Builder
+			textX, textY := 0.0, 0.0
+			a, b, c, d := 1.0, 0.0, 0.0, 1.0
 			flush := func() {
 				if value := strings.TrimSpace(line.String()); value != "" {
 					lines = append(lines, value)
@@ -257,7 +260,36 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 				}
 				match := pdfShow.FindSubmatch(token)
 				if match == nil {
-					flush()
+					fields := strings.Fields(string(token))
+					switch fields[len(fields)-1] {
+					case "Tm":
+						values := [6]float64{}
+						for i := range values {
+							value, err := strconv.ParseFloat(fields[i], 64)
+							if err != nil {
+								return nil, fmt.Errorf("invalid PDF text position: %w", err)
+							}
+							values[i] = value
+						}
+						length := math.Hypot(a, b)
+						if math.Abs(a*(values[5]-textY)-b*(values[4]-textX)) > 0.5*length ||
+							math.Abs(a*values[1]-b*values[0]) > 0.01*length*math.Hypot(values[0], values[1]) {
+							flush()
+						}
+						a, b, c, d, textX, textY = values[0], values[1], values[2], values[3], values[4], values[5]
+					case "Td", "TD":
+						dx, errX := strconv.ParseFloat(fields[0], 64)
+						dy, errY := strconv.ParseFloat(fields[1], 64)
+						if errX != nil || errY != nil {
+							return nil, errors.New("invalid PDF text movement")
+						}
+						if dy != 0 {
+							flush()
+						}
+						textX, textY = textX+a*dx+c*dy, textY+b*dx+d*dy
+					default:
+						flush()
+					}
 					continue
 				}
 				if string(match[2]) == "'" || string(match[2]) == "\"" {
