@@ -305,6 +305,137 @@ WHERE c.county_id='union' AND c.source_name='union_foreclosure' AND c.case_numbe
 	}
 }
 
+func TestForeclosuresCurrentReconcilesUnchangedFile(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("DATABASE_URL must name a disposable migrated database")
+	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localTest := config.ConnConfig.Database == "landman_tax_integration" && config.ConnConfig.Host == "127.0.0.1" && config.ConnConfig.Port != 5432
+	ciTest := config.ConnConfig.Database == "landman_test" && config.ConnConfig.Host == "localhost" && config.ConnConfig.Port == 5432
+	if len(config.ConnConfig.Fallbacks) != 0 || (!localTest && !ciTest) {
+		t.Fatal("foreclosure retry test requires the isolated local or PostGIS CI database")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := taxartifact.NewLocal(filepath.Join(t.TempDir(), "private"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := union.NewForeclosureList(filepath.Join("..", "connector", "union", "testdata", "tax", "foreclosure.pdf"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []union.ForeclosureCase
+	meta, err := list.Read(ctx, func(sale union.ForeclosureCase) error { cases = append(cases, sale); return nil })
+	if err != nil || len(cases) == 0 {
+		t.Fatalf("read foreclosure cases: count=%d err=%v", len(cases), err)
+	}
+	caseOne := cases[:1]
+	var unique string
+	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&unique); err != nil {
+		t.Fatal(err)
+	}
+	caseOne[0].CaseNumber = "review-" + unique
+	key := caseOne[0].PINs[0].ParcelKey
+	lateKey := caseOne[0].PINs[1].ParcelKey
+	obsoleteKey := "09999999"
+	var parcelIDs []string
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM tax_foreclosure_cases WHERE county_id='union' AND source_name='union_foreclosure' AND case_number=$1`, caseOne[0].CaseNumber); err != nil {
+			t.Errorf("clean foreclosure case: %v", err)
+		}
+		digest := meta.Artifact.SHA256()
+		if _, err := pool.Exec(context.Background(), `DELETE FROM tax_file_imports WHERE county_id='union' AND source_name=$1 AND source_url=$2 AND file_sha256=$3 AND fetched_at=$4`, meta.Name, meta.URL, digest[:], meta.FetchedAt); err != nil {
+			t.Errorf("clean foreclosure import: %v", err)
+		}
+		if len(parcelIDs) != 0 {
+			if _, err := pool.Exec(context.Background(), `DELETE FROM parcels WHERE id::text = ANY($1)`, parcelIDs); err != nil {
+				t.Errorf("clean foreclosure parcels: %v", err)
+			}
+		}
+	}()
+	seed := func(key string) {
+		t.Helper()
+		var id string
+		if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis',$1,true) RETURNING id::text`, key).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		parcelIDs = append(parcelIDs, id)
+	}
+	seed(key)
+	foreclosures := taxstore.NewForeclosures(pool)
+	check := func(want bool) {
+		t.Helper()
+		current, err := foreclosures.Current(ctx, meta, caseOne)
+		if err != nil || current != want {
+			t.Fatalf("current=%t want=%t err=%v", current, want, err)
+		}
+	}
+	save := func() {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := taxstore.SaveForeclosure(ctx, tx, caseOne, meta, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(false)
+	save()
+	check(true)
+	firstBlock, secondBlock := caseOne[0], caseOne[0]
+	firstBlock.PINs = caseOne[0].PINs[:1]
+	secondBlock.PINs = caseOne[0].PINs[1:]
+	if current, err := foreclosures.Current(ctx, meta, []union.ForeclosureCase{firstBlock, secondBlock}); err != nil || !current {
+		t.Fatalf("repeated numbered blocks current=%t err=%v", current, err)
+	}
+	var caseID, linkID, caseVersion, linkVersion string
+	if err := pool.QueryRow(ctx, `SELECT c.id::text,j.id::text,c.xmin::text,j.xmin::text FROM tax_foreclosure_cases c JOIN tax_foreclosure_parcels j ON j.case_id=c.id WHERE c.case_number=$1`, caseOne[0].CaseNumber).Scan(&caseID, &linkID, &caseVersion, &linkVersion); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	var unchangedCase, unchangedLink, unchangedCaseVersion, unchangedLinkVersion string
+	if err := pool.QueryRow(ctx, `SELECT c.id::text,j.id::text,c.xmin::text,j.xmin::text FROM tax_foreclosure_cases c JOIN tax_foreclosure_parcels j ON j.case_id=c.id WHERE c.case_number=$1`, caseOne[0].CaseNumber).Scan(&unchangedCase, &unchangedLink, &unchangedCaseVersion, &unchangedLinkVersion); err != nil {
+		t.Fatal(err)
+	}
+	if caseID != unchangedCase || linkID != unchangedLink || caseVersion != unchangedCaseVersion || linkVersion != unchangedLinkVersion {
+		t.Fatal("current check changed stored case or link")
+	}
+	seed(lateKey)
+	seed(obsoleteKey)
+	check(false)
+	save()
+	check(true)
+	if _, err := pool.Exec(ctx, `INSERT INTO tax_foreclosure_parcels (case_id,parcel_id) SELECT $1::uuid,id FROM parcels WHERE source_parcel_id=$2`, caseID, obsoleteKey); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	save()
+	check(true)
+	var remaining int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_parcels WHERE case_id=$1`, caseID).Scan(&remaining); err != nil || remaining != 2 {
+		t.Fatalf("reconciled links=%d err=%v", remaining, err)
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := foreclosures.Current(cancelled, meta, caseOne); err == nil {
+		t.Fatal("canceled current check succeeded")
+	}
+}
+
 func TestSaveForeclosureRejectsInvalidEvidence(t *testing.T) {
 	ctx := context.Background()
 	if _, ok, err := taxstore.NewForeclosures(nil).Latest(ctx); err == nil || ok {
