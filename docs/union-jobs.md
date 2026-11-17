@@ -2,7 +2,7 @@
 
 ## Manual commands
 
-Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000018_tax_file_imports.sql`.
+Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000020_union_qualification.sql` for zoning and roads. The tax-only command needs migration `000018_tax_file_imports.sql`.
 
 The parcel and soil commands contact the live Union GIS or USDA services. The tax job reads operator files; it does not download county files. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
@@ -23,6 +23,15 @@ The parcel and soil commands contact the live Union GIS or USDA services. The ta
 
 # Retry overlaps and required USDA screening without either county fetch.
 ./landman run union.soil.screening
+
+# Publish county zoning, jurisdiction, and boundary as one group.
+./landman run union.gis.zoning
+
+# Publish road centerlines as a separate group.
+./landman run union.gis.roads
+
+# Recompute stored qualification evidence without a county fetch.
+./landman run union.qualification.assess
 ```
 
 Every source import and derived refresh uses `jobs.Runner.Run`. The default command keeps its ten-minute overall deadline. Each single-source command shares that deadline with its downstream refresh. A source error or non-clean outcome stops dependent work. A derived error fails the command but does not change an already successful source attempt.
@@ -92,12 +101,15 @@ Set both independent calendar expressions explicitly. There are no default sched
 ```sh
 export UNION_PARCELS_CRON='CRON_TZ=America/New_York 0 2 * * 0,3'
 export UNION_SOIL_CRON='CRON_TZ=UTC 0 3 1 */3 *'
+export UNION_ZONING_CRON='CRON_TZ=UTC 0 4 * * 1'
+export UNION_ROADS_CRON='CRON_TZ=UTC 0 5 * * 1'
+export UNION_QUALIFICATION_CRON='CRON_TZ=UTC 0 6 * * *'
 ./landman schedule
 ```
 
-The example imports parcels on Sunday and Wednesday at 02:00 New York time, and soil at 03:00 UTC on the first day of each calendar quarter. Change either environment variable independently, then restart the process. Each expression requires `CRON_TZ` and five calendar fields. Interval descriptors such as `@every` are not accepted by this command. Use UTC to avoid daylight-saving transitions.
+The example imports parcels on Sunday and Wednesday at 02:00 New York time, soil at 03:00 UTC on the first day of each calendar quarter, zoning and roads on Mondays at 04:00 and 05:00 UTC, and qualification evidence daily at 06:00 UTC. Change each calendar independently, then restart the process. Each expression requires `CRON_TZ` and five calendar fields. Interval descriptors such as `@every` are not accepted by this command. Use UTC to avoid daylight-saving transitions.
 
-Only the two source jobs have schedules. After either source succeeds cleanly, the executable runs `union.soil.screening`. It refreshes overlaps and screening from the current stored soil set. There is no independent screening cron.
+Parcel, soil, zoning, and roads have independent source schedules. Qualification also has an independent reconciliation schedule and runs once at scheduler startup. After parcel or soil succeeds cleanly, the executable runs both derived screening and qualification reconciliation. After zoning or roads succeeds cleanly, it runs qualification reconciliation only. A downstream failure does not erase a published source generation. No source import is retried automatically after a missed tick. There is no independent screening cron.
 
 The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its downstream work share a ten-minute deadline. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
 
@@ -107,7 +119,8 @@ The scheduler waits for the next due time on startup. It does not replay missed 
 SELECT job_id, attempt_kind, outcome, processed_count, quarantined_count,
        started_at, finished_at, error_text
 FROM job_attempts
-WHERE job_id IN ('union.gis.parcels', 'union.gis.soil', 'union.soil.screening')
+WHERE job_id IN ('union.gis.parcels', 'union.gis.soil', 'union.soil.screening',
+                 'union.gis.zoning', 'union.gis.roads', 'union.qualification.assess')
 ORDER BY started_at DESC;
 ```
 

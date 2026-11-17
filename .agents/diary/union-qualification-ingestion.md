@@ -1,0 +1,5 @@
+# Union qualification ingestion
+
+- **Out-of-scope decision.** The operator selected county ingestion and parcel evidence. FEMA ingestion and application features remain outside this PR. They remain required for V1 under `plans/parcel-qualification-layers.md`.
+- **Scope tangent.** The qualification plan describes the application and runner as planned. Both now have code in this checkout. Keep the existing plan unchanged and record current dependencies in the scoped implementation plan.
+- **Source finding.** Earlier Python metadata and two-feature requests returned HTTP 403. The established Go client with `ParcelDataCollection/0.0.1` returned HTTP 200. A bounded run captured metadata and two features for all 15 listed layers. Only sanitized county attributes belong in committed fixtures; initial Marshville and Waxhaw samples included owner data. Further bounded samples verified `Zoning` holds municipal district codes and `ZoneDesc` holds descriptions. The road layer supplies `FullName`, `FTR_CODE`, and `STATUS`; `RoadClass` is blank in its first samples.

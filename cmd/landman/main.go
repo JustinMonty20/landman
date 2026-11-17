@@ -15,6 +15,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/jobs"
+	"github.com/JustinMonty20/landman/internal/qualification"
 	"github.com/JustinMonty20/landman/internal/soil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,17 +38,22 @@ func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Def
 }
 
 const (
-	parcelJobID    = "union.gis.parcels"
-	soilJobID      = "union.gis.soil"
-	screeningJobID = "union.soil.screening"
-	taxJobID       = "union.tax"
-	jobTimeout     = 10 * time.Minute
+	parcelJobID        = "union.gis.parcels"
+	soilJobID          = "union.gis.soil"
+	screeningJobID     = "union.soil.screening"
+	taxJobID           = "union.tax"
+	zoningJobID        = "union.gis.zoning"
+	roadsJobID         = "union.gis.roads"
+	qualificationJobID = "union.qualification.assess"
+	jobTimeout         = 10 * time.Minute
 )
 
 // unionExecutor preserves source outcomes when a separate downstream attempt fails.
 type unionExecutor struct {
-	runner  requiredRunner
-	refresh func(context.Context) error
+	runner      requiredRunner
+	refresh     func(context.Context) error
+	afterSource func(context.Context, string) error
+	qualify     func(context.Context) error
 }
 
 func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
@@ -55,7 +61,11 @@ func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (job
 	defer cancel()
 	outcome, result, err := e.runner.Run(ctx, definition)
 	if err == nil && outcome == jobs.OutcomeSuccess {
-		err = e.refresh(ctx)
+		if e.afterSource != nil && definition.ID != qualificationJobID {
+			err = e.afterSource(ctx, definition.ID)
+		} else {
+			err = e.refresh(ctx)
+		}
 	}
 	return outcome, result, err
 }
@@ -69,7 +79,7 @@ func command(args []string) (string, error) {
 	}
 	if len(args) == 2 && args[0] == "run" {
 		switch args[1] {
-		case parcelJobID, soilJobID, screeningJobID, taxJobID:
+		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID:
 			return args[1], nil
 		}
 	}
@@ -79,13 +89,13 @@ func command(args []string) (string, error) {
 		}
 		return "reprocess", nil
 	}
-	return "", fmt.Errorf("usage: landman [schedule | run <%s|%s|%s|%s> | reprocess %s --limit N]", parcelJobID, soilJobID, screeningJobID, taxJobID, parcelJobID)
+	return "", fmt.Errorf("usage: landman [schedule | run <job ID> | reprocess %s --limit N]", parcelJobID)
 }
 
 func schedules(getenv func(string) string) (map[string]string, error) {
-	values := make(map[string]string, 2)
+	values := make(map[string]string, 5)
 	for _, entry := range []struct{ id, env string }{
-		{parcelJobID, "UNION_PARCELS_CRON"}, {soilJobID, "UNION_SOIL_CRON"},
+		{parcelJobID, "UNION_PARCELS_CRON"}, {soilJobID, "UNION_SOIL_CRON"}, {zoningJobID, "UNION_ZONING_CRON"}, {roadsJobID, "UNION_ROADS_CRON"}, {qualificationJobID, "UNION_QUALIFICATION_CRON"},
 	} {
 		text := getenv(entry.env)
 		fields := strings.Fields(text)
@@ -180,19 +190,41 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create GIS source: %w", err)
 	}
+	qstore := qualification.Store{Pool: pool}
+	countyRequest := func(ctx context.Context, fn func(context.Context) (jobs.Result, error)) (jobs.Result, error) {
+		var result jobs.Result
+		err := withCountyHostLock(ctx, dsn, func(ctx context.Context) error { var e error; result, e = fn(ctx); return e })
+		return result, err
+	}
 	definitions := []jobs.Definition{
 		{ID: parcelJobID, Schedule: calendar[parcelJobID], Run: func(ctx context.Context) (jobs.Result, error) {
-			return importParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool))
+			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
+				return importParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool))
+			})
 		}},
 		{ID: soilJobID, Schedule: calendar[soilJobID], Run: func(ctx context.Context) (jobs.Result, error) {
-			polygons, units, err := gisSource.FetchSoilPolygons(ctx)
-			if err != nil {
-				return jobs.Result{}, fmt.Errorf("fetch soil polygons: %w", err)
-			}
-			_, err = soil.StoreWithSet(ctx, dsn, county.Union, gisSource.Name(), polygons, units)
-			return jobs.Result{Processed: len(polygons)}, err
+			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
+				polygons, units, err := gisSource.FetchSoilPolygons(ctx)
+				if err != nil {
+					return jobs.Result{}, fmt.Errorf("fetch soil polygons: %w", err)
+				}
+				_, err = soil.StoreWithSet(ctx, dsn, county.Union, gisSource.Name(), polygons, units)
+				return jobs.Result{Processed: len(polygons)}, err
+			})
 		}},
 	}
+	if mode == "schedule" || mode == zoningJobID || mode == roadsJobID {
+		for _, entry := range []struct{ id, group string }{{zoningJobID, union.QualificationZoning}, {roadsJobID, union.QualificationRoads}} {
+			group := entry.group
+			definitions = append(definitions, jobs.Definition{ID: entry.id, Schedule: calendar[entry.id], Run: func(ctx context.Context) (jobs.Result, error) {
+				return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
+					n, e := qstore.Refresh(ctx, gisSource, group)
+					return jobs.Result{Processed: n}, e
+				})
+			}})
+		}
+	}
+
 	if mode == taxJobID || mode == "all" {
 		definitions = append(definitions, jobs.Definition{ID: taxJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 			return taxjob.Run(ctx, pool, taxInput)
@@ -209,22 +241,51 @@ func run(ctx context.Context) error {
 			}})
 		})
 	}
-	executor := unionExecutor{runner: runner, refresh: refresh}
+	qualificationRefresh := func(ctx context.Context) error {
+		return withQualificationLock(ctx, dsn, func(ctx context.Context) error {
+			return runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+				n, e := qstore.Reconcile(ctx)
+				return jobs.Result{Processed: n}, e
+			}})
+		})
+	}
+	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, afterSource: func(ctx context.Context, id string) error {
+		if id == parcelJobID || id == soilJobID {
+			screeningError := refresh(ctx)
+			qualificationError := qualificationRefresh(ctx)
+			return errors.Join(screeningError, qualificationError)
+		}
+		return qualificationRefresh(ctx)
+	}}
 	if mode == "reprocess" {
 		limit, _ := reprocessLimit(os.Args[4])
 		return runRequired(ctx, executor, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReprocess, Run: func(ctx context.Context) (jobs.Result, error) {
-			return reprocessParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool), limit)
+			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
+				return reprocessParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool), limit)
+			})
 		}})
 	}
 	if mode == "schedule" {
+		definitions = append(definitions, jobs.Definition{ID: qualificationJobID, Schedule: calendar[qualificationJobID], Run: func(ctx context.Context) (jobs.Result, error) {
+			n, e := qstore.Reconcile(ctx)
+			return jobs.Result{Processed: n}, e
+		}})
 		scheduler, err := jobs.NewScheduler(executor, definitions)
 		if err != nil {
 			return err
 		}
+		startupCtx, startupCancel := context.WithTimeout(ctx, jobTimeout)
+		if err := qualificationRefresh(startupCtx); err != nil {
+			log.Printf("qualification startup reconciliation: %v", err)
+		}
+		startupCancel()
 		scheduler.Start()
 		<-ctx.Done()
 		<-scheduler.Stop().Done()
 		return nil
+	}
+	if mode == qualificationJobID {
+		return qualificationRefresh(ctx)
 	}
 	if mode == taxJobID {
 		return runRequired(ctx, runner, definitions[len(definitions)-1])
@@ -246,6 +307,11 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 			}
 			if err := runRequired(ctx, runner, definition); err != nil {
 				return err
+			}
+			if executor.qualify != nil {
+				if err := executor.qualify(ctx); err != nil {
+					return err
+				}
 			}
 		} else if mode == definition.ID {
 			return runRequired(ctx, executor, definition)
@@ -294,4 +360,60 @@ func withRefreshLock(ctx context.Context, dsn string, refresh func(context.Conte
 		return fmt.Errorf("wait for derived refresh exclusion: %w", err)
 	}
 	return refresh(ctx)
+}
+
+// Cross-process host exclusion keeps distinct manual and scheduled county jobs
+// under the same request budget without changing the scheduler.
+func withCountyHostLock(ctx context.Context, dsn string, fn func(context.Context) error) error {
+	return withAdvisoryLock(ctx, dsn, "county-host:atlas.unioncountync.gov", func(ctx context.Context) error {
+		err := fn(ctx)
+		if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+			return nil
+		}
+	})
+}
+func withQualificationLock(ctx context.Context, dsn string, fn func(context.Context) error) error {
+	return withAdvisoryLock(ctx, dsn, "qualification-refresh:union", fn)
+}
+func withAdvisoryLock(ctx context.Context, dsn, key string, fn func(context.Context) error) error {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return err
+	}
+	conn, err := pgx.ConnectConfig(ctx, config.ConnConfig)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = conn.Close(closeCtx)
+	}()
+	if _, err = conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1,0))`, key); err != nil {
+		return fmt.Errorf("wait for %s: %w", key, err)
+	}
+	workCtx, cancel := context.WithCancelCause(ctx)
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		if err := conn.PgConn().WaitForNotification(workCtx); err != nil && workCtx.Err() == nil {
+			cancel(fmt.Errorf("%s lock session lost: %w", key, err))
+		} else if err == nil && workCtx.Err() == nil {
+			cancel(fmt.Errorf("%s lock session received unexpected notification", key))
+		}
+	}()
+	result := fn(workCtx)
+	cause := context.Cause(workCtx)
+	cancel(nil)
+	<-monitorDone
+	if cause != nil {
+		return cause
+	}
+	return result
 }
