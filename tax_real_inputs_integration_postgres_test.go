@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
@@ -158,6 +159,68 @@ func TestRealTaxInputsDisposable(t *testing.T) {
 	}
 	t.Logf("pipeline parsed=%d skipped pages=%d saved=%d matched UUID=%s", len(properties), pages, pr.Saved, pid)
 	// Rollback removes all test writes. The whole container is also removed after the test.
+}
+
+func TestGoldenUnionTaxJobDisposable(t *testing.T) {
+	requireDisposableTaxDB(t)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM tax_foreclosure_cases; DELETE FROM tax_file_imports; DELETE FROM job_attempts WHERE job_id='union.tax'; DELETE FROM parcels`); err != nil {
+			t.Errorf("clean golden test rows: %v", err)
+		}
+		pool.Close()
+	}()
+	for _, key := range []string{"09125043", "09336350", "02239077"} {
+		if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis',$1,true)`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile("internal/connector/union/testdata/tax/billing.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	billingPath := filepath.Join(t.TempDir(), "billing.zip")
+	file, err := os.Create(billingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	entry, err := archive.Create("WKBILA-golden.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = entry.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err = archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	previousConfig, previousArgs := taxConfig, os.Args
+	taxConfig = taxRunConfig{Enabled: true, Config: taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "internal/connector/union/testdata/tax/delinquent.csv", BillingPath: billingPath, ForeclosurePath: "internal/connector/union/testdata/tax/foreclosure.pdf", PipelinePath: "internal/connector/union/testdata/tax/pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}}
+	os.Args = []string{"landman", "run", taxJobID}
+	defer func() { taxConfig, os.Args = previousConfig, previousArgs }()
+	start := time.Now()
+	if err = run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	for table, want := range map[string]int{"tax_delinquent_balances": 1, "tax_bills": 1, "tax_foreclosure_cases": 3, "tax_foreclosure_parcels": 1, "tax_foreclosure_pipeline": 1} {
+		var got int
+		if err = pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s rows=%d want=%d err=%v", table, got, want, err)
+		}
+	}
+	t.Logf("golden union.tax duration=%v", elapsed)
+	if elapsed >= 5*time.Second {
+		t.Fatalf("golden tax job exceeded 5s: %v", elapsed)
+	}
 }
 
 func TestDuplicateBillingRetry(t *testing.T) {
