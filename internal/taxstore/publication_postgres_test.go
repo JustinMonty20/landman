@@ -48,15 +48,19 @@ VALUES ('union','179','union_county_gis','PUBLICATION-PARCEL',true) RETURNING id
 	if err != nil || first.Saved != 1 || first.Unmatched != 512 || first.Deleted != 0 {
 		t.Fatalf("first publication: %+v %v", first, err)
 	}
-	changed := []union.BillRow{{ParcelKey: "PUBLICATION-PARCEL", Year: 2026, TotalTaxes: 200}}
-	broken := encode(append(rows, changed...))
+	rows[0].TotalTaxes = 200
+	broken := encode(append(rows, union.BillRow{ParcelKey: "PUBLICATION-PARCEL", Year: 2026, TotalTaxes: 300}))
 	if _, err := taxstore.PublishBillFile(ctx, pool, bytes.NewReader(broken[:len(broken)-1]), secondMeta, 0); err == nil {
 		t.Fatal("accepted incomplete staged file")
 	}
 	var amount string
+	var digest []byte
 	var active int
-	if err := pool.QueryRow(ctx, `SELECT total_taxes::text FROM tax_bills WHERE parcel_id::text=$1`, parcelID).Scan(&amount); err != nil || amount != "1.00" {
-		t.Fatalf("rollback changed bill: %s %v", amount, err)
+	if err := pool.QueryRow(ctx, `SELECT total_taxes::text,file_sha256 FROM tax_bills WHERE parcel_id::text=$1`, parcelID).Scan(&amount, &digest); err != nil || amount != "1.00" || !bytes.Equal(digest, firstMeta.SHA256[:]) {
+		t.Fatalf("rollback changed bill: amount=%s digest=%x err=%v", amount, digest, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM tax_file_imports WHERE source_name='union_billing' AND source_url=$1`, firstMeta.URL).Scan(&active); err != nil || active != 1 {
+		t.Fatalf("rollback saved failed import: %d %v", active, err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM tax_file_imports WHERE source_name='union_billing' AND active AND file_sha256=$1`, firstMeta.SHA256[:]).Scan(&active); err != nil || active != 1 {
 		t.Fatalf("rollback changed active import: %d %v", active, err)

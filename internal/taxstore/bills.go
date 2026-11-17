@@ -28,7 +28,8 @@ func SaveBill(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta taxsour
 	return saveBillBatch(ctx, tx, rows, meta, skippedPP, true)
 }
 
-// PublishBillFile replaces bills from a complete staged row stream in one transaction.
+// PublishBillFile replaces bills from a complete Gob-encoded BillRow stream in one transaction.
+// The caller must parse and validate the retained source file before it supplies the stream.
 func PublishBillFile(ctx context.Context, pool *pgxpool.Pool, input io.Reader, meta taxsource.Meta, skippedPP int) (BillResult, error) {
 	add := func(total *BillResult, batch BillResult) {
 		total.Saved += batch.Saved

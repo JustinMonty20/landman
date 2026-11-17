@@ -29,7 +29,8 @@ func SaveDelinquent(ctx context.Context, tx pgx.Tx, rows []union.DelinquentRow, 
 	return saveDelinquentBatch(ctx, tx, rows, meta, skippedPP, skippedRR, true)
 }
 
-// PublishDelinquentFile replaces balances from a complete staged row stream in one transaction.
+// PublishDelinquentFile replaces balances from a complete Gob-encoded DelinquentRow stream in one transaction.
+// The caller must parse and validate the retained source file before it supplies the stream.
 func PublishDelinquentFile(ctx context.Context, pool *pgxpool.Pool, input io.Reader, meta taxsource.Meta, skippedPP, skippedRR int) (DelinquentResult, error) {
 	add := func(total *DelinquentResult, batch DelinquentResult) {
 		total.Saved += batch.Saved
