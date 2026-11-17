@@ -62,6 +62,8 @@ make -s migrate-up
 
 Use `-s` to suppress Make recipe output that can contain database connection settings. The API checks for authentication tables at startup. It does not apply migrations automatically. The login migration does not change parcel or tax records.
 
+`auth.New` mounts `/api/v1/*` behind the same session lookup used by `/api/me`. It checks the configured host and sets no-store headers before the parcel handler runs. A missing, expired, revoked, or disallowed session cannot read parcel evidence. See [Parcel API reference](parcel-api.md) for GET routes and limits.
+
 Expired attempts and sessions are rejected immediately. Their database rows are removed on a later login start. User records remain until an administrator deletes them. There is no account-deletion screen yet.
 
 ## Run

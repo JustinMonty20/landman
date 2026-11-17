@@ -387,3 +387,43 @@ func TestAuthMigration(t *testing.T) {
 		t.Fatal("user delete did not revoke sessions")
 	}
 }
+func TestProtectedParcelRoutes(t *testing.T) {
+	f := setup(t)
+	called := 0
+	f.handler.mountData(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called++; w.WriteHeader(http.StatusNoContent) }))
+	for _, path := range []string{"/api/v1/parcels", "/api/v1/parcels/map", "/api/v1/parcels/lookup", "/api/v1/sources", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/tax", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/soil"} {
+		if w := f.request("GET", path); w.Code != http.StatusUnauthorized {
+			t.Errorf("unprotected %s: %d", path, w.Code)
+		}
+	}
+	session := f.login(t, nil)
+	if w := f.request("GET", "/api/v1/parcels", session); w.Code != http.StatusNoContent || called != 1 {
+		t.Fatalf("signed in status %d called %d", w.Code, called)
+	}
+	if w := f.request("GET", "/api/v1/parcels", &http.Cookie{Name: session.Name, Value: "bad"}); w.Code != http.StatusUnauthorized {
+		t.Fatal("malformed session accepted")
+	}
+	if _, err := f.pool.Exec(context.Background(), "UPDATE auth_sessions SET expires_at=now()-interval '1 second' WHERE token_hash=$1", digest(session.Value)); err != nil {
+		t.Fatal(err)
+	}
+	if f.request("GET", "/api/v1/parcels", session).Code != 401 {
+		t.Fatal("expired session accepted")
+	}
+	if _, err := f.pool.Exec(context.Background(), "UPDATE auth_sessions SET expires_at=now()+interval '1 hour' WHERE token_hash=$1", digest(session.Value)); err != nil {
+		t.Fatal(err)
+	}
+	f.handler.allowed = map[string]bool{}
+	if f.request("GET", "/api/v1/parcels", session).Code != 401 {
+		t.Fatal("disallowed session accepted")
+	}
+	f.handler.allowed["buyer@example.test"] = true
+	if _, err := f.pool.Exec(context.Background(), "DELETE FROM auth_sessions WHERE token_hash=$1", digest(session.Value)); err != nil {
+		t.Fatal(err)
+	}
+	if f.request("GET", "/api/v1/parcels", session).Code != 401 {
+		t.Fatal("revoked session accepted")
+	}
+	if called != 1 {
+		t.Fatalf("data handler called %d times", called)
+	}
+}
