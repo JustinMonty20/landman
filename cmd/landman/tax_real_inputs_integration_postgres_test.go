@@ -235,10 +235,10 @@ func testGoldenUnionTaxJob(t *testing.T) {
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	previousConfig, previousArgs := taxConfig, os.Args
-	taxConfig = taxRunConfig{Enabled: true, Config: taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "internal/connector/union/testdata/tax/delinquent.csv", BillingPath: billingPath, ForeclosurePath: foreclosurePath, PipelinePath: "internal/connector/union/testdata/tax/pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}}
+	previousArgs := os.Args
+	setManualTaxEnv(t, taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "internal/connector/union/testdata/tax/delinquent.csv", BillingPath: billingPath, ForeclosurePath: foreclosurePath, PipelinePath: "internal/connector/union/testdata/tax/pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"})
 	os.Args = []string{"landman", "run", taxJobID}
-	defer func() { taxConfig, os.Args = previousConfig, previousArgs }()
+	defer func() { os.Args = previousArgs }()
 	start := time.Now()
 	if err = run(ctx); err != nil {
 		t.Fatal(err)
@@ -553,10 +553,10 @@ func TestRealUnionTaxJobDisposable(t *testing.T) {
 		t.Logf("seeded %d distinct real billing parcel keys in disposable database", n+3)
 	}
 	cfg := taxjob.Config{ArtifactDir: filepath.Join(t.TempDir(), "private"), DelinquentPath: "artifacts/tax-input/delinquent.csv", BillingPath: "artifacts/tax-input/billing.zip", ForeclosurePath: "artifacts/tax-input/foreclosure-sales.pdf", PipelinePath: "artifacts/tax-input/foreclosure-pipeline.pdf", BillingSourceURL: "https://www.unioncountync.gov/home/showpublisheddocument/6045/639234409945470000", PipelineSourceURL: "https://www.unioncountync.gov/home/showdocument?id=4784"}
-	previousConfig, previousArgs := taxConfig, os.Args
-	taxConfig = taxRunConfig{Enabled: true, Config: cfg}
+	previousArgs := os.Args
+	setManualTaxEnv(t, cfg)
 	os.Args = []string{"landman", "run", taxJobID}
-	defer func() { taxConfig, os.Args = previousConfig, previousArgs }()
+	defer func() { os.Args = previousArgs }()
 	if err := run(ctx); err != nil {
 		t.Fatal(err)
 	}
