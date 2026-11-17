@@ -690,3 +690,130 @@ func TestPipelinePresentationXMLRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestPipelineOperatorPDF(t *testing.T) {
+	path := os.Getenv("UNION_PIPELINE_TEST_FILE")
+	if path == "" {
+		t.Skip("operator file not configured")
+	}
+	list := pipelineFixture(t, path)
+	var rows []PipelineProperty
+	meta, err := list.Read(context.Background(), func(row PipelineProperty) error { rows = append(rows, row); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped, err := list.Skipped(context.Background(), meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("verified PDF produced no parcels; skipped=%d", skipped)
+	}
+	t.Logf("verified bytes=%d rows=%d skipped=%d SHA-256=%x", meta.Artifact.Size(), len(rows), skipped, meta.SHA256)
+}
+
+func TestPipelinePDFHybridCrossReference(t *testing.T) {
+	content := []byte("BT (Parcel: 02.239.077) Tj ET")
+	objects := [][]byte{
+		[]byte("<< /Type/Catalog /Pages 2 0 R >>"),
+		[]byte("<< /Type/Pages /Kids [3 0 R] /Count 1 >>"),
+		[]byte("<< /Type/Page /Parent 2 0 R /Contents 4 0 R >>"),
+		append([]byte(fmt.Sprintf("<< /Length %d >>\nstream\n", len(content))), append(content, []byte("\nendstream")...)...),
+		append([]byte("<< /Type/XRef /Size 6 /W [1 4 2] /Index [0 1] /Length 7 >>\nstream\n"), []byte{0, 0, 0, 0, 0, 0xff, 0xff, '\n', 'e', 'n', 'd', 's', 't', 'r', 'e', 'a', 'm'}...),
+	}
+	original := pipelineTestPDFObjects(objects)
+	previous := bytes.Index(original, []byte("xref\n0 6\n"))
+	stream := bytes.Index(original, []byte("5 0 obj"))
+	if previous < 0 || stream < 0 {
+		t.Fatal("fixture missing cross-reference offsets")
+	}
+	update := func(section string, prev, ref int) []byte {
+		result := append([]byte(nil), original...)
+		return fmt.Appendf(result, "xref\r\n%s\r\ntrailer\r\n<</Size 6/Root 1 0 R/Prev %d/XRefStm %d>>\r\nstartxref\r\n%d\r\n%%%%EOF", section, prev, ref, len(original))
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+		bad  bool
+	}{
+		{"empty incremental section", update("0 0", previous, stream), false},
+		{"invalid previous offset", update("0 0", previous+1, stream), true},
+		{"invalid previous entry", func() []byte {
+			body := update("0 0", previous, stream)
+			pageOffset := bytes.Index(body, []byte("3 0 obj"))
+			return bytes.Replace(body, []byte(fmt.Sprintf("%010d 00000 n", pageOffset)), []byte("0000000001 00000 n"), 1)
+		}(), true},
+		{"free page overrides previous entry", update("3 1\r\n0000000000 65535 f", previous, stream), true},
+		{"invalid cross-reference stream", update("0 0", previous, stream+1), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hybrid.pdf")
+			if err := os.WriteFile(path, tc.data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			var rows []PipelineProperty
+			_, err := list.Read(context.Background(), func(row PipelineProperty) error { rows = append(rows, row); return nil })
+			if tc.bad {
+				if err == nil || len(rows) != 0 {
+					t.Fatalf("err=%v rows=%+v", err, rows)
+				}
+				return
+			}
+			if err != nil || len(rows) != 1 || rows[0].ParcelKey != "02239077" {
+				t.Fatalf("err=%v rows=%+v", err, rows)
+			}
+		})
+	}
+}
+
+func TestPipelinePDFToUnicodeFont(t *testing.T) {
+	cmap := []byte("1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n1 beginbfchar\n<00B1> <2013>\nendbfchar\n1 beginbfrange\n<000A> <000B> <0030>\nendbfrange\n")
+	var compressed bytes.Buffer
+	writer := zlib.NewWriter(&compressed)
+	if _, err := writer.Write(cmap); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("BT /F1 12 Tf (Parcel: 02.239.077) Tj T* (Owner: Foo) Tj /F3 12 Tf [<00B1>] TJ /F1 12 Tf (Bar) Tj ET")
+	objects := [][]byte{
+		[]byte("<< /Type/Catalog /Pages 2 0 R >>"),
+		[]byte("<< /Type/Pages /Kids [3 0 R] /Count 1 >>"),
+		[]byte("<< /Type/Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R /F3 6 0 R >> >> /Contents 4 0 R >>"),
+		append([]byte(fmt.Sprintf("<< /Length %d >>\nstream\n", len(content))), append(content, []byte("\nendstream")...)...),
+		[]byte("<< /Type/Font /Subtype/TrueType /Encoding/WinAnsiEncoding >>"),
+		[]byte("<< /Type/Font /Subtype/Type0 /Encoding/Identity-H /ToUnicode 7 0 R >>"),
+		append([]byte(fmt.Sprintf("<< /Length %d /Filter/FlateDecode >>\nstream\n", compressed.Len())), append(compressed.Bytes(), []byte("\nendstream")...)...),
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+		bad  bool
+	}{
+		{"mapped glyph", pipelineTestPDFObjects(objects), false},
+		{"missing glyph", bytes.Replace(pipelineTestPDFObjects(objects), []byte("[<00B1>]"), []byte("[<00B2>]"), 1), true},
+		{"unknown selected font", bytes.Replace(pipelineTestPDFObjects(objects), []byte("/F3 12 Tf"), []byte("/F9 12 Tf"), 1), true},
+		{"missing font map", bytes.Replace(pipelineTestPDFObjects(objects), []byte("/ToUnicode 7 0 R"), []byte("/ToUnicode 9 0 R"), 1), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "font.pdf")
+			if err := os.WriteFile(path, tc.data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			var rows []PipelineProperty
+			_, err := list.Read(context.Background(), func(row PipelineProperty) error { rows = append(rows, row); return nil })
+			if tc.bad {
+				if err == nil || len(rows) != 0 {
+					t.Fatalf("err=%v rows=%+v", err, rows)
+				}
+				return
+			}
+			if err != nil || len(rows) != 1 || rows[0].OwnerName != "Foo–Bar" || rows[0].ParcelKey != "02239077" {
+				t.Fatalf("err=%v rows=%+v", err, rows)
+			}
+		})
+	}
+}

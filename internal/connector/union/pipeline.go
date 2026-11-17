@@ -148,12 +148,23 @@ var pdfObject = regexp.MustCompile(`(?s)(\d+)\s+(\d+)\s+obj\b(.*?)endobj`)
 var pdfContents = regexp.MustCompile(`/Contents\s+(?:\[((?:\s*\d+\s+\d+\s+R)+)\]|(\d+\s+\d+\s+R))`)
 var pdfReference = regexp.MustCompile(`(\d+)\s+(\d+)\s+R`)
 var pdfPage = regexp.MustCompile(`/Type\s*/Page\b`)
+var pdfCatalog = regexp.MustCompile(`/Type\s*/Catalog\b`)
+var pdfPages = regexp.MustCompile(`/Type\s*/Pages\b`)
+var pdfPrev = regexp.MustCompile(`/Prev\s+(\d+)\b`)
+var pdfXRefStream = regexp.MustCompile(`/XRefStm\s+(\d+)\b`)
+var pdfXRefType = regexp.MustCompile(`/Type\s*/XRef\b`)
+var pdfFontRef = regexp.MustCompile(`/(F\d+)\s+(\d+)\s+(\d+)\s+R`)
+var pdfFontSelect = regexp.MustCompile(`/(F\d+)\s+[-+\d.]+\s+Tf\b`)
+var pdfToUnicode = regexp.MustCompile(`/ToUnicode\s+(\d+)\s+(\d+)\s+R`)
+var pdfCMapStart = regexp.MustCompile(`^(\d+)\s+begin(bfchar|bfrange)$`)
+var pdfCMapChar = regexp.MustCompile(`^<([0-9A-Fa-f]{4})>\s+<([0-9A-Fa-f]{4})>$`)
+var pdfCMapRange = regexp.MustCompile(`^<([0-9A-Fa-f]{4})>\s+<([0-9A-Fa-f]{4})>\s+<([0-9A-Fa-f]{4})>$`)
 var pdfKids = regexp.MustCompile(`(?s)/Kids\s*\[([^\]]+)\]`)
 var pdfParent = regexp.MustCompile(`/Parent\s+(\d+)\s+(\d+)\s+R`)
 var pdfCount = regexp.MustCompile(`/Count\s+(\d+)\b`)
 var pdfOperand = `(?:\[(?:[^\]]|\\.)*\]|\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>)`
 var pdfShow = regexp.MustCompile(`(?s)(` + pdfOperand + `)\s*(TJ|Tj|'|")`)
-var pdfTextToken = regexp.MustCompile(`(?s)` + pdfOperand + `\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}(?:Td|TD)\b|(?:[-+\d.]+\s+){6}Tm\b|(?:^|\s)T\*|` + pdfAlternative.String())
+var pdfTextToken = regexp.MustCompile(`(?s)` + pdfOperand + `\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}(?:Td|TD)\b|(?:[-+\d.]+\s+){6}Tm\b|(?:^|\s)T\*|/F\d+\s+[-+\d.]+\s+Tf\b|` + pdfAlternative.String())
 var pdfString = regexp.MustCompile(`\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>`)
 var pdfTJSpacing = regexp.MustCompile(`^(?:\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*)*$`)
 var pdfRoot = regexp.MustCompile(`/Root\s+(\d+)\s+(\d+)\s+R`)
@@ -178,7 +189,7 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 		return nil, err
 	}
 	root := pdfRoot.FindSubmatch(data[bytes.LastIndex(data, []byte("trailer")):])
-	if root == nil || !bytes.Contains(objects[pdfRefKey(root)], []byte("/Type /Catalog")) {
+	if root == nil || !pdfCatalog.Match(objects[pdfRefKey(root)]) {
 		return nil, errors.New("invalid PDF catalog")
 	}
 	pagesRef := pdfPagesRef.FindSubmatch(objects[pdfRefKey(root)])
@@ -199,42 +210,15 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 			return nil, errors.New("PDF page missing content stream")
 		}
 		refs := pdfReference.FindAllSubmatch(ref[0], -1)
+		fonts, err := pdfPageFonts(objects, objects[id])
+		if err != nil {
+			return nil, err
+		}
 		var lines []string
 		for _, reference := range refs {
-			stream := objects[pdfRefKey(reference)]
-			start := bytes.Index(stream, []byte("stream"))
-			end := bytes.LastIndex(stream, []byte("endstream"))
-			if start < 0 || end <= start {
-				return nil, errors.New("invalid PDF page content stream")
-			}
-			content := bytes.TrimPrefix(stream[start+6:end], []byte("\r\n"))
-			content = bytes.TrimPrefix(content, []byte("\n"))
-			length := pdfLength.FindSubmatch(stream[:start])
-			if length == nil {
-				return nil, errors.New("PDF content stream missing length")
-			}
-			want, err := strconv.Atoi(string(length[1]))
-			if err != nil || want < 0 || want > pipelineLimit || len(content) < want || len(bytes.TrimSpace(content[want:])) != 0 {
-				return nil, errors.New("invalid PDF content length")
-			}
-			content = content[:want]
-			if bytes.Contains(stream[:start], []byte("/Filter")) && !bytes.Contains(stream[:start], []byte("/FlateDecode")) {
-				return nil, errors.New("unsupported PDF content filter")
-			}
-			if bytes.Contains(stream[:start], []byte("/FlateDecode")) {
-				decoder, err := zlib.NewReader(bytes.NewReader(content))
-				if err != nil {
-					return nil, err
-				}
-				decoded, err := io.ReadAll(io.LimitReader(decoder, pipelineLimit+1))
-				closeErr := decoder.Close()
-				if err := errors.Join(err, closeErr); err != nil {
-					return nil, err
-				}
-				if len(decoded) > pipelineLimit {
-					return nil, errors.New("PDF content exceeds limit")
-				}
-				content = decoded
+			content, err := pdfStreamContent(objects[pdfRefKey(reference)])
+			if err != nil {
+				return nil, err
 			}
 			var line strings.Builder
 			textX, textY := 0.0, 0.0
@@ -248,14 +232,23 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 			if len(pdfShowingOperator.FindAll(content, -1)) > len(pdfShow.FindAll(content, -1)) || len(pdfAlternativeName.FindAll(content, -1)) > len(pdfAlternative.FindAll(content, -1)) {
 				return nil, errors.New("unsupported PDF text operand")
 			}
+			var glyphs map[uint16]string
 			for _, token := range pdfTextToken.FindAll(content, -1) {
 				if alternate := pdfAlternative.FindSubmatch(token); alternate != nil {
 					flush()
-					value, err := decodePDFText(alternate[1])
+					value, err := decodePDFText(alternate[1], nil)
 					if err != nil {
 						return nil, err
 					}
 					lines = append(lines, value)
+					continue
+				}
+				if font := pdfFontSelect.FindSubmatch(token); font != nil {
+					var ok bool
+					glyphs, ok = fonts[string(font[1])]
+					if len(fonts) > 0 && !ok {
+						return nil, errors.New("missing PDF font reference")
+					}
 					continue
 				}
 				match := pdfShow.FindSubmatch(token)
@@ -317,7 +310,7 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 					return nil, errors.New("unsupported PDF text operand")
 				}
 				for _, part := range parts {
-					value, err := decodePDFText(operand[part[0]:part[1]])
+					value, err := decodePDFText(operand[part[0]:part[1]], glyphs)
 					if err != nil {
 						return nil, err
 					}
@@ -339,63 +332,108 @@ func pdfXrefObjects(data []byte, offset int) (map[string][]byte, error) {
 		at[match[0]] = data[match[6]:match[7]]
 	}
 	objects := make(map[string][]byte)
-	scanner := bufio.NewScanner(bytes.NewReader(data[offset:]))
-	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "xref" {
-		return nil, errors.New("invalid PDF cross-reference")
-	}
-	foundTrailer := false
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "trailer" {
-			foundTrailer = true
-			break
+	claimed := make(map[int]bool)
+	visited := make(map[int]bool)
+	for {
+		if offset < 0 || offset >= len(data) || visited[offset] {
+			return nil, errors.New("invalid PDF cross-reference chain")
 		}
-		section := strings.Fields(line)
-		if len(section) != 2 {
-			return nil, errors.New("invalid PDF cross-reference section")
+		visited[offset] = true
+		section := data[offset:]
+		scanner := bufio.NewScanner(bytes.NewReader(section))
+		if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "xref" {
+			return nil, errors.New("invalid PDF cross-reference")
 		}
-		first, firstErr := strconv.Atoi(section[0])
-		count, countErr := strconv.Atoi(section[1])
-		if firstErr != nil || countErr != nil || first < 0 || count <= 0 || count > pipelineLimit {
-			return nil, errors.New("invalid PDF cross-reference section")
+		foundTrailer := false
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "trailer" {
+				foundTrailer = true
+				break
+			}
+			header := strings.Fields(line)
+			if len(header) != 2 {
+				return nil, errors.New("invalid PDF cross-reference section")
+			}
+			first, firstErr := strconv.Atoi(header[0])
+			count, countErr := strconv.Atoi(header[1])
+			if firstErr != nil || countErr != nil || first < 0 || count < 0 || count > pipelineLimit || (count == 0 && first != 0) {
+				return nil, errors.New("invalid PDF cross-reference section")
+			}
+			for id := first; id < first+count; id++ {
+				if !scanner.Scan() {
+					return nil, errors.New("truncated PDF cross-reference")
+				}
+				entry := strings.Fields(scanner.Text())
+				if len(entry) != 3 || len(entry[0]) != 10 || len(entry[1]) != 5 {
+					return nil, errors.New("invalid PDF cross-reference entry")
+				}
+				position, posErr := strconv.Atoi(entry[0])
+				generation, genErr := strconv.Atoi(entry[1])
+				if posErr != nil || genErr != nil || position < 0 {
+					return nil, errors.New("invalid PDF cross-reference entry")
+				}
+				switch entry[2] {
+				case "f":
+					claimed[id] = true
+				case "n":
+					body, ok := at[position]
+					if !ok {
+						return nil, errors.New("PDF cross-reference points outside an object")
+					}
+					if !bytes.HasPrefix(data[position:], []byte(fmt.Sprintf("%d %d obj", id, generation))) {
+						return nil, errors.New("PDF cross-reference points to the wrong object")
+					}
+					if !claimed[id] {
+						objects[fmt.Sprintf("%d %d", id, generation)] = body
+						claimed[id] = true
+					}
+				default:
+					return nil, errors.New("invalid PDF cross-reference entry")
+				}
+			}
 		}
-		for id := first; id < first+count; id++ {
-			if !scanner.Scan() {
-				return nil, errors.New("truncated PDF cross-reference")
-			}
-			entry := strings.Fields(scanner.Text())
-			if len(entry) != 3 || len(entry[0]) != 10 || len(entry[1]) != 5 {
-				return nil, errors.New("invalid PDF cross-reference entry")
-			}
-			position, posErr := strconv.Atoi(entry[0])
-			generation, genErr := strconv.Atoi(entry[1])
-			if posErr != nil || genErr != nil || position < 0 {
-				return nil, errors.New("invalid PDF cross-reference entry")
-			}
-			if entry[2] == "f" {
-				continue
-			}
-			if entry[2] != "n" {
-				return nil, errors.New("invalid PDF cross-reference entry")
-			}
-			body, ok := at[position]
-			if !ok {
-				return nil, errors.New("PDF cross-reference points outside an object")
-			}
-			header := fmt.Sprintf("%d %d obj", id, generation)
-			if !bytes.HasPrefix(data[position:], []byte(header)) {
-				return nil, errors.New("PDF cross-reference points to the wrong object")
-			}
-			objects[fmt.Sprintf("%d %d", id, generation)] = body
+		if err := scanner.Err(); err != nil {
+			return nil, err
 		}
+		if !foundTrailer {
+			return nil, errors.New("missing PDF cross-reference trailer")
+		}
+		trailerStart := bytes.Index(section, []byte("trailer"))
+		if trailerStart < 0 {
+			return nil, errors.New("invalid PDF cross-reference trailer")
+		}
+		trailerEnd := bytes.Index(section[trailerStart:], []byte("startxref"))
+		if trailerEnd < 0 {
+			return nil, errors.New("invalid PDF cross-reference trailer")
+		}
+		trailer := section[trailerStart : trailerStart+trailerEnd]
+		// Supplemental compressed objects are not resolved; text-related references must use validated classic entries.
+		if ref := pdfXRefStream.FindSubmatch(trailer); ref != nil {
+			position, err := strconv.Atoi(string(ref[1]))
+			stream, ok := at[position]
+			if err != nil || !ok || !pdfXRefType.Match(stream) {
+				return nil, errors.New("invalid PDF cross-reference stream")
+			}
+			if _, err := pdfStreamContent(stream); err != nil {
+				return nil, fmt.Errorf("invalid PDF cross-reference stream: %w", err)
+			}
+		} else if bytes.Contains(trailer, []byte("/XRefStm")) {
+			return nil, errors.New("invalid PDF cross-reference stream")
+		}
+		prev := pdfPrev.FindSubmatch(trailer)
+		if prev == nil {
+			if bytes.Contains(trailer, []byte("/Prev")) {
+				return nil, errors.New("invalid PDF previous cross-reference")
+			}
+			return objects, nil
+		}
+		next, err := strconv.Atoi(string(prev[1]))
+		if err != nil || next >= offset {
+			return nil, errors.New("invalid PDF previous cross-reference")
+		}
+		offset = next
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if !foundTrailer {
-		return nil, errors.New("missing PDF cross-reference trailer")
-	}
-	return objects, nil
 }
 
 func pdfRefKey(ref [][]byte) string {
@@ -425,7 +463,7 @@ func pdfPageOrder(objects map[string][]byte, root string) ([]string, error) {
 			pages = append(pages, id)
 			return nil
 		}
-		if !bytes.Contains(body, []byte("/Type /Pages")) {
+		if !pdfPages.Match(body) {
 			return errors.New("invalid PDF page tree")
 		}
 		kids := pdfKids.FindSubmatch(body)
@@ -461,7 +499,7 @@ func pdfPageOrder(objects map[string][]byte, root string) ([]string, error) {
 	return pages, nil
 }
 
-func decodePDFText(operand []byte) (string, error) {
+func decodePDFText(operand []byte, glyphs map[uint16]string) (string, error) {
 	if len(operand) < 2 {
 		return "", errors.New("unsupported PDF text operand")
 	}
@@ -480,6 +518,20 @@ func decodePDFText(operand []byte) (string, error) {
 		}
 	} else {
 		return "", errors.New("unsupported PDF text operand")
+	}
+	if glyphs != nil {
+		if len(raw)%2 != 0 {
+			return "", errors.New("invalid PDF font glyph")
+		}
+		var text strings.Builder
+		for i := 0; i < len(raw); i += 2 {
+			value, ok := glyphs[uint16(raw[i])<<8|uint16(raw[i+1])]
+			if !ok {
+				return "", errors.New("PDF glyph missing ToUnicode mapping")
+			}
+			text.WriteString(value)
+		}
+		return text.String(), nil
 	}
 	if len(raw) >= 2 && raw[0] == 0xfe && raw[1] == 0xff {
 		if len(raw)%2 != 0 {
@@ -836,4 +888,138 @@ func pipelineProperties(lines []string) ([]PipelineProperty, error) {
 		unique = append(unique, row)
 	}
 	return unique, nil
+}
+
+func pdfStreamContent(stream []byte) ([]byte, error) {
+	start := bytes.Index(stream, []byte("stream"))
+	end := bytes.LastIndex(stream, []byte("endstream"))
+	if start < 0 || end <= start {
+		return nil, errors.New("invalid PDF content stream")
+	}
+	content := bytes.TrimPrefix(stream[start+6:end], []byte("\r\n"))
+	content = bytes.TrimPrefix(content, []byte("\n"))
+	length := pdfLength.FindSubmatch(stream[:start])
+	if length == nil {
+		return nil, errors.New("PDF content stream missing length")
+	}
+	want, err := strconv.Atoi(string(length[1]))
+	if err != nil || want < 0 || want > pipelineLimit || len(content) < want || len(bytes.TrimSpace(content[want:])) != 0 {
+		return nil, errors.New("invalid PDF content length")
+	}
+	content = content[:want]
+	if bytes.Contains(stream[:start], []byte("/Filter")) && !bytes.Contains(stream[:start], []byte("/FlateDecode")) {
+		return nil, errors.New("unsupported PDF content filter")
+	}
+	if bytes.Contains(stream[:start], []byte("/FlateDecode")) {
+		decoder, err := zlib.NewReader(bytes.NewReader(content))
+		if err != nil {
+			return nil, err
+		}
+		decoded, err := io.ReadAll(io.LimitReader(decoder, pipelineLimit+1))
+		closeErr := decoder.Close()
+		if err := errors.Join(err, closeErr); err != nil {
+			return nil, err
+		}
+		if len(decoded) > pipelineLimit {
+			return nil, errors.New("PDF content exceeds limit")
+		}
+		content = decoded
+	}
+	return content, nil
+}
+
+func pdfPageFonts(objects map[string][]byte, page []byte) (map[string]map[uint16]string, error) {
+	fonts := make(map[string]map[uint16]string)
+	for _, ref := range pdfFontRef.FindAllSubmatch(page, -1) {
+		key := string(ref[2]) + " " + string(ref[3])
+		font, ok := objects[key]
+		if !ok {
+			return nil, errors.New("missing PDF font reference")
+		}
+		cmapRef := pdfToUnicode.FindSubmatch(font)
+		if cmapRef == nil {
+			if bytes.Contains(font, []byte("/Type0")) {
+				return nil, errors.New("PDF CID font missing ToUnicode map")
+			}
+			fonts[string(ref[1])] = nil
+			continue
+		}
+		cmap, ok := objects[pdfRefKey(cmapRef)]
+		if !ok {
+			return nil, errors.New("missing PDF ToUnicode reference")
+		}
+		content, err := pdfStreamContent(cmap)
+		if err != nil {
+			return nil, err
+		}
+		glyphs, err := pdfUnicodeGlyphs(content)
+		if err != nil {
+			return nil, err
+		}
+		fonts[string(ref[1])] = glyphs
+	}
+	return fonts, nil
+}
+
+// pdfUnicodeGlyphs uses embedded ToUnicode entries; CID bytes are not Unicode code points.
+func pdfUnicodeGlyphs(content []byte) (map[uint16]string, error) {
+	glyphs := make(map[uint16]string)
+	mode := ""
+	remaining := 0
+	for _, raw := range bytes.Split(content, []byte("\n")) {
+		line := strings.TrimSpace(string(raw))
+		if mode != "" && remaining == 0 {
+			if line != "end"+mode {
+				return nil, errors.New("invalid PDF ToUnicode map")
+			}
+			mode = ""
+			continue
+		}
+		if mode == "" {
+			if start := pdfCMapStart.FindStringSubmatch(line); start != nil {
+				count, err := strconv.Atoi(start[1])
+				if err != nil || count < 0 || count > 65536 {
+					return nil, errors.New("invalid PDF ToUnicode map")
+				}
+				remaining = count
+				mode = start[2]
+			}
+			continue
+		}
+		var fields []string
+		if mode == "bfchar" {
+			fields = pdfCMapChar.FindStringSubmatch(line)
+		} else {
+			fields = pdfCMapRange.FindStringSubmatch(line)
+		}
+		if fields == nil {
+			return nil, errors.New("unsupported PDF ToUnicode mapping")
+		}
+		from, _ := strconv.ParseUint(fields[1], 16, 16)
+		to := from
+		dest := fields[2]
+		if mode == "bfrange" {
+			to, _ = strconv.ParseUint(fields[2], 16, 16)
+			dest = fields[3]
+		}
+		first, _ := strconv.ParseUint(dest, 16, 16)
+		if to < from || first+to-from > 0xffff {
+			return nil, errors.New("invalid PDF ToUnicode range")
+		}
+		for code := from; code <= to; code++ {
+			value := rune(first + code - from)
+			if !utf8.ValidRune(value) {
+				return nil, errors.New("invalid PDF ToUnicode character")
+			}
+			if _, exists := glyphs[uint16(code)]; exists {
+				return nil, errors.New("duplicate PDF ToUnicode glyph")
+			}
+			glyphs[uint16(code)] = string(value)
+		}
+		remaining--
+	}
+	if mode != "" || len(glyphs) == 0 {
+		return nil, errors.New("invalid PDF ToUnicode map")
+	}
+	return glyphs, nil
 }
