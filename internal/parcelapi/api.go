@@ -272,7 +272,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (h *Handler) tx(ctx context.Context) (pgx.Tx, error) {
-	return h.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := h.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL jit = off"); err != nil {
+		tx.Rollback(context.Background())
+		return nil, err
+	}
+	return tx, nil
 }
 
 // stamp identifies the source records visible in this transaction, not a global snapshot.
@@ -280,8 +288,13 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	var parcelTime *time.Time
 	var parcelCount int64
 	var files string
-	err := tx.QueryRow(ctx, `SELECT max(updated_at),count(*) FROM parcels WHERE county_id=$1 AND source_name=$2`, countyID, parcelSource).Scan(&parcelTime, &parcelCount)
-	if err != nil {
+	err := tx.QueryRow(ctx, `SELECT updated_at FROM parcels WHERE county_id=$1 AND source_name=$2 ORDER BY updated_at DESC LIMIT 1`, countyID, parcelSource).Scan(&parcelTime)
+	if errors.Is(err, pgx.ErrNoRows) {
+		parcelTime = nil
+	} else if err != nil {
+		return "", err
+	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM parcels WHERE county_id=$1 AND source_name=$2`, countyID, parcelSource).Scan(&parcelCount); err != nil {
 		return "", err
 	}
 	err = tx.QueryRow(ctx, `SELECT COALESCE(string_agg(source_name||':'||encode(file_sha256,'hex')||':'||fetched_at::text,',' ORDER BY source_name),'') FROM tax_file_imports WHERE county_id=$1 AND active`, countyID).Scan(&files)
@@ -394,7 +407,26 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
-	rows, e := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2 AND (lower(p.parcel_number) LIKE $3 OR lower(p.situs_line_1) LIKE $3) ORDER BY p.id LIMIT 20`, countyID, parcelSource, strings.ToLower(term)+"%")
+	if _, e = tx.Exec(r.Context(), "SET LOCAL plan_cache_mode = force_custom_plan"); e != nil {
+		unavailable(w)
+		return
+	}
+	prefix := strings.ToLower(term) + "%"
+	var found bool
+	e = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM parcels WHERE county_id=$1 AND source_name=$2 AND lower(parcel_number) LIKE $3) OR EXISTS(SELECT 1 FROM parcels WHERE county_id=$1 AND source_name=$2 AND lower(situs_line_1) LIKE $3)`, countyID, parcelSource, prefix).Scan(&found)
+	if e != nil {
+		unavailable(w)
+		return
+	}
+	if !found {
+		if e = tx.Commit(r.Context()); e != nil {
+			unavailable(w)
+			return
+		}
+		respond(w, map[string]any{"items": []Parcel{}})
+		return
+	}
+	rows, e := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2 AND (lower(p.parcel_number) LIKE $3 OR lower(p.situs_line_1) LIKE $3) ORDER BY p.id LIMIT 20`, countyID, parcelSource, prefix)
 	if e != nil {
 		unavailable(w)
 		return
@@ -421,6 +453,31 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, map[string]any{"items": items})
 }
+func (f Filters) mapMatch(args *[]any) string {
+	parts := []string{}
+	add := func(value any, column, op string) {
+		*args = append(*args, value)
+		parts = append(parts, fmt.Sprintf("%s %s $%d", column, op, len(*args)))
+	}
+	if f.AcresMin != nil {
+		add(*f.AcresMin, "p.mapped_acres", ">=")
+	}
+	if f.AcresMax != nil {
+		add(*f.AcresMax, "p.mapped_acres", "<=")
+	}
+	if f.LikelyVacant != nil {
+		add(*f.LikelyVacant, "p.likely_vacant", "=")
+	}
+	if f.Delinquent != nil {
+		*args = append(*args, *f.Delinquent)
+		parts = append(parts, fmt.Sprintf(`EXISTS (SELECT 1 FROM tax_delinquent_balances d JOIN tax_file_imports i ON i.active AND i.county_id=d.county_id AND i.source_name=d.source_name AND i.source_url=d.source_url AND i.file_sha256=d.file_sha256 AND i.fetched_at=d.fetched_at WHERE d.parcel_id=p.id AND d.balance_due>0) = $%d`, len(*args)))
+	}
+	if len(parts) == 0 {
+		return "false"
+	}
+	return strings.Join(parts, " AND ")
+}
+
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent"); e != nil {
@@ -456,16 +513,6 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	contextArgs := []any{countyID, parcelSource, b.West, b.South, b.East, b.North}
 	const contextWhere = `p.county_id=$1 AND p.source_name=$2 AND p.shape && ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857) AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857))`
 	var total, matches int64
-	if e = tx.QueryRow(r.Context(), `SELECT count(*) FROM parcels p WHERE `+contextWhere, contextArgs...).Scan(&total); e != nil {
-		unavailable(w)
-		return
-	}
-	if f.active() {
-		if e = tx.QueryRow(r.Context(), `SELECT count(*) FROM parcels p WHERE `+predicate, f.args()...).Scan(&matches); e != nil {
-			unavailable(w)
-			return
-		}
-	}
 	if z < 13 {
 		type cell struct {
 			X       int   `json:"x"`
@@ -474,18 +521,21 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 			Matches int64 `json:"matches"`
 		}
 		cells := []cell{}
-		// Each intersecting parcel belongs to one aggregate cell by its point on surface.
-		rows, err := tx.Query(r.Context(), `SELECT greatest(0,least(15,floor((ST_X(ST_Transform(ST_PointOnSurface(p.shape),4326))-$3)*16/($5-$3))))::int AS x,
- greatest(0,least(15,floor((ST_Y(ST_Transform(ST_PointOnSurface(p.shape),4326))-$4)*16/($6-$4))))::int AS y,
- count(*)
- FROM parcels p WHERE `+contextWhere+` GROUP BY x,y ORDER BY x,y`, contextArgs...)
+		args := append([]any(nil), contextArgs...)
+		match := f.mapMatch(&args)
+		// Cell position is display-only; intersection and match use the original polygon.
+		rows, err := tx.Query(r.Context(), `SELECT greatest(0,least(15,floor((ST_X(location)-$3)*16/($5-$3))))::int AS x,
+ greatest(0,least(15,floor((ST_Y(location)-$4)*16/($6-$4))))::int AS y,
+ count(*),count(*) FILTER (WHERE match)
+ FROM (SELECT ST_Transform(ST_PointOnSurface(p.shape),4326) AS location, (`+match+`) AS match
+ FROM parcels p WHERE `+contextWhere+`) located GROUP BY x,y ORDER BY x,y`, args...)
 		if err != nil {
 			unavailable(w)
 			return
 		}
 		for rows.Next() {
 			var c cell
-			if err = rows.Scan(&c.X, &c.Y, &c.Count); err != nil {
+			if err = rows.Scan(&c.X, &c.Y, &c.Count, &c.Matches); err != nil {
 				rows.Close()
 				unavailable(w)
 				return
@@ -498,34 +548,9 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 			unavailable(w)
 			return
 		}
-		// Match counts use the exact discovery predicate, not the neutral context aggregate.
-		matchCells := map[[2]int]int64{}
-		if f.active() {
-			rows, err = tx.Query(r.Context(), `SELECT greatest(0,least(15,floor((ST_X(ST_Transform(ST_PointOnSurface(p.shape),4326))-$7)*16/($9-$7))))::int AS x,
- greatest(0,least(15,floor((ST_Y(ST_Transform(ST_PointOnSurface(p.shape),4326))-$8)*16/($10-$8))))::int AS y,count(*) FROM parcels p WHERE `+predicate+` GROUP BY x,y`, f.args()...)
-			if err != nil {
-				unavailable(w)
-				return
-			}
-			for rows.Next() {
-				var x, y int
-				var n int64
-				if err = rows.Scan(&x, &y, &n); err != nil {
-					rows.Close()
-					unavailable(w)
-					return
-				}
-				matchCells[[2]int{x, y}] = n
-			}
-			e = rows.Err()
-			rows.Close()
-			if e != nil {
-				unavailable(w)
-				return
-			}
-		}
-		for i := range cells {
-			cells[i].Matches = matchCells[[2]int{cells[i].X, cells[i].Y}]
+		for _, c := range cells {
+			total += c.Count
+			matches += c.Matches
 		}
 		if e = tx.Commit(r.Context()); e != nil {
 			unavailable(w)
@@ -534,55 +559,34 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]any{"mode": "grid", "cells": cells, "context_count": total, "match_count": matches, "source_stamp": s})
 		return
 	}
+	if e = tx.QueryRow(r.Context(), `SELECT count(*) FROM parcels p WHERE `+contextWhere, contextArgs...).Scan(&total); e != nil {
+		unavailable(w)
+		return
+	}
 	if total > 200 {
 		http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 		return
 	}
-	rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$7::float8-13))),4326))::jsonb FROM parcels p WHERE `+contextWhere+` ORDER BY p.id`, append(contextArgs, z)...)
+	args := append(append([]any(nil), contextArgs...), z)
+	match := f.mapMatch(&args)
+	rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$7::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+contextWhere+` ORDER BY p.id`, args...)
 	if err != nil {
 		unavailable(w)
 		return
 	}
 	features := []Feature{}
-	matchIDs := map[string]bool{}
-	if f.active() { // Match identification remains inside the same read snapshot.
-		rows.Close()
-		ids, err := tx.Query(r.Context(), `SELECT p.id::text FROM parcels p WHERE `+predicate, f.args()...)
-		if err != nil {
-			unavailable(w)
-			return
-		}
-		for ids.Next() {
-			var id string
-			if err = ids.Scan(&id); err != nil {
-				ids.Close()
-				unavailable(w)
-				return
-			}
-			matchIDs[id] = true
-		}
-		e = ids.Err()
-		ids.Close()
-		if e != nil {
-			unavailable(w)
-			return
-		}
-		rows, err = tx.Query(r.Context(), `SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$7::float8-13))),4326))::jsonb FROM parcels p WHERE `+contextWhere+` ORDER BY p.id`, append(contextArgs, z)...)
-		if err != nil {
-			unavailable(w)
-			return
-		}
-	}
 	for rows.Next() {
 		var item Feature
 		var geometry []byte
-		if err = rows.Scan(&item.ID, &item.ParcelNumber, &item.Address, &item.MappedAcres, &item.LikelyVacant, &item.UpdatedAt, &geometry); err != nil {
+		if err = rows.Scan(&item.ID, &item.ParcelNumber, &item.Address, &item.MappedAcres, &item.LikelyVacant, &item.UpdatedAt, &geometry, &item.Match); err != nil {
 			rows.Close()
 			unavailable(w)
 			return
 		}
 		item.Geometry = geometry
-		item.Match = matchIDs[item.ID]
+		if item.Match {
+			matches++
+		}
 		features = append(features, item)
 	}
 	e = rows.Err()
