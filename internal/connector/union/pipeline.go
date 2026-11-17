@@ -145,17 +145,18 @@ func (s *PipelineList) parse(ctx context.Context, artifact taxartifact.Artifact)
 
 var pdfObject = regexp.MustCompile(`(?s)(\d+)\s+(\d+)\s+obj\b(.*?)endobj`)
 var pdfContents = regexp.MustCompile(`/Contents\s+(?:\[((?:\s*\d+\s+\d+\s+R)+)\]|(\d+\s+\d+\s+R))`)
-var pdfReference = regexp.MustCompile(`(\d+)\s+\d+\s+R`)
+var pdfReference = regexp.MustCompile(`(\d+)\s+(\d+)\s+R`)
 var pdfPage = regexp.MustCompile(`/Type\s*/Page\b`)
 var pdfKids = regexp.MustCompile(`(?s)/Kids\s*\[([^\]]+)\]`)
-var pdfParent = regexp.MustCompile(`/Parent\s+(\d+)\s+\d+\s+R`)
+var pdfParent = regexp.MustCompile(`/Parent\s+(\d+)\s+(\d+)\s+R`)
+var pdfCount = regexp.MustCompile(`/Count\s+(\d+)\b`)
 var pdfOperand = `(?:\[(?:[^\]]|\\.)*\]|\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>)`
 var pdfShow = regexp.MustCompile(`(?s)(` + pdfOperand + `)\s*(TJ|Tj|'|")`)
-var pdfTextToken = regexp.MustCompile(`(?s)` + pdfOperand + `\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}(?:Td|TD)\b|(?:[-+\d.]+\s+){6}Tm\b|(?:^|\s)T\*(?:\s|$)|` + pdfAlternative.String())
+var pdfTextToken = regexp.MustCompile(`(?s)` + pdfOperand + `\s*(?:TJ|Tj|'|")|(?:[-+\d.]+\s+){2}(?:Td|TD)\b|(?:[-+\d.]+\s+){6}Tm\b|(?:^|\s)T\*|` + pdfAlternative.String())
 var pdfString = regexp.MustCompile(`\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]+>`)
 var pdfTJSpacing = regexp.MustCompile(`^(?:\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*)*$`)
-var pdfRoot = regexp.MustCompile(`/Root\s+(\d+)\s+\d+\s+R`)
-var pdfPagesRef = regexp.MustCompile(`/Pages\s+(\d+)\s+\d+\s+R`)
+var pdfRoot = regexp.MustCompile(`/Root\s+(\d+)\s+(\d+)\s+R`)
+var pdfPagesRef = regexp.MustCompile(`/Pages\s+(\d+)\s+(\d+)\s+R`)
 var pdfLength = regexp.MustCompile(`/Length\s+(\d+)\b`)
 var pdfAlternative = regexp.MustCompile(`/(?:ActualText|Alt)\s*(\((?:\\.|[^\\)])*\)|<([0-9A-Fa-f]+)>)`)
 var pdfAlternativeName = regexp.MustCompile(`/(?:ActualText|Alt)\b`)
@@ -176,14 +177,14 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 		return nil, err
 	}
 	root := pdfRoot.FindSubmatch(data[bytes.LastIndex(data, []byte("trailer")):])
-	if root == nil || !bytes.Contains(objects[string(root[1])], []byte("/Type /Catalog")) {
+	if root == nil || !bytes.Contains(objects[pdfRefKey(root)], []byte("/Type /Catalog")) {
 		return nil, errors.New("invalid PDF catalog")
 	}
-	pagesRef := pdfPagesRef.FindSubmatch(objects[string(root[1])])
+	pagesRef := pdfPagesRef.FindSubmatch(objects[pdfRefKey(root)])
 	if pagesRef == nil {
 		return nil, errors.New("invalid PDF page tree")
 	}
-	order, err := pdfPageOrder(objects, string(pagesRef[1]))
+	order, err := pdfPageOrder(objects, pdfRefKey(pagesRef))
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +200,7 @@ func pipelinePDF(ctx context.Context, data []byte) ([][]string, error) {
 		refs := pdfReference.FindAllSubmatch(ref[0], -1)
 		var lines []string
 		for _, reference := range refs {
-			stream := objects[string(reference[1])]
+			stream := objects[pdfRefKey(reference)]
 			start := bytes.Index(stream, []byte("stream"))
 			end := bytes.LastIndex(stream, []byte("endstream"))
 			if start < 0 || end <= start {
@@ -353,7 +354,7 @@ func pdfXrefObjects(data []byte, offset int) (map[string][]byte, error) {
 			if !bytes.HasPrefix(data[position:], []byte(header)) {
 				return nil, errors.New("PDF cross-reference points to the wrong object")
 			}
-			objects[strconv.Itoa(id)] = body
+			objects[fmt.Sprintf("%d %d", id, generation)] = body
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -363,6 +364,10 @@ func pdfXrefObjects(data []byte, offset int) (map[string][]byte, error) {
 		return nil, errors.New("missing PDF cross-reference trailer")
 	}
 	return objects, nil
+}
+
+func pdfRefKey(ref [][]byte) string {
+	return string(ref[1]) + " " + string(ref[2])
 }
 
 func pdfPageOrder(objects map[string][]byte, root string) ([]string, error) {
@@ -377,11 +382,14 @@ func pdfPageOrder(objects map[string][]byte, root string) ([]string, error) {
 		seen[id] = true
 		if parent != "" {
 			ref := pdfParent.FindSubmatch(body)
-			if ref == nil || string(ref[1]) != parent {
+			if ref == nil || pdfRefKey(ref) != parent {
 				return errors.New("invalid PDF page parent")
 			}
 		}
 		if pdfPage.Match(body) {
+			if parent == "" {
+				return errors.New("PDF catalog Pages reference points to a Page")
+			}
 			pages = append(pages, id)
 			return nil
 		}
@@ -396,10 +404,19 @@ func pdfPageOrder(objects map[string][]byte, root string) ([]string, error) {
 		if len(refs) == 0 {
 			return errors.New("PDF page tree missing Kids")
 		}
+		before := len(pages)
 		for _, ref := range refs {
-			if err := visit(string(ref[1]), id); err != nil {
+			if err := visit(pdfRefKey(ref), id); err != nil {
 				return err
 			}
+		}
+		count := pdfCount.FindSubmatch(body)
+		if count == nil {
+			return errors.New("PDF page tree missing Count")
+		}
+		want, err := strconv.Atoi(string(count[1]))
+		if err != nil || want != len(pages)-before {
+			return errors.New("PDF page tree Count mismatch")
 		}
 		return nil
 	}
@@ -526,9 +543,8 @@ func pipelinePPTX(ctx context.Context, data []byte) ([][]string, error) {
 			if e != nil {
 				return nil, e
 			}
-			var doc struct{ XMLName xml.Name }
-			if e := xml.Unmarshal(b, &doc); e != nil || doc.XMLName.Local != "presentation" || doc.XMLName.Space != "http://schemas.openxmlformats.org/presentationml/2006/main" {
-				return nil, errors.New("invalid PPTX presentation XML")
+			if _, e := pipelineXML(b, "presentation"); e != nil {
+				return nil, fmt.Errorf("invalid PPTX presentation XML: %w", e)
 			}
 			presentation = true
 			continue

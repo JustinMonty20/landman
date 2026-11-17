@@ -546,6 +546,12 @@ func TestPipelinePDFPageTreeAndXref(t *testing.T) {
 		{"invalid xref section", bytes.Replace(valid, []byte("xref\n0 5\n"), []byte("xref\nx 5\n"), 1)},
 		{"wrong page parent", bytes.Replace(valid, []byte("/Parent 2 0 R"), []byte("/Parent 9 0 R"), 1)},
 		{"missing xref trailer", bytes.Replace(valid, []byte("trailer\n"), []byte("notrail\n"), 1)},
+		{"catalog references Page", bytes.Replace(valid, []byte("/Pages 2 0 R"), []byte("/Pages 3 0 R"), 1)},
+		{"page tree Count mismatch", bytes.Replace(valid, []byte("/Count 1"), []byte("/Count 2"), 1)},
+		{"wrong catalog generation", bytes.Replace(valid, []byte("/Root 1 0 R"), []byte("/Root 1 9 R"), 1)},
+		{"wrong tree generation", bytes.Replace(valid, []byte("/Pages 2 0 R"), []byte("/Pages 2 9 R"), 1)},
+		{"wrong kid generation", bytes.Replace(valid, []byte("/Kids [3 0 R]"), []byte("/Kids [3 9 R]"), 1)},
+		{"wrong stream generation", bytes.Replace(valid, []byte("/Contents 4 0 R"), []byte("/Contents 4 9 R"), 1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "bad.pdf")
@@ -605,6 +611,73 @@ func TestPipelinePDFAlternativePropertyOrder(t *testing.T) {
 			}
 			if err != nil || len(rows) != 2 || rows[0].OwnerName != "First" || rows[1].OwnerName != "Second" {
 				t.Fatalf("err=%v rows=%+v", err, rows)
+			}
+		})
+	}
+}
+
+func TestPipelineAdjacentStarLineBreak(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		bad           bool
+	}{
+		{"fields", `BT (Parcel: 02.239.077) Tj T*(Owner: First) Tj T*(Tax Value: $10.00) Tj ET`, false},
+		{"invalid value", `BT (Parcel: 02.239.077) Tj T*(Owner: First) Tj T*(Tax Value: invalid) Tj ET`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "adjacent.pdf")
+			if err := os.WriteFile(path, pipelineTestPDF([]byte(tc.content), false), 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			var rows []PipelineProperty
+			_, err := list.Read(context.Background(), func(row PipelineProperty) error { rows = append(rows, row); return nil })
+			if tc.bad {
+				if err == nil || len(rows) != 0 {
+					t.Fatalf("err=%v rows=%+v", err, rows)
+				}
+				return
+			}
+			if err != nil || len(rows) != 1 || rows[0].OwnerName != "First" || rows[0].TaxValue == nil || *rows[0].TaxValue != 1000 {
+				t.Fatalf("err=%v rows=%+v", err, rows)
+			}
+		})
+	}
+}
+
+func TestPipelinePresentationXMLRoot(t *testing.T) {
+	for _, tc := range []struct{ name, presentation string }{
+		{"second root", `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>`},
+		{"trailing junk", `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>junk`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var contents bytes.Buffer
+			archive := zip.NewWriter(&contents)
+			for name, body := range map[string]string{
+				"[Content_Types].xml":   `<Types><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>`,
+				"ppt/presentation.xml":  tc.presentation,
+				"ppt/slides/slide1.xml": `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sp><p:cNvPr descr="Parcel: 02.239.077"/></p:sp></p:sld>`,
+			} {
+				entry, err := archive.Create(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := entry.Write([]byte(body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := archive.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "invalid-presentation.pptx")
+			if err := os.WriteFile(path, contents.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			list := pipelineFixture(t, path)
+			count := 0
+			_, err := list.Read(context.Background(), func(PipelineProperty) error { count++; return nil })
+			if err == nil || count != 0 {
+				t.Fatalf("err=%v rows=%d", err, count)
 			}
 		})
 	}
