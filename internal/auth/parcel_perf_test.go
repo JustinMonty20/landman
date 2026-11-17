@@ -120,8 +120,8 @@ func TestParcelRealData(t *testing.T) {
 		label, path string
 		want        int64
 	}
-	routes := []route{{"sources", "/api/v1/sources", 4}, {"lookup", "/api/v1/parcels/lookup?q=" + lookup[:2], 1}, {"no-filter", "/api/v1/parcels", 0}, {"list-first", "/api/v1/parcels?likely_vacant=true&page_size=20", -1}, {"list-combined-false", "/api/v1/parcels?likely_vacant=true&min_acres=1&delinquent=false&page_size=20", -1}, {"list-combined-true", "/api/v1/parcels?likely_vacant=true&min_acres=1&delinquent=true&page_size=20", -1}, {"grid", "/api/v1/parcels/map?bbox=" + broadBox + "&zoom=8&likely_vacant=true", -1}, {"shape", "/api/v1/parcels/map?bbox=" + closeBox + "&zoom=16&likely_vacant=true", -1}, {"facts", "/api/v1/parcels/" + parcelID, 1}, {"tax", "/api/v1/parcels/" + taxID + "/tax", 1}, {"soil", "/api/v1/parcels/" + soilID + "/soil", 1}}
-	_, status, _, first := request(routes[3].path)
+	routes := []route{{"sources", "/api/v1/sources", 4}, {"lookup", "/api/v1/parcels/lookup?q=" + lookup[:2], 1}, {"lookup-miss", "/api/v1/parcels/lookup?q=zzzzzzzzunlikely", 0}, {"no-filter", "/api/v1/parcels", 0}, {"list-first", "/api/v1/parcels?likely_vacant=true&page_size=20", -1}, {"list-combined-false", "/api/v1/parcels?likely_vacant=true&min_acres=1&delinquent=false&page_size=20", -1}, {"list-combined-true", "/api/v1/parcels?likely_vacant=true&min_acres=1&delinquent=true&page_size=20", -1}, {"grid", "/api/v1/parcels/map?bbox=" + broadBox + "&zoom=8&likely_vacant=true", -1}, {"grid-moving", "/api/v1/parcels/map?bbox=" + fmt.Sprintf("%.6f,%.6f,%.6f,%.6f", west-.03, south-.03, east+.05, north+.05) + "&zoom=8&likely_vacant=true", -1}, {"shape", "/api/v1/parcels/map?bbox=" + closeBox + "&zoom=16&likely_vacant=true", -1}, {"facts", "/api/v1/parcels/" + parcelID, 1}, {"tax", "/api/v1/parcels/" + taxID + "/tax", 1}, {"soil", "/api/v1/parcels/" + soilID + "/soil", 1}}
+	_, status, _, first := request(routes[4].path)
 	if status != 200 {
 		t.Fatal("list first-page failed")
 	}
@@ -131,7 +131,12 @@ func TestParcelRealData(t *testing.T) {
 	if err = json.Unmarshal(first, &page); err != nil || page.NextCursor == "" {
 		t.Fatal("no later page")
 	}
-	routes = append(routes, route{"list-later", routes[3].path + "&cursor=" + page.NextCursor, -1}, route{"grid-county", "/api/v1/parcels/map?bbox=" + countyBox + "&zoom=8&likely_vacant=true", -1})
+	routes = append(routes, route{"list-later", routes[4].path + "&cursor=" + page.NextCursor, -1}, route{"grid-county", "/api/v1/parcels/map?bbox=" + countyBox + "&zoom=8&likely_vacant=true", -1})
+	_, denseStatus, _, _ := request("/api/v1/parcels/map?bbox=" + countyBox + "&zoom=16&likely_vacant=true")
+	if denseStatus != http.StatusRequestEntityTooLarge {
+		t.Fatalf("dense feature limit status=%d want=413", denseStatus)
+	}
+	t.Log("dense feature limit status=413 (not timed)")
 	for _, r := range routes {
 		firstLatency, code, size, body := request(r.path)
 		if code != 200 || !json.Valid(body) {
@@ -147,9 +152,9 @@ func TestParcelRealData(t *testing.T) {
 			if err = json.Unmarshal(result["active_tax_files"], &files); err != nil || int64(len(files)) < r.want {
 				t.Fatalf("missing feeds %s", r.label)
 			}
-		case "lookup":
+		case "lookup", "lookup-miss":
 			var items []any
-			if err = json.Unmarshal(result["items"], &items); err != nil || len(items) == 0 {
+			if err = json.Unmarshal(result["items"], &items); err != nil || (r.want > 0 && len(items) == 0) || (r.want == 0 && len(items) != 0) {
 				t.Fatal("lookup empty")
 			}
 		case "facts":
@@ -172,7 +177,7 @@ func TestParcelRealData(t *testing.T) {
 			if err = json.Unmarshal(body, &a); err != nil || a.ParcelID != soilID || !a.Available {
 				t.Fatal("missing published soil")
 			}
-		case "grid", "shape", "grid-county":
+		case "grid", "grid-moving", "shape", "grid-county":
 			var count int64
 			if err = json.Unmarshal(result["context_count"], &count); err != nil || count == 0 {
 				t.Fatal("empty map viewport")
@@ -193,6 +198,7 @@ func TestParcelRealData(t *testing.T) {
 				t.Logf("route=%s expected_rows=%d", r.label, expected)
 			}
 		}
+		verifyCopiedResponse(t, pool, r.label, r.path, body, first)
 		t.Logf("first_observed route=%s duration=%s bytes=%d errors=0", r.label, firstLatency, size)
 		expectedBody := sha256.Sum256(body)
 		for _, parallel := range []int{1, 4} {
@@ -219,7 +225,7 @@ func TestParcelRealData(t *testing.T) {
 				wg.Wait()
 			}
 			sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
-			t.Logf("route=%s concurrency=%d rounds=5 n=%d min=%s p50=%s p95=%s max=%s errors=%d bytes=%d", r.label, parallel, len(lat), lat[0], lat[(len(lat)-1)/2], lat[int(float64(len(lat)-1)*.95)], lat[len(lat)-1], errors, totalBytes)
+			t.Logf("route=%s concurrency=%d rounds=5 n=%d min=%s p50=%s p95=%s max=%s errors=%d bytes=%d", r.label, parallel, len(lat), lat[0], lat[(len(lat)-1)/2], lat[nearestRank95(len(lat))], lat[len(lat)-1], errors, totalBytes)
 			if errors != 0 {
 				t.Errorf("route=%s errors=%d", r.label, errors)
 			}
