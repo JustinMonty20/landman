@@ -55,7 +55,11 @@ func SaveSales(ctx context.Context, tx pgx.Tx, identity models.ParcelIdentity, s
 	return saveSalesForParcel(ctx, tx, parcelID, sales)
 }
 
-func saveSalesForParcel(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID, sales []models.ParcelSale) ([]models.SaleID, error) {
+func saveSalesForParcel(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID, sales []models.ParcelSale, exactNumbers ...map[string]string) ([]models.SaleID, error) {
+	var exact map[string]string
+	if len(exactNumbers) != 0 {
+		exact = exactNumbers[0]
+	}
 	ids := make([]models.SaleID, 0, len(sales))
 	for _, sale := range sales {
 		var id models.SaleID
@@ -64,7 +68,7 @@ func saveSalesForParcel(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID
 			sale.Sequence,
 			saleCalendarDate(sale.SaleDate),
 			sale.OGSaleDate,
-			sale.Amount,
+			numericValue(exact[fmt.Sprintf("s%d_SALESAMT", sale.Sequence)], sale.Amount),
 			sale.DeedBook,
 			sale.DeedPage,
 			sale.DeedType,
@@ -101,7 +105,7 @@ WHERE county_id = $1
 `
 
 const saveSaleSQL = `
-INSERT INTO parcel_sales (
+WITH saved AS (INSERT INTO parcel_sales (
 	parcel_id,
 	sequence,
 	sale_date,
@@ -128,5 +132,14 @@ DO UPDATE SET
 	grantor = EXCLUDED.grantor,
 	grantor_2 = EXCLUDED.grantor_2,
 	updated_at = now()
-RETURNING id
+WHERE (parcel_sales.sale_date,parcel_sales.og_sale_date,parcel_sales.amount,
+       parcel_sales.deed_book,parcel_sales.deed_page,parcel_sales.deed_type,
+       parcel_sales.deed_quality,parcel_sales.grantor,parcel_sales.grantor_2)
+IS DISTINCT FROM (EXCLUDED.sale_date,EXCLUDED.og_sale_date,EXCLUDED.amount,
+       EXCLUDED.deed_book,EXCLUDED.deed_page,EXCLUDED.deed_type,
+       EXCLUDED.deed_quality,EXCLUDED.grantor,EXCLUDED.grantor_2)
+RETURNING id)
+SELECT id FROM saved
+UNION ALL SELECT id FROM parcel_sales WHERE parcel_id=$1 AND sequence=$2
+LIMIT 1
 `

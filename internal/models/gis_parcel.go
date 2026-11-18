@@ -31,7 +31,8 @@ type GISParcel struct {
 	Sales     []ParcelSale    `json:"sales,omitempty"`
 	Geometry  GISGeometry     `json:"geometry"`
 
-	SourceExtras json.RawMessage `db:"source_extras" json:"source_extras,omitempty"`
+	SourceExtras   json.RawMessage   `db:"source_extras" json:"source_extras,omitempty"`
+	StorageNumbers map[string]string `json:"storage_numbers,omitempty"`
 
 	changelog
 }

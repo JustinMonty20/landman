@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/jobs"
@@ -38,7 +39,7 @@ func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Def
 }
 
 const (
-	parcelJobID        = "union.gis.parcels"
+	parcelJobID        = parceljob.JobID
 	soilJobID          = "union.gis.soil"
 	screeningJobID     = "union.soil.screening"
 	taxJobID           = "union.tax"
@@ -86,8 +87,14 @@ func command(args []string) (string, error) {
 			return args[1], nil
 		}
 	}
+	if len(args) == 4 && args[0] == "replay" && args[1] == parcelJobID && args[2] == "--snapshot" {
+		if len(args[3]) != 32 {
+			return "", fmt.Errorf("snapshot ID must be 32 hex characters")
+		}
+		return "replay", nil
+	}
 	if len(args) == 4 && args[0] == "reprocess" && args[1] == parcelJobID && args[2] == "--limit" {
-		if _, err := reprocessLimit(args[3]); err != nil {
+		if _, err := parceljob.ReprocessLimit(args[3]); err != nil {
 			return "", err
 		}
 		return "reprocess", nil
@@ -199,10 +206,19 @@ func run(ctx context.Context) error {
 		err := withCountyHostLock(ctx, dsn, func(ctx context.Context) error { var e error; result, e = fn(ctx); return e })
 		return result, err
 	}
+	artifactRoot := os.Getenv("PARCEL_EVIDENCE_DIR")
+	if artifactRoot == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		artifactRoot = home + "/.local/share/landman/parcel-evidence"
+	}
+	parcelJob := parceljob.Job{Root: artifactRoot, DSN: dsn, Source: gisSource, Quarantine: jobs.NewQuarantineStore(pool)}
 	definitions := []jobs.Definition{
 		{ID: parcelJobID, Schedule: calendar[parcelJobID], Run: func(ctx context.Context) (jobs.Result, error) {
 			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
-				return importParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool))
+				return parcelJob.Import(ctx)
 			})
 		}},
 		{ID: soilJobID, Schedule: calendar[soilJobID], Run: func(ctx context.Context) (jobs.Result, error) {
@@ -235,42 +251,87 @@ func run(ctx context.Context) error {
 	}
 	refresh := func(ctx context.Context) error {
 		return withRefreshLock(ctx, dsn, func(ctx context.Context) error {
-			return runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			requests, err := observedHandoffs(ctx, pool, "screening_pending")
+			if err != nil {
+				return err
+			}
+			err = runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 				count, err := soil.ScreenStored(ctx, dsn, county.Union, gisSource.Name(), interval)
 				if errors.Is(err, soil.ErrNoStoredSet) {
 					err = fmt.Errorf("%w: %w", jobs.ErrPending, err)
 				}
 				return jobs.Result{Processed: count}, err
 			}})
+			if err != nil {
+				return err
+			}
+			return acknowledgeHandoffs(ctx, pool, "screening_pending", requests)
 		})
 	}
 	qualificationRefresh := func(ctx context.Context) error {
 		return withQualificationLock(ctx, dsn, func(ctx context.Context) error {
-			return runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			requests, err := observedHandoffs(ctx, pool, "qualification_pending")
+			if err != nil {
+				return err
+			}
+			err = runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 				n, e := qstore.Reconcile(ctx)
 				return jobs.Result{Processed: n}, e
 			}})
+			if err != nil {
+				return err
+			}
+			return acknowledgeHandoffs(ctx, pool, "qualification_pending", requests)
 		})
 	}
 	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, afterSource: func(ctx context.Context, id string) error {
-		if id == parcelJobID || id == soilJobID {
+		if id == parcelJobID {
+			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
+			if err != nil {
+				return err
+			}
+			var screenErr error
+			if due {
+				screenErr = refresh(ctx)
+			}
+			return errors.Join(screenErr, qualificationRefresh(ctx))
+		}
+		if id == soilJobID {
 			screeningError := refresh(ctx)
 			qualificationError := qualificationRefresh(ctx)
 			return errors.Join(screeningError, qualificationError)
 		}
 		return qualificationRefresh(ctx)
 	}}
+	if mode == "replay" {
+		outcome, _, err := runner.Run(ctx, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return parcelJob.Replay(ctx, os.Args[4]) }})
+		if err != nil {
+			return err
+		}
+		if outcome != jobs.OutcomeSuccess && outcome != jobs.OutcomeSuccessWithQuarantine {
+			return fmt.Errorf("replay did not validate: %s", outcome)
+		}
+		// Independent stored-input jobs discover stale dependencies later.
+		return nil
+	}
 	if mode == "reprocess" {
-		limit, _ := reprocessLimit(os.Args[4])
+		limit, _ := parceljob.ReprocessLimit(os.Args[4])
 		return runRequired(ctx, executor, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReprocess, Run: func(ctx context.Context) (jobs.Result, error) {
 			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
-				return reprocessParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool), limit)
+				return parcelJob.Reprocess(ctx, limit)
 			})
 		}})
 	}
 	if mode == "schedule" {
 		definitions = append(definitions, jobs.Definition{ID: qualificationJobID, Schedule: calendar[qualificationJobID], Run: func(ctx context.Context) (jobs.Result, error) {
+			requests, e := observedHandoffs(ctx, pool, "qualification_pending")
+			if e != nil {
+				return jobs.Result{}, e
+			}
 			n, e := qstore.Reconcile(ctx)
+			if e == nil {
+				e = acknowledgeHandoffs(ctx, pool, "qualification_pending", requests)
+			}
 			return jobs.Result{Processed: n}, e
 		}})
 		scheduler, err := jobs.NewScheduler(executor, definitions)
@@ -294,6 +355,50 @@ func run(ctx context.Context) error {
 		return runRequired(ctx, runner, definitions[len(definitions)-1])
 	}
 	return runManual(ctx, mode, runner, executor, definitions, refresh)
+}
+
+type handoffGeneration struct {
+	artifact   string
+	generation int64
+}
+
+// Snapshot only requests visible before the derived work. A publication
+// arriving during that work must remain pending even if its clock is older.
+func observedHandoffs(ctx context.Context, pool *pgxpool.Pool, column string) ([]handoffGeneration, error) {
+	if column != "screening_pending" && column != "qualification_pending" {
+		return nil, fmt.Errorf("invalid handoff column")
+	}
+	rows, err := pool.Query(ctx, `SELECT artifact_id,request_generation FROM parcel_derived_handoff WHERE `+column)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var requests []handoffGeneration
+	for rows.Next() {
+		var request handoffGeneration
+		if err := rows.Scan(&request.artifact, &request.generation); err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	return requests, rows.Err()
+}
+
+func acknowledgeHandoffs(ctx context.Context, pool *pgxpool.Pool, column string, requests []handoffGeneration) error {
+	if column != "screening_pending" && column != "qualification_pending" {
+		return fmt.Errorf("invalid handoff column")
+	}
+	if len(requests) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(requests))
+	generations := make([]int64, 0, len(requests))
+	for _, request := range requests {
+		ids = append(ids, request.artifact)
+		generations = append(generations, request.generation)
+	}
+	_, err := pool.Exec(ctx, `UPDATE parcel_derived_handoff SET `+column+`=false WHERE `+column+` AND (artifact_id,request_generation) IN (SELECT * FROM unnest($1::text[],$2::bigint[]))`, ids, generations)
+	return err
 }
 
 func runManual(ctx context.Context, mode string, runner requiredRunner, executor unionExecutor, definitions []jobs.Definition, refresh func(context.Context) error) error {

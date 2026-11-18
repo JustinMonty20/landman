@@ -75,7 +75,7 @@ jobs:
           "$(go env GOPATH)/bin/goose" -dir db/migrations postgres "$DATABASE_URL" up
       # These packages share one database; run them in sequence for stable row counts.
       - name: Race tests with PostgreSQL
-        run: go test -p 1 -race -tags postgres ./cmd/landman ./internal/parcelstore/ ./internal/taxstore/ ./internal/qualification/ -count=1
+        run: go test -p 1 -race -tags postgres ./cmd/landman ./internal/connector/union/parceljob/ ./internal/parcelstore/ ./internal/taxstore/ ./internal/qualification/ -count=1
       - name: Create and migrate authentication test database
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE landman_auth_test_ci'

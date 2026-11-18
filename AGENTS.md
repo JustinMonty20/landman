@@ -23,6 +23,7 @@ You are a principal engineer.
 - Verify parcel-import performance on an empty migrated database and after a failed first import. Include foreign-key checks and omitted-sale deletes in query measurements. Removing an explicit lookup does not prove that cached query plans remain efficient.
 - Before selecting project commands or files, inspect the repository root and its build manifest. Do not assume a Node.js project or `package.json` exists.
 
+- For raw-data retention, content fingerprints, conditional updates, change history, and normalization replay, define one ingestion contract. Implement it on parcels first. Verify retained source evidence, unchanged-content updates, field-change provenance, geometry-dependent refreshes, and replay safety before extending it. Then apply the verified contract to ALL other ingestion methods. Preserve source-specific identity, schedules, and atomic publication rules.
 ## Agent Diary
 
 Write `.agents/diary/{name}.md` when a trigger event occurs. Omit the file when no events occurred.

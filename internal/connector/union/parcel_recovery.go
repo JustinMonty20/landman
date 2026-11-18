@@ -3,6 +3,7 @@ package union
 import (
 	"context"
 	"fmt"
+	"github.com/tidwall/gjson"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,60 @@ func (b *ParcelFetchBudget) records(n int) error {
 // FetchParcelParts checks the selected current OBJECTID, then reacquires the entire effective PID.
 // Callers must share a budget and a two-minute fetch deadline across the attempt.
 func (s *GISSource) FetchParcelParts(ctx context.Context, objectID int64, expectedPID string, budget *ParcelFetchBudget) ([]connector.RawRecord, error) {
+	return s.fetchParcelParts(ctx, objectID, expectedPID, budget, nil)
+}
+
+// CaptureParcelParts retains selected, count, and every complete PID page.
+func (s *GISSource) CaptureParcelParts(ctx context.Context, objectID int64, expectedPID string, budget *ParcelFetchBudget, save func(string, []byte, int) error, onBatch ...connector.BatchHook) ([]connector.RawRecord, error) {
+	if save == nil {
+		return nil, fmt.Errorf("capture requires evidence sink")
+	}
+	return s.fetchParcelParts(ctx, objectID, expectedPID, budget, save, onBatch...)
+}
+
+func (s *GISSource) captureRepairPage(ctx context.Context, params ArcGISParams, now time.Time, save func(string, []byte, int) error) ([]connector.RawRecord, error) {
+	if save == nil {
+		return s.fetchBatch(ctx, params, now)
+	}
+	rawURL, err := s.buildURL(params)
+	if err != nil {
+		return nil, err
+	}
+	body, err := s.get(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	crs, err := ParcelResponseCRS(body)
+	if err != nil {
+		return nil, err
+	}
+	if err = save(rawURL, body, crs); err != nil {
+		return nil, err
+	}
+	return DecodeParcelPage(body, now, s.Name())
+}
+func (s *GISSource) captureRepairCount(ctx context.Context, params ArcGISParams, save func(string, []byte, int) error) (int64, error) {
+	if save == nil {
+		return s.queryTotalParcels(ctx, params)
+	}
+	rawURL, err := s.buildURL(params)
+	if err != nil {
+		return 0, err
+	}
+	body, err := s.get(ctx, rawURL)
+	if err != nil {
+		return 0, err
+	}
+	if err = save(rawURL, body, 0); err != nil {
+		return 0, err
+	}
+	count := gjson.GetBytes(body, "count")
+	if !count.Exists() || count.Type != gjson.Number || count.Int() < 0 || count.Num != float64(count.Int()) {
+		return 0, fmt.Errorf("invalid repair count")
+	}
+	return count.Int(), nil
+}
+func (s *GISSource) fetchParcelParts(ctx context.Context, objectID int64, expectedPID string, budget *ParcelFetchBudget, save func(string, []byte, int) error, onBatch ...connector.BatchHook) ([]connector.RawRecord, error) {
 	if objectID <= 0 || expectedPID == "" {
 		return nil, fmt.Errorf("union repair: invalid selected identity")
 	}
@@ -44,7 +99,7 @@ func (s *GISSource) FetchParcelParts(ctx context.Context, objectID int64, expect
 	if err := budget.request(ctx); err != nil {
 		return nil, err
 	}
-	selected, err := s.fetchBatch(ctx, ArcGISParams{Where: fmt.Sprintf("OBJECTID = %d", objectID), ReturnGeometry: true, ResultRecordCount: 2, Format: "json", OutFields: "*", OrderByFields: "OBJECTID"}, now)
+	selected, err := s.captureRepairPage(ctx, ArcGISParams{Where: fmt.Sprintf("OBJECTID = %d", objectID), ReturnGeometry: true, ResultRecordCount: 2, Format: "json", OutFields: "*", OrderByFields: "OBJECTID"}, now, save)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +123,7 @@ func (s *GISSource) FetchParcelParts(ctx context.Context, objectID int64, expect
 	if err := budget.request(ctx); err != nil {
 		return nil, err
 	}
-	count, err := s.queryTotalParcels(ctx, ArcGISParams{Where: where, ReturnCountOnly: true, Format: "json"})
+	count, err := s.captureRepairCount(ctx, ArcGISParams{Where: where, ReturnCountOnly: true, Format: "json"}, save)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +137,7 @@ func (s *GISSource) FetchParcelParts(ctx context.Context, objectID int64, expect
 		if err := budget.request(ctx); err != nil {
 			return nil, err
 		}
-		page, err := s.fetchBatch(ctx, ArcGISParams{Where: where, ReturnGeometry: true, ResultOffset: offset, ResultRecordCount: s.batchSize, Format: "json", OutFields: "*", OrderByFields: "OBJECTID"}, now)
+		page, err := s.captureRepairPage(ctx, ArcGISParams{Where: where, ReturnGeometry: true, ResultOffset: offset, ResultRecordCount: s.batchSize, Format: "json", OutFields: "*", OrderByFields: "OBJECTID"}, now, save)
 		if err != nil {
 			return nil, err
 		}
@@ -103,6 +158,11 @@ func (s *GISSource) FetchParcelParts(ctx context.Context, objectID int64, expect
 			}
 			seen[part.ObjectID] = true
 			previousObjectID = part.ObjectID
+		}
+		if len(onBatch) != 0 && onBatch[0] != nil {
+			if err := onBatch[0](page); err != nil {
+				return nil, err
+			}
 		}
 		records = append(records, page...)
 	}

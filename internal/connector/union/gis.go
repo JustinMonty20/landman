@@ -1,7 +1,9 @@
 package union
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -190,6 +192,146 @@ func (s *GISSource) FetchBatches(ctx context.Context, onBatch connector.BatchHoo
 	}
 	log.Printf("[%s] Fetch complete: %d total records in %v", s.Name(), totalFetched, time.Since(fetchedAt))
 	return nil
+}
+
+// CaptureParcelPages saves each exact response before decoding or normalizing it.
+// The callback must durably store bytes before returning.
+func (s *GISSource) CaptureParcelPages(ctx context.Context, save func(string, []byte, int) error, onBatch connector.BatchHook) (int, error) {
+	countParams := ArcGISParams{Where: "1=1", ReturnCountOnly: true, Format: "json"}
+	countURL, err := s.buildURL(countParams)
+	if err != nil {
+		return 0, err
+	}
+	countBody, err := s.get(ctx, countURL)
+	if err != nil {
+		return 0, err
+	}
+	if err := save(countURL, countBody, 0); err != nil {
+		return 0, err
+	}
+	count := gjson.GetBytes(countBody, "count")
+	if !count.Exists() || count.Type != gjson.Number || count.Int() < 0 || count.Num != float64(count.Int()) {
+		return 0, fmt.Errorf("invalid count response")
+	}
+	total := int(count.Int())
+	params := ArcGISParams{Where: "1=1", ReturnGeometry: true, ResultRecordCount: s.batchSize, Format: "json", OutFields: "*", OrderByFields: "OBJECTID"}
+	fetchedAt := time.Now().UTC()
+	for offset := 0; offset < total; offset += s.batchSize {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		params.ResultOffset = offset
+		rawURL, err := s.buildURL(params)
+		if err != nil {
+			return 0, err
+		}
+		body, err := s.get(ctx, rawURL)
+		if err != nil {
+			return 0, err
+		}
+		crs, err := ParcelResponseCRS(body)
+		if err != nil {
+			return 0, err
+		}
+		if err := save(rawURL, body, crs); err != nil {
+			return 0, err
+		}
+		records, err := DecodeParcelPage(body, fetchedAt, s.Name())
+		if err != nil {
+			return 0, err
+		}
+		if len(records) != min(s.batchSize, total-offset) {
+			return 0, fmt.Errorf("count mismatch at offset %d", offset)
+		}
+		if err := onBatch(records); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
+}
+
+// ParcelResponseCRS requires an original ArcGIS declaration, not a requested output CRS.
+func ParcelResponseCRS(body []byte) (int, error) {
+	ref := gjson.GetBytes(body, "spatialReference.wkid")
+	latest := gjson.GetBytes(body, "spatialReference.latestWkid")
+	valid := func(value gjson.Result) bool {
+		return value.Type == gjson.Number && (value.Raw == "3857" || value.Raw == "102100")
+	}
+	if (!ref.Exists() && !latest.Exists()) || (ref.Exists() && !valid(ref)) || (latest.Exists() && !valid(latest)) {
+		return 0, fmt.Errorf("missing or unsupported parcel source CRS")
+	}
+	crs := int(latest.Int())
+	if ref.Exists() {
+		crs = int(ref.Int())
+	}
+	features := gjson.GetBytes(body, "features")
+	if !features.IsArray() {
+		return 0, fmt.Errorf("parcel response missing features")
+	}
+	for _, feature := range features.Array() {
+		localRef := feature.Get("geometry.spatialReference")
+		if localRef.Exists() {
+			if len(localRef.Map()) == 0 {
+				return 0, fmt.Errorf("unsupported feature CRS declaration")
+			}
+			localWKID := feature.Get("geometry.spatialReference.wkid")
+			localLatest := feature.Get("geometry.spatialReference.latestWkid")
+			if !localWKID.Exists() && !localLatest.Exists() {
+				return 0, fmt.Errorf("unsupported feature CRS declaration")
+			}
+			if feature.Get("geometry.spatialReference.wkt").Exists() || feature.Get("geometry.spatialReference.wkt2").Exists() {
+				return 0, fmt.Errorf("unsupported feature CRS declaration")
+			}
+		}
+		for _, field := range []string{"geometry.spatialReference.wkid", "geometry.spatialReference.latestWkid"} {
+			local := feature.Get(field)
+			if local.Exists() && (!valid(local) || int(local.Int()) != crs && !(crs == 3857 && local.Int() == 102100) && !(crs == 102100 && local.Int() == 3857)) {
+				return 0, fmt.Errorf("feature CRS conflicts with response")
+			}
+		}
+	}
+	return crs, nil
+}
+
+// DecodeParcelPage retains exact decoded JSON numbers for source evidence.
+func DecodeParcelPage(body []byte, fetchedAt time.Time, sourceName string) ([]connector.RawRecord, error) {
+	crs, err := ParcelResponseCRS(body)
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Features []json.RawMessage `json:"features"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, err
+	}
+	out := make([]connector.RawRecord, 0, len(page.Features))
+	for _, feature := range page.Features {
+		decoder := json.NewDecoder(bytes.NewReader(feature))
+		decoder.UseNumber()
+		var data map[string]interface{}
+		if err := decoder.Decode(&data); err != nil {
+			return nil, err
+		}
+		attrs, _ := data["attributes"].(map[string]interface{})
+		pid, _ := attrs["PID"].(string)
+		if pid == "" {
+			identity, err := ParcelRecordIdentity(connector.RawRecord{RawData: data})
+			if err != nil {
+				return nil, err
+			}
+			pid = identity.PID
+		}
+		declared := crs
+		if ref := gjson.GetBytes(feature, "geometry.spatialReference.wkid"); ref.Exists() {
+			declared = int(ref.Int())
+		} else if ref := gjson.GetBytes(feature, "geometry.spatialReference.latestWkid"); ref.Exists() {
+			declared = int(ref.Int())
+		}
+		data["source_declared_crs"] = declared
+		out = append(out, connector.RawRecord{SourceName: sourceName, ParcelID: pid, FetchedAt: fetchedAt, RawData: data})
+	}
+	return out, nil
 }
 
 func (s *GISSource) queryTotalParcels(ctx context.Context, params ArcGISParams) (int64, error) {

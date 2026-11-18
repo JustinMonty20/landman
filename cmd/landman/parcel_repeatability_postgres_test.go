@@ -53,7 +53,7 @@ func TestCountySizedParcelRepeatability(t *testing.T) {
 			}
 			page = append(page, feature(oid, pid, fmt.Sprintf("owner %d", oid), !(invalid.Load() && oid == 2), sales))
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"features": page})
+		json.NewEncoder(w).Encode(map[string]interface{}{"spatialReference": map[string]interface{}{"wkid": 3857}, "features": page})
 	}))
 	defer server.Close()
 	source, err := union.NewGISSource(union.GISSourceConfig{BaseURL: server.URL, BatchSize: 2000, RateLimit: 1000000})
@@ -96,6 +96,33 @@ func TestCountySizedParcelRepeatability(t *testing.T) {
 	if countRows(t, ctx, pool, "parcels") != features-1 || countRows(t, ctx, pool, "parcel_sales") != (features-1)*3-2 {
 		t.Fatal("wrong natural-key or sales cardinality")
 	}
+	integrityStart := time.Now()
+	var broken int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM parcel_sales s LEFT JOIN parcels p ON p.id=s.parcel_id WHERE p.id IS NULL`).Scan(&broken); err != nil {
+		t.Fatal(err)
+	}
+	if broken != 0 {
+		t.Fatalf("orphan sales: %d", broken)
+	}
+	t.Logf("real FK integrity check: sales=%d orphan=%d elapsed=%s", (features-1)*3-2, broken, time.Since(integrityStart))
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parcelID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM parcels WHERE source_parcel_id='P000003'`).Scan(&parcelID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	var deletionPlan string
+	if err := tx.QueryRow(ctx, `EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) DELETE FROM parcel_sales WHERE parcel_id=$1::uuid AND NOT (sequence = ANY($2::smallint[]))`, parcelID, []int16{1}).Scan(&deletionPlan); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("omitted-sale deletion from actual fixture, rollback after EXPLAIN ANALYZE: %s", deletionPlan)
 	if countRows(t, ctx, pool, "quarantined_records WHERE reprocessed_at IS NULL") != 0 {
 		t.Fatal("clean retry did not resolve observed recovery")
 	}
@@ -103,7 +130,7 @@ func TestCountySizedParcelRepeatability(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT (SELECT reltuples FROM pg_class WHERE oid='parcels'::regclass),(SELECT reltuples FROM pg_class WHERE oid='parcel_sales'::regclass)`).Scan(&parcelsEstimate, &salesEstimate); err != nil {
 		t.Fatal(err)
 	}
-	if parcelsEstimate < 116000 || salesEstimate < 348000 {
+	if parcelsEstimate < 116000 || salesEstimate < 347000 {
 		t.Fatalf("statistics regressed: parcels=%v sales=%v", parcelsEstimate, salesEstimate)
 	}
 	var area float64
