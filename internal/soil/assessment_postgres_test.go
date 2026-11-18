@@ -703,7 +703,7 @@ func TestPostgresLateFailureDoesNotStaleNewHead(t *testing.T) {
 	if oldHead == newHead {
 		t.Fatal("fixture did not publish a new head")
 	}
-	if err := recordScreeningFailure(f.ctx, f.db, county.Union, f.source, oldHead, fmt.Errorf("late failure")); err != nil {
+	if err := RecordScreeningFailure(f.ctx, f.db, county.Union, f.source, oldHead, fmt.Errorf("late failure")); err != nil {
 		t.Fatal(err)
 	}
 	if current := f.read(id); current.Freshness.Stale || current.InterpretationSetRevision != newHead {

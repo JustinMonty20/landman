@@ -32,7 +32,19 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 		pool.Close()
 		return nil, err
 	}
-	_, err = tx.Exec(ctx, `CREATE TEMP TABLE parcel_shape_parts (
+	writer, err := NewShapeWriterTx(ctx, tx)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		pool.Close()
+		return nil, err
+	}
+	writer.pool = pool
+	return writer, nil
+}
+
+// NewShapeWriterTx stages parcel parts on the caller-owned publication transaction.
+func NewShapeWriterTx(ctx context.Context, tx pgx.Tx) (*ShapeWriter, error) {
+	_, err := tx.Exec(ctx, `CREATE TEMP TABLE parcel_shape_parts (
 		source_parcel_id TEXT NOT NULL, shape GEOMETRY(Geometry, 3857) NOT NULL,
 		likely_vacant BOOLEAN NOT NULL
 	) ON COMMIT DROP;
@@ -46,11 +58,9 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 	CREATE TEMP TABLE parcel_import_rejected(source_parcel_id TEXT PRIMARY KEY) ON COMMIT DROP;
 	CREATE TEMP TABLE parcel_import_identities(raw_key TEXT PRIMARY KEY, source_parcel_id TEXT NOT NULL) ON COMMIT DROP`)
 	if err != nil {
-		_ = tx.Rollback(ctx)
-		pool.Close()
 		return nil, err
 	}
-	return &ShapeWriter{pool: pool, tx: tx}, nil
+	return &ShapeWriter{tx: tx}, nil
 }
 
 // SavePart stores a mapped parcel, replaces its sale slots, and keeps the
@@ -113,7 +123,9 @@ func (w *ShapeWriter) Commit(ctx context.Context) error {
 // Close releases the connection and rolls back an unfinished import.
 func (w *ShapeWriter) Close() {
 	_ = w.tx.Rollback(context.Background())
-	w.pool.Close()
+	if w.pool != nil {
+		w.pool.Close()
+	}
 }
 
 // ErrMissingNaturalKey is returned when TrimSpace of CountyID, SourceName,

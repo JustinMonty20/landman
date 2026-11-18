@@ -11,25 +11,25 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// verifyParcelCapture checks receipt order and complete page membership before
+// verifyParcelResponses checks receipt order and complete page membership before
 // any source feature is normalized or a current row is considered for update.
-func verifyParcelCapture(snapshot *parcelevidence.Snapshot) error {
+func verifyParcelResponses(manifest parcelevidence.Manifest, read func(int) ([]byte, error)) error {
 	expected := 0
 	offset := 0
 	covered := 0
 	countReceipts := 0
-	for i, receipt := range snapshot.Manifest.Receipts {
+	for i, receipt := range manifest.Receipts {
 		u, err := url.Parse(receipt.Request)
 		if err != nil {
 			return err
 		}
 		q := u.Query()
-		body, err := snapshot.Read(i)
+		body, err := read(i)
 		if err != nil {
 			return err
 		}
 		if q.Get("returnCountOnly") == "true" {
-			if snapshot.Manifest.Kind == "full_scan" && i != 0 || snapshot.Manifest.Kind == "reprocess" && (i == 0 || !strings.HasPrefix(q.Get("where"), "PID = '") && !strings.HasPrefix(q.Get("where"), "(")) {
+			if manifest.Kind == "full_scan" && i != 0 || manifest.Kind == "reprocess" && (i == 0 || !strings.HasPrefix(q.Get("where"), "PID = '") && !strings.HasPrefix(q.Get("where"), "(")) {
 				return fmt.Errorf("out of order parcel count receipt")
 			}
 			value := gjson.GetBytes(body, "count")
@@ -54,7 +54,7 @@ func verifyParcelCapture(snapshot *parcelevidence.Snapshot) error {
 		if crs != receipt.DeclaredCRS {
 			return fmt.Errorf("receipt CRS mismatch")
 		}
-		if strings.HasPrefix(q.Get("where"), "OBJECTID = ") && snapshot.Manifest.Kind == "reprocess" {
+		if strings.HasPrefix(q.Get("where"), "OBJECTID = ") && manifest.Kind == "reprocess" {
 			if i == 0 || countReceipts == 0 {
 				continue
 			}
@@ -81,7 +81,7 @@ func verifyParcelCapture(snapshot *parcelevidence.Snapshot) error {
 		offset += len(page)
 		covered += len(page)
 	}
-	if countReceipts == 0 || offset != expected || covered != snapshot.Manifest.Count {
+	if countReceipts == 0 || offset != expected || covered != manifest.Count {
 		return fmt.Errorf("incomplete parcel snapshot")
 	}
 	return nil

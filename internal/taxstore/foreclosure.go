@@ -63,7 +63,7 @@ DO UPDATE SET parcel_set_sha256=EXCLUDED.parcel_set_sha256,legal_sha256=EXCLUDED
 owner_name=EXCLUDED.owner_name,sale_on=EXCLUDED.sale_on,opening_bid=EXCLUDED.opening_bid,
 current_bid=EXCLUDED.current_bid,upset_bid=EXCLUDED.upset_bid,status=EXCLUDED.status,
 redeemed=EXCLUDED.redeemed,bidding_closed=EXCLUDED.bidding_closed,source_url=EXCLUDED.source_url,
-file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now() RETURNING id::text`
+file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now() WHERE (tax_foreclosure_cases.parcel_set_sha256,tax_foreclosure_cases.legal_sha256,tax_foreclosure_cases.owner_name,tax_foreclosure_cases.sale_on,tax_foreclosure_cases.opening_bid,tax_foreclosure_cases.current_bid,tax_foreclosure_cases.upset_bid,tax_foreclosure_cases.status,tax_foreclosure_cases.redeemed,tax_foreclosure_cases.bidding_closed) IS DISTINCT FROM (EXCLUDED.parcel_set_sha256,EXCLUDED.legal_sha256,EXCLUDED.owner_name,EXCLUDED.sale_on,EXCLUDED.opening_bid,EXCLUDED.current_bid,EXCLUDED.upset_bid,EXCLUDED.status,EXCLUDED.redeemed,EXCLUDED.bidding_closed) RETURNING id::text`
 		if identity.number == nil {
 			query = strings.Replace(query,
 				"ON CONFLICT (county_id,source_name,case_number) WHERE case_number IS NOT NULL",
@@ -72,6 +72,9 @@ file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now()
 		err := tx.QueryRow(ctx, query, county.Union, meta.Name, identity.number, identity.pinHash[:], identity.legalHash[:], foreclosureNullable(sale.OwnerName), on,
 			foreclosureDollars(sale.OpeningBid), foreclosureDollars(sale.CurrentBid), foreclosureDollars(sale.UpsetBid),
 			foreclosureNullable(sale.Status), sale.Redeemed, sale.BiddingClosed, meta.URL, digest[:], meta.FetchedAt).Scan(&caseID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = tx.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name=$2 AND ((case_number=$3 AND case_number IS NOT NULL) OR (case_number IS NULL AND $3::text IS NULL AND parcel_set_sha256=$4 AND legal_sha256=$5))`, county.Union, meta.Name, identity.number, identity.pinHash[:], identity.legalHash[:]).Scan(&caseID)
+		}
 		if err != nil {
 			return result, fmt.Errorf("save foreclosure case: %w", err)
 		}
@@ -90,7 +93,7 @@ file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now()
 			_, err = tx.Exec(ctx, `INSERT INTO tax_foreclosure_parcels (case_id,parcel_id,tax_value,situs_line,legal_description)
 VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
  tax_value=EXCLUDED.tax_value,situs_line=EXCLUDED.situs_line,
- legal_description=EXCLUDED.legal_description,updated_at=now()`, caseID, parcelID,
+ legal_description=EXCLUDED.legal_description,updated_at=now() WHERE (tax_foreclosure_parcels.tax_value,tax_foreclosure_parcels.situs_line,tax_foreclosure_parcels.legal_description) IS DISTINCT FROM (EXCLUDED.tax_value,EXCLUDED.situs_line,EXCLUDED.legal_description)`, caseID, parcelID,
 				foreclosureDollars(pin.TaxValue), foreclosureNullable(pin.SitusLine), foreclosureNullable(pin.LegalDescription))
 			if err != nil {
 				return result, fmt.Errorf("save foreclosure parcel: %w", err)
@@ -182,6 +185,42 @@ WHERE county_id=$1 AND source_name=$2 AND source_url=$3 AND file_sha256=$4 AND f
 type Foreclosures struct{ pool *pgxpool.Pool }
 
 func NewForeclosures(pool *pgxpool.Pool) Foreclosures { return Foreclosures{pool: pool} }
+
+// ForeclosureLinksCurrent checks the case identity and all currently matched PIN links.
+// It does not require identical file bytes, since formatting-only revisions do not
+// update the typed cases or joins.
+func ForeclosureLinksCurrent(ctx context.Context, tx pgx.Tx, cases []union.ForeclosureCase) (bool, error) {
+	for _, sale := range cases {
+		identity := foreclosureIdentityFor(sale)
+		var caseID string
+		err := tx.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name='union_foreclosure' AND ((case_number=$2 AND case_number IS NOT NULL) OR (case_number IS NULL AND $2::text IS NULL AND parcel_set_sha256=$3 AND legal_sha256=$4))`, county.Union, identity.number, identity.pinHash[:], identity.legalHash[:]).Scan(&caseID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, pin := range sale.PINs {
+			var missing bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcels p LEFT JOIN tax_foreclosure_parcels j ON j.parcel_id=p.id AND j.case_id=$1::uuid WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=$2 AND j.id IS NULL)`, caseID, pin.ParcelKey).Scan(&missing); err != nil {
+				return false, err
+			}
+			if missing {
+				return false, nil
+			}
+		}
+		if identity.number != nil {
+			var obsolete bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tax_foreclosure_parcels j JOIN parcels p ON p.id=j.parcel_id WHERE j.case_id=$1::uuid AND NOT (p.source_parcel_id=ANY($2::text[])))`, caseID, identity.keys).Scan(&obsolete); err != nil {
+				return false, err
+			}
+			if obsolete {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
 
 // Current reports whether the active foreclosure file has every current parcel link.
 // It does not change stored rows, so an unchanged retry does not write.

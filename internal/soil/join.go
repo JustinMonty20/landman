@@ -32,7 +32,8 @@ WHERE m.set_id=$3 AND s.county_id=$1 AND s.source_name=$2
 INSERT INTO soil_polygon_parcels (soil_polygon_id, parcel_id, overlap_acres)
 SELECT soil_polygon_id, parcel_id, overlap_acres FROM hit WHERE overlap_acres > 0
 ON CONFLICT (soil_polygon_id, parcel_id) DO UPDATE
-SET overlap_acres = EXCLUDED.overlap_acres, updated_at = now()`
+SET overlap_acres = EXCLUDED.overlap_acres, updated_at = now()
+WHERE soil_polygon_parcels.overlap_acres IS DISTINCT FROM EXCLUDED.overlap_acres`
 
 // Store upserts a county soil snapshot and intersects it with every stored parcel in one transaction.
 // It never deletes retired polygon or intersection rows.
@@ -108,6 +109,52 @@ func storeWithSet(ctx context.Context, db beginner, countyID county.ID, source s
 			}
 		}
 	}
+	setID, err := storePolygons(ctx, tx, countyID, source, polygons, names, nameErr == nil)
+	if err != nil {
+		return "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return setID, nil
+}
+
+// StoreWithSetTx publishes captured county geometry without network access in
+// the caller-owned evidence transaction. The caller captures USDA separately.
+func StoreWithSetTx(ctx context.Context, tx pgx.Tx, countyID county.ID, source string, polygons []Polygon, units []MapUnit) (string, error) {
+	if err := validateMembership(countyID, source, polygons, units); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "soil:"+countyID.String()+":"+source); err != nil {
+		return "", err
+	}
+	if err := StoreMapUnitsTx(ctx, tx, units); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `LOCK TABLE parcels IN SHARE MODE`); err != nil {
+		return "", err
+	}
+	return storePolygons(ctx, tx, countyID, source, polygons, nil, false)
+}
+
+// StoreMapUnitsTx updates descriptive metadata without replacing polygon geometry.
+func StoreMapUnitsTx(ctx context.Context, tx pgx.Tx, units []MapUnit) error {
+	distinct := make(map[string]MapUnit, len(units))
+	for _, unit := range units {
+		if unit.MapUnitKey == "" {
+			return fmt.Errorf("soil: empty map unit key")
+		}
+		distinct[unit.MapUnitKey] = unit
+	}
+	for key, unit := range distinct {
+		if _, err := tx.Exec(ctx, `INSERT INTO soil_map_units(map_unit_key,map_unit_symbol,area_symbol) VALUES ($1,$2,$3) ON CONFLICT(map_unit_key) DO UPDATE SET map_unit_symbol=EXCLUDED.map_unit_symbol,area_symbol=EXCLUDED.area_symbol WHERE (soil_map_units.map_unit_symbol,soil_map_units.area_symbol) IS DISTINCT FROM (EXCLUDED.map_unit_symbol,EXCLUDED.area_symbol)`, key, unit.MapUnitSymbol, unit.AreaSymbol); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func storePolygons(ctx context.Context, tx pgx.Tx, countyID county.ID, source string, polygons []Polygon, names map[string]nameResult, haveNames bool) (string, error) {
 	now := time.Now()
 	for _, polygon := range polygons {
 		if polygon.County != countyID || polygon.SourceName != source {
@@ -121,7 +168,7 @@ func storeWithSet(ctx context.Context, db beginner, countyID county.ID, source s
 			return "", err
 		}
 		survey := polygon.SurveySavedOn
-		if result, ok := names[polygon.MapUnitKey]; nameErr == nil && ok && result.surveyDate != nil {
+		if result, ok := names[polygon.MapUnitKey]; haveNames && ok && result.surveyDate != nil {
 			survey = result.surveyDate
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO soil_polygons (
@@ -142,9 +189,6 @@ func storeWithSet(ctx context.Context, db beginner, countyID county.ID, source s
 		return "", err
 	}
 	if err = ctx.Err(); err != nil {
-		return "", err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return setID, nil

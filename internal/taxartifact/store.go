@@ -50,6 +50,17 @@ type Store interface {
 	Mode() string
 }
 
+// VerifiedReference checks stored bytes before granting a reconstructed reference
+// the same publication authority as a fresh Put result.
+func VerifiedReference(ctx context.Context, store Store, artifact Artifact) (Artifact, error) {
+	if err := Verify(ctx, store, artifact); err != nil {
+		return Artifact{}, err
+	}
+	artifact.mode = store.Mode()
+	artifact.verified = true
+	return artifact, nil
+}
+
 // Verify reads all bytes and checks their length and SHA-256 before publication.
 func Verify(ctx context.Context, store Store, artifact Artifact) error {
 	body, err := store.Get(ctx, artifact)

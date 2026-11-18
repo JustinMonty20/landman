@@ -32,7 +32,7 @@ func TestParcelEvidenceMigrationRejectsLossyRollback(t *testing.T) {
 	if _, err = pool.Exec(ctx, down); err == nil {
 		t.Fatal("migration discarded registered capture")
 	}
-	if countRows(t, ctx, pool, "parcel_evidence_captures") != 1 || countRows(t, ctx, pool, "parcel_evidence_observations") != 1 {
+	if countRows(t, ctx, pool, "ingest_captures") != 1 || countRows(t, ctx, pool, "parcel_evidence_observations") != 1 {
 		t.Fatal("rejected rollback changed published provenance")
 	}
 }
@@ -62,7 +62,7 @@ func TestRegisteredFailedCaptureRetryPublishesSourceOnlyWithoutBusinessWrites(t 
 		t.Fatalf("first registered capture unexpectedly published: %s %v", outcome, err)
 	}
 	var id string
-	if err := pool.QueryRow(ctx, `SELECT c.artifact_id FROM parcel_evidence_captures c
+	if err := pool.QueryRow(ctx, `SELECT c.id::text FROM ingest_captures c
 		JOIN job_attempts a ON a.id=c.attempt_id WHERE a.outcome='failed' ORDER BY a.started_at DESC LIMIT 1`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}

@@ -92,6 +92,9 @@ func TestCommands(t *testing.T) {
 		{nil, "all"}, {[]string{"schedule"}, "schedule"},
 		{[]string{"run", parcelJobID}, parcelJobID}, {[]string{"run", soilJobID}, soilJobID},
 		{[]string{"run", screeningJobID}, screeningJobID}, {[]string{"run", taxJobID}, taxJobID},
+		{[]string{"replay", taxJobID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "tax-replay"},
+		{[]string{"replay", soilJobID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "soil-replay"},
+		{[]string{"replay", screeningJobID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "screening-replay"},
 		{[]string{"run", zoningJobID}, zoningJobID}, {[]string{"run", roadsJobID}, roadsJobID}, {[]string{"run", qualificationJobID}, qualificationJobID},
 	} {
 		mode, err := command(tc.args)

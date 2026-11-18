@@ -84,35 +84,35 @@ type ParcelAssessment struct {
 // Reconciliation tolerance covers overlay roundoff, not omitted slivers.
 func areaTolerance(total float64) float64 { return math.Max(1e-7, total*1e-8) }
 
-func assessParcels(ctx context.Context, tx pgx.Tx, runID, setID string, countyID county.ID, source string) error {
+func assessParcels(ctx context.Context, tx pgx.Tx, runID, setID string, countyID county.ID, source string) (bool, error) {
 	if _, err := tx.Exec(ctx, `INSERT INTO soil_assessment_keys(parcel_id) SELECT id FROM parcels WHERE county_id=$1 AND source_name=$2 ON CONFLICT DO NOTHING`, countyID.String(), source); err != nil {
-		return err
+		return false, err
 	}
 	copied, err := copyUnchangedAssessment(ctx, tx, runID, setID, countyID, source)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !copied {
 		if err := assessChangedParcels(ctx, tx, runID, setID, countyID, source); err != nil {
-			return err
+			return false, err
 		}
 	}
 	var invalid int
 	err = tx.QueryRow(ctx, `SELECT count(*) FROM soil_parcel_assessments a WHERE run_id=$1 AND total_acres IS NOT NULL AND abs(total_acres-uncovered_acres-ambiguous_acres-COALESCE((SELECT sum(exclusive_acres) FROM soil_assessment_map_units m WHERE m.run_id=a.run_id AND m.parcel_id=a.parcel_id),0))>greatest(1e-7,total_acres*1e-8)`, runID).Scan(&invalid)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if invalid != 0 {
-		return fmt.Errorf("soil: %d parcel area partitions failed reconciliation", invalid)
+		return false, fmt.Errorf("soil: %d parcel area partitions failed reconciliation", invalid)
 	}
 	err = tx.QueryRow(ctx, `SELECT count(*) FROM soil_assessment_map_units m WHERE m.run_id=$1 AND (SELECT count(*) FROM soil_screening_ratings r WHERE r.run_id=m.run_id AND r.map_unit_key=m.map_unit_key)<>3`, runID).Scan(&invalid)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if invalid != 0 {
-		return errors.New("soil: incomplete interpretation coverage")
+		return false, errors.New("soil: incomplete interpretation coverage")
 	}
-	return nil
+	return copied, nil
 }
 
 // Copy only when every current parcel and the complete soil geometry set are unchanged.

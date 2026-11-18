@@ -35,9 +35,8 @@ func (w *ShapeWriter) StageEvidencePart(ctx context.Context, parcel models.GISPa
 	return nil
 }
 
-// PublishEvidence serializes the complete candidate comparison, source links,
-// history and current business rows in the same publication transaction.
-func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.QuarantineStore, jobID string, selected []jobs.PendingRecord, manifest parcelevidence.Manifest, correction bool) (int, error) {
+// ApplyEvidence serializes source evidence, history and current rows in the caller's publication transaction.
+func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.QuarantineStore, jobID string, selected []jobs.PendingRecord, manifest parcelevidence.Manifest, correction bool) (int, error) {
 	if _, err := w.tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('union.parcel.evidence.publication'))`); err != nil {
 		return 0, err
 	}
@@ -54,14 +53,14 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 	}
 	var registered bool
 	var originatingOutcome, originatingAttempt string
-	registrationErr := w.tx.QueryRow(ctx, `SELECT c.artifact_hash=$2 AND c.manifest=$3::jsonb AND c.attempt_kind=$4,
-		a.outcome,c.attempt_id::text FROM parcel_evidence_captures c JOIN job_attempts a ON a.id=c.attempt_id
-		WHERE c.artifact_id=$1 AND a.job_id=$5`, manifest.ID, manifest.ArtifactHash, manifest, manifest.Kind, jobID).Scan(&registered, &originatingOutcome, &originatingAttempt)
-	if registrationErr != nil && registrationErr != pgx.ErrNoRows {
+	registrationErr := w.tx.QueryRow(ctx, `SELECT c.source_name=$3 AND c.observed_at=$4 AND c.attempt_kind=$5,
+   a.outcome,c.attempt_id::text FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id
+   WHERE c.id=$1::uuid AND a.job_id=$2`, manifest.ID, jobID, manifest.Source, manifest.CreatedAt, manifest.Kind).Scan(&registered, &originatingOutcome, &originatingAttempt)
+	if registrationErr != nil {
 		return 0, registrationErr
 	}
-	if registrationErr == nil && !registered {
-		return 0, fmt.Errorf("snapshot differs registered capture")
+	if !registered {
+		return 0, fmt.Errorf("capture differs from registered source attempt")
 	}
 	if correction {
 		var trusted []byte
@@ -204,9 +203,6 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_derived_handoff(artifact_id) VALUES ($1) ON CONFLICT (artifact_id) DO UPDATE SET requested_at=clock_timestamp(),request_generation=parcel_derived_handoff.request_generation+1,screening_pending=true,qualification_pending=true`, manifest.ID); err != nil {
 			return 0, err
 		}
-	}
-	if err := w.tx.Commit(ctx); err != nil {
-		return 0, err
 	}
 	return processed, nil
 }

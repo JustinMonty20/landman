@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/JustinMonty20/landman/internal/jobs"
-	"github.com/JustinMonty20/landman/internal/parcelevidence"
 )
 
 func TestParcelEvidenceObservationAndOfflineReplay(t *testing.T) {
@@ -47,15 +46,10 @@ func TestParcelEvidenceObservationAndOfflineReplay(t *testing.T) {
 	if oldOwner != "last" || newOwner != "new owner" || cause != "source_observation" {
 		t.Fatalf("wrong field provenance %s %s %s", oldOwner, newOwner, cause)
 	}
-	dir := os.Getenv("PARCEL_EVIDENCE_DIR")
-	old, err := parcelevidence.Open(dir, snapshotID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	requests := fixture.requests
 	runner, _ := jobs.NewRunner(pool)
 	outcome, _, err := runner.Run(ctx, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
-		return parceljob.Job{Root: os.Getenv("PARCEL_EVIDENCE_DIR"), DSN: dsn, Quarantine: jobs.NewQuarantineStore(pool)}.Replay(ctx, old.Manifest.ID)
+		return parceljob.Job{Root: os.Getenv("PARCEL_EVIDENCE_DIR"), DSN: dsn, Quarantine: jobs.NewQuarantineStore(pool)}.Replay(ctx, snapshotID)
 	}})
 	if err != nil || outcome != jobs.OutcomeSuccess {
 		t.Fatal(outcome, err)

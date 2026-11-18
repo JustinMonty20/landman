@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,11 +15,13 @@ import (
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
+	"github.com/JustinMonty20/landman/internal/connector/union/soiljob"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/qualification"
 	"github.com/JustinMonty20/landman/internal/soil"
+	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/robfig/cron/v3"
@@ -87,9 +91,18 @@ func command(args []string) (string, error) {
 			return args[1], nil
 		}
 	}
-	if len(args) == 4 && args[0] == "replay" && args[1] == parcelJobID && args[2] == "--snapshot" {
-		if len(args[3]) != 32 {
-			return "", fmt.Errorf("snapshot ID must be 32 hex characters")
+	if len(args) == 4 && args[0] == "replay" && (args[1] == parcelJobID || args[1] == taxJobID || args[1] == soilJobID || args[1] == screeningJobID) && args[2] == "--snapshot" {
+		if !validCaptureID(args[3]) {
+			return "", fmt.Errorf("snapshot ID must be a capture UUID")
+		}
+		if args[1] == taxJobID {
+			return "tax-replay", nil
+		}
+		if args[1] == soilJobID {
+			return "soil-replay", nil
+		}
+		if args[1] == screeningJobID {
+			return "screening-replay", nil
 		}
 		return "replay", nil
 	}
@@ -99,7 +112,15 @@ func command(args []string) (string, error) {
 		}
 		return "reprocess", nil
 	}
-	return "", fmt.Errorf("usage: landman [schedule | run <job ID> | reprocess %s --limit N]", parcelJobID)
+	return "", fmt.Errorf("usage: landman [schedule | run <job ID> | replay <%s|%s|%s|%s> --snapshot UUID | reprocess %s --limit N]", parcelJobID, taxJobID, soilJobID, screeningJobID, parcelJobID)
+}
+
+func validCaptureID(id string) bool {
+	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
+		return false
+	}
+	_, err := hex.DecodeString(strings.ReplaceAll(id, "-", ""))
+	return err == nil
 }
 
 func schedules(getenv func(string) string) (map[string]string, error) {
@@ -162,6 +183,12 @@ func run(ctx context.Context) error {
 			return err
 		}
 	}
+	if mode == "tax-replay" {
+		taxInput.ArtifactDir = os.Getenv("UNION_TAX_ARTIFACT_DIR")
+		if taxInput.ArtifactDir == "" {
+			return fmt.Errorf("UNION_TAX_ARTIFACT_DIR is required for %s replay", taxJobID)
+		}
+	}
 	var calendar map[string]string
 	if mode == "schedule" {
 		calendar, err = schedules(os.Getenv)
@@ -214,6 +241,12 @@ func run(ctx context.Context) error {
 		}
 		artifactRoot = home + "/.local/share/landman/parcel-evidence"
 	}
+	soilArtifacts, err := taxartifact.NewLocal(artifactRoot)
+	if err != nil {
+		return err
+	}
+	geometryJob := soiljob.Job{Source: gisSource, Pool: pool, Artifacts: soilArtifacts}
+	screeningJob := soiljob.ScreeningJob{Pool: pool, Artifacts: soilArtifacts, Client: http.DefaultClient, Interval: interval}
 	parcelJob := parceljob.Job{Root: artifactRoot, DSN: dsn, Source: gisSource, Quarantine: jobs.NewQuarantineStore(pool)}
 	definitions := []jobs.Definition{
 		{ID: parcelJobID, Schedule: calendar[parcelJobID], Run: func(ctx context.Context) (jobs.Result, error) {
@@ -223,12 +256,7 @@ func run(ctx context.Context) error {
 		}},
 		{ID: soilJobID, Schedule: calendar[soilJobID], Run: func(ctx context.Context) (jobs.Result, error) {
 			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
-				polygons, units, err := gisSource.FetchSoilPolygons(ctx)
-				if err != nil {
-					return jobs.Result{}, fmt.Errorf("fetch soil polygons: %w", err)
-				}
-				_, err = soil.StoreWithSet(ctx, dsn, county.Union, gisSource.Name(), polygons, units)
-				return jobs.Result{Processed: len(polygons)}, err
+				return geometryJob.Import(ctx)
 			})
 		}},
 	}
@@ -256,11 +284,11 @@ func run(ctx context.Context) error {
 				return err
 			}
 			err = runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
-				count, err := soil.ScreenStored(ctx, dsn, county.Union, gisSource.Name(), interval)
+				result, err := screeningJob.Import(ctx)
 				if errors.Is(err, soil.ErrNoStoredSet) {
 					err = fmt.Errorf("%w: %w", jobs.ErrPending, err)
 				}
-				return jobs.Result{Processed: count}, err
+				return result, err
 			}})
 			if err != nil {
 				return err
@@ -303,6 +331,34 @@ func run(ctx context.Context) error {
 		}
 		return qualificationRefresh(ctx)
 	}}
+	if mode == "soil-replay" || mode == "screening-replay" {
+		id := soilJobID
+		replay := geometryJob.Replay
+		if mode == "screening-replay" {
+			id = screeningJobID
+			replay = screeningJob.Replay
+		}
+		outcome, _, err := runner.Run(ctx, jobs.Definition{ID: id, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, replay(ctx, os.Args[4]) }})
+		if err != nil {
+			return err
+		}
+		if outcome != jobs.OutcomeSuccess {
+			return fmt.Errorf("soil replay did not validate: %s", outcome)
+		}
+		return nil
+	}
+	if mode == "tax-replay" {
+		outcome, _, err := runner.Run(ctx, jobs.Definition{ID: taxJobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
+			return taxjob.Replay(ctx, pool, taxInput.ArtifactDir, os.Args[4])
+		}})
+		if err != nil {
+			return err
+		}
+		if outcome != jobs.OutcomeSuccess && outcome != jobs.OutcomeSuccessWithQuarantine {
+			return fmt.Errorf("tax replay did not validate: %s", outcome)
+		}
+		return nil
+	}
 	if mode == "replay" {
 		outcome, _, err := runner.Run(ctx, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return parcelJob.Replay(ctx, os.Args[4]) }})
 		if err != nil {
