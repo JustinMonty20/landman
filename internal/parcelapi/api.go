@@ -413,7 +413,7 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := strings.ToLower(term) + "%"
 	var found bool
-	e = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM parcels WHERE county_id=$1 AND source_name=$2 AND lower(parcel_number) LIKE $3) OR EXISTS(SELECT 1 FROM parcels WHERE county_id=$1 AND source_name=$2 AND lower(situs_line_1) LIKE $3)`, countyID, parcelSource, prefix).Scan(&found)
+	e = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM parcels WHERE county_id=$1 AND source_name=$2 AND lower(left(parcel_number,80)) LIKE $3) OR EXISTS(SELECT 1 FROM parcels WHERE county_id=$1 AND source_name=$2 AND lower(left(situs_line_1,80)) LIKE $3)`, countyID, parcelSource, prefix).Scan(&found)
 	if e != nil {
 		unavailable(w)
 		return
@@ -426,7 +426,7 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]any{"items": []Parcel{}})
 		return
 	}
-	rows, e := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2 AND (lower(p.parcel_number) LIKE $3 OR lower(p.situs_line_1) LIKE $3) ORDER BY p.id LIMIT 20`, countyID, parcelSource, prefix)
+	rows, e := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2 AND (lower(left(p.parcel_number,80)) LIKE $3 OR lower(left(p.situs_line_1,80)) LIKE $3) ORDER BY p.id LIMIT 20`, countyID, parcelSource, prefix)
 	if e != nil {
 		unavailable(w)
 		return

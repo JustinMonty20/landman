@@ -423,6 +423,11 @@ func TestProtectedParcelRoutes(t *testing.T) {
 	if f.request("GET", "/api/v1/parcels", session).Code != 401 {
 		t.Fatal("revoked session accepted")
 	}
+	session = f.login(t, nil)
+	f.pool.Close()
+	if f.request("GET", "/api/v1/parcels", session).Code != http.StatusServiceUnavailable {
+		t.Fatal("database failure did not deny parcel access")
+	}
 	if called != 1 {
 		t.Fatalf("data handler called %d times", called)
 	}

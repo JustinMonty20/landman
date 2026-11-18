@@ -106,6 +106,27 @@ func TestHTTPPostGIS(t *testing.T) {
 			t.Fatalf("map %d aggregate %v %v", zoom, contexts, matches)
 		}
 	}
+	if _, err := pool.Exec(ctx, `UPDATE parcels SET shape=ST_Transform(ST_Collect(ST_MakeEnvelope(-79.9,33.1,-79.8997,33.1003,4326),ST_MakeEnvelope(-79.8996,33.1004,-79.8993,33.1007,4326)),3857) WHERE id=$1`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := request("/api/v1/parcels/map?bbox=" + bbox + "&zoom=14&likely_vacant=true"); code != 200 {
+		t.Fatalf("multipart map status=%d", code)
+	} else {
+		found := false
+		for _, value := range body["features"].([]any) {
+			feature := value.(map[string]any)
+			if feature["id"] == ids[0] {
+				found = true
+				geometry := feature["geometry"].(map[string]any)
+				if geometry["type"] != "MultiPolygon" || len(geometry["coordinates"].([]any)) != 2 {
+					t.Fatalf("multipart geometry lost: %v", geometry["type"])
+				}
+			}
+		}
+		if !found {
+			t.Fatal("multipart parcel omitted from map")
+		}
+	}
 	if _, err := pool.Exec(ctx, `UPDATE parcels SET mapped_acres=NULL WHERE id=$1`, ids[2]); err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +145,15 @@ func TestHTTPPostGIS(t *testing.T) {
 	code, soil := request("/api/v1/parcels/" + ids[0] + "/soil")
 	if code != 200 || soil["available"] != false {
 		t.Fatalf("missing soil %d %v", code, soil)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE parcels SET situs_line_1=$1 WHERE id=$2`, strings.Repeat("x", 2<<20), ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := request("/api/v1/parcels/" + ids[0]); code != 413 {
+		t.Fatalf("oversized response status=%d", code)
+	}
+	if code, _ := request("/api/v1/parcels/lookup?q=" + strings.Repeat("x", 80)); code != 413 {
+		t.Fatalf("long address prefix status=%d", code)
 	}
 	canceled, cancelRequest := context.WithCancel(context.Background())
 	cancelRequest()
