@@ -23,10 +23,12 @@ jobs:
           cache: true
       - name: Install PDF text tool
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends poppler-utils
+      - name: Check migration versions
+        run: python3 .github/scripts/check-migration-versions.py
       - name: Check Go format
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
-      - name: Check review verifier
-        run: python3 -m unittest discover -s .github/scripts -p 'test_verify_review.py'
+      - name: Check Python scripts
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Vet
         run: go vet ./...
       - name: Staticcheck
