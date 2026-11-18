@@ -63,8 +63,8 @@ func roundDecimal(value float64, scale int) (float64, error) {
 	multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
 	r.Mul(r, new(big.Rat).SetInt(multiplier))
 	quotient, rem := new(big.Int).QuoRem(r.Num(), r.Denom(), new(big.Int))
-	if new(big.Int).Mul(rem, big.NewInt(2)).Cmp(r.Denom()) >= 0 {
-		quotient.Add(quotient, big.NewInt(1))
+	if new(big.Int).Mul(new(big.Int).Abs(rem), big.NewInt(2)).Cmp(r.Denom()) >= 0 {
+		quotient.Add(quotient, big.NewInt(int64(r.Sign())))
 	}
 	text = new(big.Rat).SetFrac(quotient, multiplier).FloatString(scale)
 	return strconv.ParseFloat(text, 64)

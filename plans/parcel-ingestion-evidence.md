@@ -40,7 +40,7 @@ Treat existing rows without retained source evidence as a baseline. Do not fabri
 
 ### Replay
 
-Replay verifies retained files and uses the same parser and normalizer without HTTP requests. It does not create a new source observation or advance source freshness. Historical replay must not overwrite newer source state or generate source-change history. It can produce an isolated validation result. A replay of current evidence can publish a normalization correction with explicit provenance after eligibility checks under the publication lock.
+Replay verifies retained files and uses the same parser and normalizer without HTTP requests. It does not claim a new county observation or advance source freshness. An empty-database rebuild restores the original observation time and records offline publication provenance. Historical replay must not overwrite newer source state or generate source-change history. It can produce an isolated validation result. A replay of current evidence can publish a normalization correction with explicit provenance after eligibility checks under the publication lock.
 
 Live quarantine repair remains a new bounded source request, not historical replay. It must retain its source responses and complete PID membership under the same contract.
 
@@ -71,7 +71,7 @@ The design comparison used the configured GPT-6 Sol and GPT-6 Luna models. The c
 - [x] Verify capture followed by replay with the source server unavailable. Verify historical replay cannot replace newer ownership or advance source freshness.
 - [x] Verify current-evidence normalization corrections and repeated replay do not become new source-change events.
 - [x] Verify publication failure, cancellation, stable UUIDs, fallback IDs, last-part precedence, omitted-sale deletion, and foreign-key integrity.
-- [ ] Verify migration on an empty database and a populated pre-evidence fixture. Do not invent historical evidence during migration.
+- [x] Verify migration on an empty database and a populated pre-evidence fixture. Do not invent historical evidence during migration.
 - [x] Measure a representative full-import fixture on an empty migrated database and after a failed first import. Include foreign-key checks and omitted-sale deletion in query measurements. Preserve the ten-minute limit. Synthetic fixture results do not prove live county performance.
 - [ ] Run local Go CI equivalents, relevant PostGIS tests, and independent code review. Record selected checks and specific incomplete gates before handoff.
 - [ ] Open a matching PR and stop at parcels. Do not merge or extend the contract to other ingestion methods.
