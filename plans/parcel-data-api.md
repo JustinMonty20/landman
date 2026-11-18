@@ -54,7 +54,9 @@ Select the direct-handler proposal for its smaller public interface. Retain the 
 - [x] Record dataset counts, PostgreSQL and PostGIS versions, machine load, query plans with buffers, first-observed and repeated timings, p50 and p95 request latency, errors, actual response contents, and response sizes.
 - [x] Measure lookup, first and later list pages, combined filters, county counts, close and broad map views, parcel facts, tax detail, and soil detail. Include at least five repeated rounds and four concurrent requests. Measure real authenticated HTTP requests as well as SQL plans.
 - [x] Investigate the slowest measured paths. Retain index or SQL changes only with repeatable evidence and unchanged results. Do not claim optimal performance or a speed improvement without a comparable baseline.
-- [ ] Run repository Go checks, database checks, and one independent final review. Open a PR with the measured results and remaining performance limits.
+- [x] Run repository Go checks, database checks, and one independent final review. Open a PR with the measured results and remaining performance limits.
+
+Implementation and verification are recorded in [PR 72](https://github.com/JustinMonty20/landman/pull/72). Local checks passed. The PR does not represent a completed V1 release.
 
 ## Scope limits
 
