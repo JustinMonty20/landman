@@ -42,8 +42,37 @@ type server struct {
 }
 
 // New establishes Google's identity contract. It does not request calendar access.
-func New(ctx context.Context, pool *pgxpool.Pool, c Config) (http.Handler, error) {
-	return newServer(ctx, pool, c, googleIssuer)
+func New(ctx context.Context, pool *pgxpool.Pool, c Config, data ...http.Handler) (http.Handler, error) {
+	s, err := newServer(ctx, pool, c, googleIssuer)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 1 {
+		return nil, errors.New("at most one data handler")
+	}
+	if len(data) == 1 && data[0] != nil {
+		s.mountData(data[0])
+	}
+	return s, nil
+}
+
+func (s *server) mountData(data http.Handler) {
+	s.mux.Handle("/api/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_, err := s.currentUser(r)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "Sign-in required", http.StatusUnauthorized)
+			return
+		}
+		if err != nil {
+			unavailable(w)
+			return
+		}
+		data.ServeHTTP(w, r)
+	}))
 }
 
 func newServer(ctx context.Context, pool *pgxpool.Pool, c Config, issuer string) (*server, error) {

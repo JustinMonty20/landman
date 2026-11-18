@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/auth"
+	"github.com/JustinMonty20/landman/internal/parcelapi"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,7 +35,7 @@ func run() error {
 	if err := auth.CheckSchema(startup, pool); err != nil {
 		return err
 	}
-	handler, err := auth.New(startup, pool, config)
+	handler, err := auth.New(startup, pool, config, parcelapi.New(pool))
 	if err != nil {
 		return err
 	}
