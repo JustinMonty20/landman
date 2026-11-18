@@ -163,19 +163,24 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 		if len(batch) == 0 {
 			break
 		}
+		pids := make([]string, 0, len(batch))
 		for _, g := range batch {
-			pid := g.pid
 			cursor = g.ordinal
-			n, err := w.publishEvidencePID(ctx, pid, observationID, manifest.CreatedAt, manifest.ID, correction, publicationKind, attemptID)
+			n, err := w.publishEvidencePID(ctx, g.pid, observationID, manifest.CreatedAt, manifest.ID, correction, publicationKind, attemptID)
 			if err != nil {
 				return 0, err
 			}
 			processed += n
-			var keys []string
-			keyRows, err := w.tx.Query(ctx, `SELECT raw_key FROM parcel_import_parts WHERE source_parcel_id=$1 ORDER BY ordinal`, pid)
+			pids = append(pids, g.pid)
+		}
+		// A replay has no retained selection tokens or original scan cutoff.
+		// Leave unverifiable quarantine occurrences pending for a live repair.
+		if !correction {
+			keyRows, err := w.tx.Query(ctx, `SELECT raw_key FROM parcel_import_parts WHERE source_parcel_id=ANY($1::text[]) ORDER BY ordinal`, pids)
 			if err != nil {
 				return 0, err
 			}
+			var keys []string
 			for keyRows.Next() {
 				var key string
 				if err = keyRows.Scan(&key); err != nil {
@@ -190,12 +195,8 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 			if err = keyRows.Err(); err != nil {
 				return 0, err
 			}
-			// A replay has no retained selection tokens or original scan cutoff.
-			// Leave unverifiable quarantine occurrences pending for a live repair.
-			if !correction {
-				if err = quarantine.ResolveObserved(ctx, w.tx, jobID, keys, selected); err != nil {
-					return 0, err
-				}
+			if err = quarantine.ResolveObserved(ctx, w.tx, jobID, keys, selected); err != nil {
+				return 0, err
 			}
 		}
 	}

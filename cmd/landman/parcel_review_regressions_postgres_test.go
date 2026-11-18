@@ -19,6 +19,28 @@ import (
 	"testing"
 )
 
+func TestQuarantineResolutionAcrossPublicationBatches(t *testing.T) {
+	ctx, dsn, pool := parcelFixtureDB(t)
+	fixture := &parcelHTTPFixture{}
+	for oid := 1; oid <= 201; oid++ {
+		fixture.features = append(fixture.features, feature(oid, fmt.Sprintf("P%d", oid), "owner", oid != 201, 0))
+	}
+	source := fixture.source(t, 201)
+	if outcome, result, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || outcome != jobs.OutcomeSuccessWithQuarantine || result.Processed != 200 || result.Quarantined != 1 {
+		t.Fatalf("first import: %s %+v %v", outcome, result, err)
+	}
+	if pending := countRows(t, ctx, pool, "quarantined_records WHERE reprocessed_at IS NULL"); pending != 1 {
+		t.Fatalf("first import left %d pending quarantines", pending)
+	}
+	fixture.features[200] = feature(201, "P201", "owner", true, 0)
+	if outcome, result, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || outcome != jobs.OutcomeSuccess || result.Processed != 201 {
+		t.Fatalf("clean retry: %s %+v %v", outcome, result, err)
+	}
+	if pending := countRows(t, ctx, pool, "quarantined_records WHERE reprocessed_at IS NULL"); pending != 0 {
+		t.Fatalf("clean retry left %d unresolved quarantines", pending)
+	}
+}
+
 func TestReviewMultipartClearsOmittedValuesAndNumericZeroVacancy(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	a, b := feature(1, "A", "first", true, 1), feature(2, "A", "", true, 0)
