@@ -39,7 +39,8 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 	CREATE TEMP TABLE parcel_import_parts (
 		ordinal BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		source_parcel_id TEXT NOT NULL, payload BYTEA NOT NULL, shape BYTEA NOT NULL,
-		likely_vacant BOOLEAN NOT NULL, raw_key TEXT NOT NULL
+		likely_vacant BOOLEAN NOT NULL, raw_key TEXT NOT NULL,
+        source_feature JSONB, source_hash TEXT
 	) ON COMMIT DROP;
 	CREATE INDEX ON parcel_import_parts(source_parcel_id);
 	CREATE TEMP TABLE parcel_import_rejected(source_parcel_id TEXT PRIMARY KEY) ON COMMIT DROP;

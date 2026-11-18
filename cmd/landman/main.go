@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/jobs"
@@ -38,7 +39,7 @@ func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Def
 }
 
 const (
-	parcelJobID        = "union.gis.parcels"
+	parcelJobID        = parceljob.JobID
 	soilJobID          = "union.gis.soil"
 	screeningJobID     = "union.soil.screening"
 	taxJobID           = "union.tax"
@@ -86,8 +87,14 @@ func command(args []string) (string, error) {
 			return args[1], nil
 		}
 	}
+	if len(args) == 4 && args[0] == "replay" && args[1] == parcelJobID && args[2] == "--snapshot" {
+		if len(args[3]) != 32 {
+			return "", fmt.Errorf("snapshot ID must be 32 hex characters")
+		}
+		return "replay", nil
+	}
 	if len(args) == 4 && args[0] == "reprocess" && args[1] == parcelJobID && args[2] == "--limit" {
-		if _, err := reprocessLimit(args[3]); err != nil {
+		if _, err := parceljob.ReprocessLimit(args[3]); err != nil {
 			return "", err
 		}
 		return "reprocess", nil
@@ -199,10 +206,19 @@ func run(ctx context.Context) error {
 		err := withCountyHostLock(ctx, dsn, func(ctx context.Context) error { var e error; result, e = fn(ctx); return e })
 		return result, err
 	}
+	artifactRoot := os.Getenv("PARCEL_EVIDENCE_DIR")
+	if artifactRoot == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		artifactRoot = home + "/.local/share/landman/parcel-evidence"
+	}
+	parcelJob := parceljob.Job{Root: artifactRoot, DSN: dsn, Source: gisSource, Quarantine: jobs.NewQuarantineStore(pool)}
 	definitions := []jobs.Definition{
 		{ID: parcelJobID, Schedule: calendar[parcelJobID], Run: func(ctx context.Context) (jobs.Result, error) {
 			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
-				return importParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool))
+				return parcelJob.Import(ctx)
 			})
 		}},
 		{ID: soilJobID, Schedule: calendar[soilJobID], Run: func(ctx context.Context) (jobs.Result, error) {
@@ -253,18 +269,57 @@ func run(ctx context.Context) error {
 		})
 	}
 	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, afterSource: func(ctx context.Context, id string) error {
-		if id == parcelJobID || id == soilJobID {
+		if id == parcelJobID {
+			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
+			if err != nil {
+				return err
+			}
+			var screenErr error
+			if due {
+				screenErr = refresh(ctx)
+			}
+			return errors.Join(screenErr, qualificationRefresh(ctx))
+		}
+		if id == soilJobID {
 			screeningError := refresh(ctx)
 			qualificationError := qualificationRefresh(ctx)
 			return errors.Join(screeningError, qualificationError)
 		}
 		return qualificationRefresh(ctx)
 	}}
+	if mode == "replay" {
+		outcome, _, err := runner.Run(ctx, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return parcelJob.Replay(ctx, os.Args[4]) }})
+		if err != nil {
+			return err
+		}
+		if outcome != jobs.OutcomeSuccess && outcome != jobs.OutcomeSuccessWithQuarantine {
+			return fmt.Errorf("replay did not validate: %s", outcome)
+		}
+		changed, geometryChanged, err := parcelReplayDependencies(ctx, pool)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return nil
+		}
+		if geometryChanged {
+			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
+			if err != nil {
+				return err
+			}
+			if due {
+				if err := refresh(ctx); err != nil {
+					return err
+				}
+			}
+		}
+		return qualificationRefresh(ctx)
+	}
 	if mode == "reprocess" {
-		limit, _ := reprocessLimit(os.Args[4])
+		limit, _ := parceljob.ReprocessLimit(os.Args[4])
 		return runRequired(ctx, executor, jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReprocess, Run: func(ctx context.Context) (jobs.Result, error) {
 			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
-				return reprocessParcels(ctx, dsn, gisSource, jobs.NewQuarantineStore(pool), limit)
+				return parcelJob.Reprocess(ctx, limit)
 			})
 		}})
 	}
@@ -417,4 +472,12 @@ func withAdvisoryLock(ctx context.Context, dsn, key string, fn func(context.Cont
 		return cause
 	}
 	return result
+}
+
+// parcelReplayDependencies reads committed correction rows for the last runner
+// attempt. Historical validation has no publication and no dependencies.
+func parcelReplayDependencies(ctx context.Context, pool *pgxpool.Pool) (bool, bool, error) {
+	var changed, geometryChanged bool
+	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_history h WHERE h.attempt_id=a.id), EXISTS(SELECT 1 FROM parcel_evidence_history h WHERE h.attempt_id=a.id AND h.old_geometry_hash IS DISTINCT FROM h.new_geometry_hash) FROM job_attempts a WHERE a.id=(SELECT id FROM job_attempts WHERE job_id=$1 AND attempt_kind='replay' ORDER BY started_at DESC,id DESC LIMIT 1)`, parcelJobID).Scan(&changed, &geometryChanged)
+	return changed, geometryChanged, err
 }

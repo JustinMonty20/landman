@@ -57,6 +57,9 @@ func (t *GISTranslator) Translate(raw connector.RawRecord) (*models.GISParcel, e
 	dateCRT, ogDateCRT := arcGISDate(attrs, "DATE_CRT")
 	shape := geometryShape(raw.RawData)
 	sourceSRID := unionGISSourceSRID
+	if declared, ok := raw.RawData["source_declared_crs"].(int); ok {
+		sourceSRID = declared
+	}
 	sourceExtras, err := marshalSourceExtras(UnionParcelExtras{
 		OBJECTID:     intPtr(attrs, "OBJECTID"),
 		OBJECTID_1:   intPtr(attrs, "OBJECTID_1"),

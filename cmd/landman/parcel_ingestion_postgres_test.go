@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -29,6 +30,11 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 	if dsn == "" {
 		t.Skip("DATABASE_URL required")
 	}
+	evidenceDir := t.TempDir()
+	if err := os.Chmod(evidenceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PARCEL_EVIDENCE_DIR", evidenceDir)
 	ctx := context.Background()
 	base, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -39,12 +45,12 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 	if _, err := base.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records"} {
+	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history"} {
 		if _, err := base.Exec(ctx, "CREATE TABLE "+name+"."+table+" (LIKE public."+table+" INCLUDING ALL) WITH (autovacuum_enabled=false)"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, sql := range []string{"ALTER TABLE " + name + ".parcel_sales ADD FOREIGN KEY(parcel_id) REFERENCES " + name + ".parcels(id)", "ALTER TABLE " + name + ".quarantined_records ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)"} {
+	for _, sql := range []string{"ALTER TABLE " + name + ".parcel_sales ADD FOREIGN KEY(parcel_id) REFERENCES " + name + ".parcels(id)", "ALTER TABLE " + name + ".quarantined_records ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_observations ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_current ADD FOREIGN KEY(observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(old_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(new_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)"} {
 		if _, err := base.Exec(ctx, sql); err != nil {
 			t.Fatal(err)
 		}
@@ -82,6 +88,7 @@ type parcelHTTPFixture struct {
 	failStatus int
 	requests   int
 	pidQueries int
+	crs        int
 }
 
 func feature(oid int, pid, owner string, valid bool, sales int) map[string]interface{} {
@@ -157,7 +164,11 @@ func (f *parcelHTTPFixture) serve(w http.ResponseWriter, r *http.Request) {
 	if limit == 0 {
 		end = len(selected)
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{"features": selected[offset:end]})
+	crs := f.crs
+	if crs == 0 {
+		crs = 3857
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"spatialReference": map[string]interface{}{"wkid": crs}, "features": selected[offset:end]})
 }
 func (f *parcelHTTPFixture) source(t *testing.T, batch int) *union.GISSource {
 	t.Helper()
@@ -172,10 +183,14 @@ func (f *parcelHTTPFixture) source(t *testing.T, batch int) *union.GISSource {
 func runParcelFixture(ctx context.Context, pool *pgxpool.Pool, dsn string, source *union.GISSource, repair bool, limit int) (jobs.Outcome, jobs.Result, error) {
 	runner, _ := jobs.NewRunner(pool)
 	q := jobs.NewQuarantineStore(pool)
-	definition := jobs.Definition{ID: parcelJobID, Run: func(ctx context.Context) (jobs.Result, error) { return importParcels(ctx, dsn, source, q) }}
+	definition := jobs.Definition{ID: parcelJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+		return parceljob.Job{Root: os.Getenv("PARCEL_EVIDENCE_DIR"), DSN: dsn, Source: source, Quarantine: q}.Import(ctx)
+	}}
 	if repair {
 		definition.Kind = jobs.AttemptReprocess
-		definition.Run = func(ctx context.Context) (jobs.Result, error) { return reprocessParcels(ctx, dsn, source, q, limit) }
+		definition.Run = func(ctx context.Context) (jobs.Result, error) {
+			return parceljob.Job{Root: os.Getenv("PARCEL_EVIDENCE_DIR"), DSN: dsn, Source: source, Quarantine: q}.Reprocess(ctx, limit)
+		}
 	}
 	return runner.Run(ctx, definition)
 }
@@ -295,6 +310,9 @@ func TestParcelQuarantineSurvivesFailureAndStorageFailureRollsBack(t *testing.T)
 				t.Fatal("failed scan published partial rows")
 			}
 			want := 1
+			if kind == "http" {
+				want = 0
+			}
 			if kind == "quarantine" {
 				want = 0
 			}

@@ -33,6 +33,7 @@ type AttemptKind string
 const (
 	AttemptFullScan  AttemptKind = "full_scan"
 	AttemptReprocess AttemptKind = "reprocess"
+	AttemptReplay    AttemptKind = "replay"
 )
 
 // Definition is a code-defined source import.
@@ -124,7 +125,7 @@ func outcomeFor(result Result, err error) Outcome {
 }
 
 func validateDefinition(definition Definition) error {
-	if definition.Kind != "" && definition.Kind != AttemptFullScan && definition.Kind != AttemptReprocess {
+	if definition.Kind != "" && definition.Kind != AttemptFullScan && definition.Kind != AttemptReprocess && definition.Kind != AttemptReplay {
 		return fmt.Errorf("jobs: invalid attempt kind %q", definition.Kind)
 	}
 	if definition.ID == "" {
@@ -148,4 +149,10 @@ func validResult(result Result) error {
 type LastCleanSuccess struct {
 	JobID      string
 	FinishedAt time.Time
+}
+
+// AttemptID returns the durable runner attempt for a running job.
+func AttemptID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(attemptIDKey{}).(string)
+	return id, ok && id != ""
 }
