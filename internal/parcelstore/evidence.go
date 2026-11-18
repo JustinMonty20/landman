@@ -418,7 +418,7 @@ func (w *ShapeWriter) matchesStoredProjection(ctx context.Context, pid string, c
 	err = w.tx.QueryRow(ctx, `SELECT
 		(to_jsonb(p)-'id'-'created_at'-'updated_at'-'shape') =
 		(to_jsonb(jsonb_populate_record(NULL::parcels,$2::jsonb))-'id'-'created_at'-'updated_at'-'shape')
-		AND ST_Equals(p.shape,ST_GeomFromEWKB($4))
+		AND ST_Equals(p.shape,ST_GeomFromEWKB($4)) IS TRUE
 		AND coalesce((SELECT jsonb_agg(to_jsonb(s)-'id'-'parcel_id'-'created_at'-'updated_at' ORDER BY s.sequence)
 			FROM parcel_sales s WHERE s.parcel_id=p.id),'[]'::jsonb) =
 		coalesce((SELECT jsonb_agg(to_jsonb(s)-'id'-'parcel_id'-'created_at'-'updated_at' ORDER BY s.sequence)

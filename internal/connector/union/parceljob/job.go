@@ -32,6 +32,9 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 			return err
 		}
 		rawKey := strconv.FormatInt(id.ObjectID, 10)
+		if err := writer.ObserveIdentity(ctx, rawKey, id.PID); err != nil {
+			return err
+		}
 		if len(id.PID) > maxIndexedPIDBytes {
 			if !replay {
 				if err := persistInvalid(ctx, quarantine, record, &union.InvalidParcelRecord{Identity: id, Reason: unsupportedPIDReason}, fmt.Sprintf("%s#%d", receiptRef, index)); err != nil {
@@ -40,9 +43,6 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 			}
 			result.Quarantined++
 			continue
-		}
-		if err := writer.ObserveIdentity(ctx, rawKey, id.PID); err != nil {
-			return err
 		}
 		parcel, vacant, err := union.NormalizeParcel(record)
 		if err != nil {
