@@ -217,7 +217,7 @@ const predicate = `p.county_id=$1 AND p.source_name=$2
  AND ($3::float8 IS NULL OR p.mapped_acres >= $3)
  AND ($4::float8 IS NULL OR p.mapped_acres <= $4)
  AND ($5::boolean IS NULL OR p.likely_vacant=$5)
- AND ($6::boolean IS NULL OR EXISTS (SELECT 1 FROM tax_delinquent_balances d WHERE d.parcel_id=p.id AND d.balance_due>0 AND EXISTS (SELECT 1 FROM tax_file_imports i WHERE i.active AND i.county_id=d.county_id AND i.source_name=d.source_name AND i.source_url=d.source_url AND i.file_sha256=d.file_sha256 AND i.fetched_at=d.fetched_at) )=$6)
+ AND ($6::boolean IS NULL OR EXISTS (SELECT 1 FROM tax_delinquent_balances d WHERE d.parcel_id=p.id AND d.balance_due>0 AND EXISTS (SELECT 1 FROM tax_file_imports i WHERE i.active AND i.county_id=d.county_id AND i.source_name=d.source_name) )=$6)
  AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857))))`
 const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,p.likely_vacant,p.updated_at`
 
@@ -470,7 +470,7 @@ func (f Filters) mapMatch(args *[]any) string {
 	}
 	if f.Delinquent != nil {
 		*args = append(*args, *f.Delinquent)
-		parts = append(parts, fmt.Sprintf(`EXISTS (SELECT 1 FROM tax_delinquent_balances d JOIN tax_file_imports i ON i.active AND i.county_id=d.county_id AND i.source_name=d.source_name AND i.source_url=d.source_url AND i.file_sha256=d.file_sha256 AND i.fetched_at=d.fetched_at WHERE d.parcel_id=p.id AND d.balance_due>0) = $%d`, len(*args)))
+		parts = append(parts, fmt.Sprintf(`EXISTS (SELECT 1 FROM tax_delinquent_balances d JOIN tax_file_imports i ON i.active AND i.county_id=d.county_id AND i.source_name=d.source_name WHERE d.parcel_id=p.id AND d.balance_due>0) = $%d`, len(*args)))
 	}
 	if len(parts) == 0 {
 		return "false"
@@ -760,7 +760,7 @@ func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	// File identity includes URL, digest and retrieval time; an old row from an inactive import is not current evidence.
-	const active = `JOIN tax_file_imports i ON i.active AND i.county_id=t.county_id AND i.source_name=t.source_name AND i.source_url=t.source_url AND i.file_sha256=t.file_sha256 AND i.fetched_at=t.fetched_at`
+	const active = `JOIN tax_file_imports i ON i.active AND i.county_id=t.county_id AND i.source_name=t.source_name`
 	var bills, balances, pipeline, cases []byte
 	var reportedTotal *string
 	var delinquentYears int64

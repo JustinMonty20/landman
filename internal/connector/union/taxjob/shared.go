@@ -227,21 +227,26 @@ func (p *taxPublisher) missingLinks(ctx context.Context, tx pgx.Tx) (bool, error
 func (p *taxPublisher) Apply(ctx context.Context, tx pgx.Tx, observation ingest.Observation) error {
 	var previousID *string
 	var previousURL string
-	var previousByte, previousNormalized []byte
-	var previousVersion string
-	err := tx.QueryRow(ctx, `SELECT capture_id::text, source_url, byte_sha256, normalized_sha256, normalization_version FROM tax_ingest_publications WHERE source_name=$1 FOR UPDATE`, p.source).Scan(&previousID, &previousURL, &previousByte, &previousNormalized, &previousVersion)
+	var previousByte, previousCanonical, previousNormalized []byte
+	var previousCanonicalVersion, previousVersion string
+	err := tx.QueryRow(ctx, `SELECT capture_id::text, source_url, byte_sha256, canonical_sha256, canonical_version, normalized_sha256, normalization_version FROM tax_ingest_publications WHERE source_name=$1 FOR UPDATE`, p.source).Scan(&previousID, &previousURL, &previousByte, &previousCanonical, &previousCanonicalVersion, &previousNormalized, &previousVersion)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	// The source lock is held by Engine; older replay cannot replace the latest accepted file.
-	if previousID != nil && *previousID != observation.ID {
-		var observed time.Time
-		if err := tx.QueryRow(ctx, `SELECT observed_at FROM ingest_captures WHERE id=$1`, *previousID).Scan(&observed); err != nil {
-			return err
-		}
-		if !observed.Before(observation.Manifest.ObservedAt) {
-			return ingest.ErrNoPublication
-		}
+	// The source lock is held by Engine. The latest accepted observation may
+	// have no typed writes and therefore differ from the active publication.
+	var latestID string
+	var latestAt time.Time
+	err = tx.QueryRow(ctx, `SELECT capture_id::text,observed_at FROM tax_latest_observations WHERE source_name=$1`, p.source).Scan(&latestID, &latestAt)
+	if errors.Is(err, pgx.ErrNoRows) && previousID != nil {
+		latestID = *previousID
+		err = tx.QueryRow(ctx, `SELECT observed_at FROM ingest_captures WHERE id=$1`, latestID).Scan(&latestAt)
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if latestID != "" && latestID != observation.ID && !latestAt.Before(observation.Manifest.ObservedAt) {
+		return ingest.ErrNoPublication
 	}
 	missing, err := p.missingLinks(ctx, tx)
 	if err != nil {
@@ -253,10 +258,16 @@ func (p *taxPublisher) Apply(ctx context.Context, tx pgx.Tx, observation ingest.
 		ingest.Fingerprint{Source: hex.EncodeToString(previousByte), SourceVersion: "tax-bytes-v1", Normalized: hex.EncodeToString(previousNormalized), NormalizedVersion: previousVersion},
 		ingest.Fingerprint{Source: hex.EncodeToString(p.meta.SHA256[:]), SourceVersion: "tax-bytes-v1", Normalized: hex.EncodeToString(p.normalized[:]), NormalizedVersion: "tax-normalized-v1"}, observation.Replay)
 	if decision.CompareProjection {
-		sameProjection = previousID != nil && string(previousNormalized) == string(p.normalized[:])
+		// Normalized digests from different versions are not comparable. The
+		// separately versioned typed-row encoding remains comparable.
+		sameProjection = previousID != nil && previousCanonicalVersion == "tax-gob-v1" && string(previousCanonical) == string(p.canonical[:])
 	}
 	if observation.Published && (previousID == nil || *previousID != observation.ID || (!missing && sameProjection)) {
 		return ingest.ErrNoPublication
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO tax_latest_observations(source_name,capture_id,observed_at) VALUES ($1,$2,$3)
+ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_at=EXCLUDED.observed_at`, p.source, observation.ID, observation.Manifest.ObservedAt); err != nil {
+		return err
 	}
 	cause := decision.Cause
 	if sameBytes && missing {
@@ -264,6 +275,9 @@ func (p *taxPublisher) Apply(ctx context.Context, tx pgx.Tx, observation ingest.
 	}
 	if cause == "" {
 		cause = ingest.SourceObservation
+		if sameBytes && !sameProjection {
+			cause = ingest.NormalizationCorrection
+		}
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('landman.tax_change_cause',$1,true)`, string(cause)); err != nil {
 		return err
@@ -272,7 +286,7 @@ func (p *taxPublisher) Apply(ctx context.Context, tx pgx.Tx, observation ingest.
 		return err
 	}
 	if sameBytes && sameProjection && previousURL == p.url && !missing {
-		return ingest.ErrNoPublication
+		return ingest.ErrObservationOnly
 	}
 	if !sameProjection || missing {
 		switch p.source {
@@ -330,6 +344,11 @@ func ingestFile(ctx context.Context, pool *pgxpool.Pool, store taxartifact.Store
 	if err != nil {
 		return result, err
 	}
+	if attempt, ok := jobs.AttemptID(ctx); ok {
+		if err := recorder.BindAttempt("union.tax", attempt, "full_scan", 0); err != nil {
+			return result, err
+		}
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return result, err
@@ -372,6 +391,6 @@ func Replay(ctx context.Context, pool *pgxpool.Pool, dir, id string) (jobs.Resul
 	}
 	publisher := &taxPublisher{pool: pool, store: store, dir: dir, source: source, url: m.Receipts[0].Request}
 	defer publisher.close()
-	err = (ingest.Engine{Pool: pool, Store: store}).Replay(ctx, id, publisher)
+	err = (ingest.Engine{Pool: pool, Store: store}).Replay(ctx, id, "union.tax", publisher)
 	return publisher.result, err
 }

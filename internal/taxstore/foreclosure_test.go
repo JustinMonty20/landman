@@ -144,8 +144,8 @@ WHERE case_number IS NULL AND parcel_set_sha256=$1 AND legal_sha256=$2`, pinHash
 		t.Fatalf("new number=%+v err=%v", result, err)
 	}
 	var sameNull int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_cases WHERE id=$1 AND case_number IS NULL`, nullID).Scan(&sameNull); err != nil || sameNull != 1 {
-		t.Fatalf("old TBD id=%d err=%v", sameNull, err)
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_cases WHERE id=$1 AND case_number IS NULL`, nullID).Scan(&sameNull); err != nil || sameNull != 0 {
+		t.Fatalf("omitted TBD case remained active: %d err=%v", sameNull, err)
 	}
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM parcels`).Scan(&after); err != nil || before != after {
 		t.Fatalf("parcels before=%d after=%d err=%v", before, after, err)

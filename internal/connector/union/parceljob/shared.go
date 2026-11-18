@@ -85,13 +85,10 @@ func (j Job) sealPartial(ctx context.Context, store taxartifact.Store, recorder 
 	return err
 }
 
-type capturedPage struct {
-	records []connector.RawRecord
-}
 type sharedPublisher struct {
 	quarantine *jobs.QuarantineStore
 	selected   []jobs.PendingRecord
-	pages      []capturedPage
+	verified   ingest.VerifiedCapture
 	manifest   parcelevidence.Manifest
 	result     jobs.Result
 }
@@ -102,61 +99,61 @@ func (p *sharedPublisher) Prepare(ctx context.Context, verified ingest.VerifiedC
 		return fmt.Errorf("invalid parcel capture metadata")
 	}
 	evidence := parcelevidence.Manifest{Version: 1, Source: m.Source, Kind: m.Kind, Count: m.Count, CreatedAt: m.ObservedAt, ArtifactHashVersion: "ordered-response-bytes-v1"}
-	bodies := make([][]byte, len(m.Receipts))
 	h := sha256.New()
-	for i, receipt := range m.Receipts {
-		r, err := verified.Open(ctx, i)
-		if err != nil {
-			return err
-		}
-		body, readErr := io.ReadAll(io.LimitReader(r, 32<<20+1))
-		closeErr := r.Close()
-		if readErr != nil {
-			return readErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if len(body) == 0 || len(body) > 32<<20 {
-			return fmt.Errorf("parcel receipt outside evidence size limit")
-		}
-		bodies[i] = body
-		if err := appendParcelHash(h, body); err != nil {
-			return err
-		}
-		evidence.Receipts = append(evidence.Receipts, parcelevidence.Receipt{Path: receipt.ArtifactKey, Request: receipt.Request, Bytes: len(body), SHA256: receipt.SHA256, DeclaredCRS: receipt.CRS, Validated: true})
+	for _, receipt := range m.Receipts {
+		evidence.Receipts = append(evidence.Receipts, parcelevidence.Receipt{Path: receipt.ArtifactKey, Request: receipt.Request, SHA256: receipt.SHA256, DeclaredCRS: receipt.CRS, Validated: true})
 	}
-	evidence.ArtifactHash = hex.EncodeToString(h.Sum(nil))
-	if err := verifyParcelResponses(evidence, func(i int) ([]byte, error) { return bodies[i], nil }); err != nil {
+	if err := verifyParcelResponses(evidence, func(i int) ([]byte, error) {
+		body, err := readVerifiedParcelPage(ctx, verified, i)
+		if err != nil {
+			return nil, err
+		}
+		if err := appendParcelHash(h, body); err != nil {
+			return nil, err
+		}
+		evidence.Receipts[i].Bytes = len(body)
+		return body, nil
+	}); err != nil {
 		return err
 	}
-	count := 0
-	for i, receipt := range evidence.Receipts {
-		if receipt.DeclaredCRS == 0 {
-			continue
-		}
-		if m.Kind == "reprocess" {
-			u, err := url.Parse(receipt.Request)
-			if err != nil {
-				return err
-			}
-			if strings.HasPrefix(u.Query().Get("where"), "OBJECTID = ") {
-				continue
-			}
-		}
-		records, err := union.DecodeParcelPage(bodies[i], m.ObservedAt, m.Source)
-		if err != nil {
-			return err
-		}
-		count += len(records)
-		p.pages = append(p.pages, capturedPage{records: records})
-	}
-	if count != m.Count {
-		return fmt.Errorf("snapshot feature count %d differs from manifest %d", count, m.Count)
-	}
+	evidence.ArtifactHash = hex.EncodeToString(h.Sum(nil))
 	p.manifest = evidence
+	p.verified = verified
 	return nil
 }
+func readVerifiedParcelPage(ctx context.Context, verified ingest.VerifiedCapture, i int) ([]byte, error) {
+	r, err := verified.Open(ctx, i)
+	if err != nil {
+		return nil, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(r, 32<<20+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(body) == 0 || len(body) > 32<<20 {
+		return nil, fmt.Errorf("parcel receipt outside evidence size limit")
+	}
+	return body, nil
+}
+
+func parcelPublicationPage(kind string, receipt parcelevidence.Receipt) (bool, error) {
+	if receipt.DeclaredCRS == 0 {
+		return false, nil
+	}
+	if kind != "reprocess" {
+		return true, nil
+	}
+	u, err := url.Parse(receipt.Request)
+	if err != nil {
+		return false, err
+	}
+	return !strings.HasPrefix(u.Query().Get("where"), "OBJECTID = "), nil
+}
+
 func appendParcelHash(h hash.Hash, body []byte) error {
 	if _, err := fmt.Fprintf(h, "%d:", len(body)); err != nil {
 		return err
@@ -170,10 +167,30 @@ func (p *sharedPublisher) Apply(ctx context.Context, tx pgx.Tx, observation inge
 	if err != nil {
 		return err
 	}
-	for _, page := range p.pages {
-		if err := stageParcelEvidenceRecords(ctx, writer, page.records, &p.result); err != nil {
+	count := 0
+	for i, receipt := range p.manifest.Receipts {
+		publish, err := parcelPublicationPage(p.manifest.Kind, receipt)
+		if err != nil {
 			return err
 		}
+		if !publish {
+			continue
+		}
+		body, err := readVerifiedParcelPage(ctx, p.verified, i)
+		if err != nil {
+			return err
+		}
+		records, err := union.DecodeParcelPage(body, p.manifest.CreatedAt, p.manifest.Source)
+		if err != nil {
+			return err
+		}
+		count += len(records)
+		if err := stageParcelEvidenceRecords(ctx, writer, records, &p.result); err != nil {
+			return err
+		}
+	}
+	if count != p.manifest.Count {
+		return fmt.Errorf("snapshot feature count %d differs from manifest %d", count, p.manifest.Count)
 	}
 	p.result.Processed, err = writer.ApplyEvidence(ctx, p.quarantine, JobID, p.selected, p.manifest, observation.Replay)
 	if err != nil || observation.Published {
@@ -200,7 +217,7 @@ func (j Job) replayShared(ctx context.Context, id string) (jobs.Result, error) {
 	}
 	defer pool.Close()
 	publisher := &sharedPublisher{quarantine: j.Quarantine}
-	if err := (ingest.Engine{Pool: pool, Store: store}).Replay(ctx, id, publisher); err != nil {
+	if err := (ingest.Engine{Pool: pool, Store: store}).Replay(ctx, id, JobID, publisher); err != nil {
 		return jobs.Result{}, err
 	}
 	return publisher.result, nil

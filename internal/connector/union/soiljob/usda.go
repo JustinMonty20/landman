@@ -39,6 +39,9 @@ func (j ScreeningJob) Import(ctx context.Context) (result jobs.Result, runErr er
 	if j.Pool == nil || j.Artifacts == nil || j.Client == nil || j.Interval <= 0 {
 		return jobs.Result{}, errors.New("USDA screening requires database, artifact store, client and freshness interval")
 	}
+	if _, ok := jobs.AttemptID(ctx); !ok {
+		return jobs.Result{}, errors.New("USDA screening requires a running runner attempt")
+	}
 	setID, polygons, _, err := soil.StoredSet(ctx, j.Pool, county.Union, polygonSource)
 	if err != nil {
 		return jobs.Result{}, err
@@ -67,6 +70,11 @@ func (j ScreeningJob) Import(ctx context.Context) (result jobs.Result, runErr er
 	recorder, err := ingest.NewRecorder(j.Artifacts, interpretationSource, time.Now().UTC())
 	if err != nil {
 		return jobs.Result{}, err
+	}
+	if attempt, ok := jobs.AttemptID(ctx); ok {
+		if err := recorder.BindAttempt("union.soil.screening", attempt, "full_scan", 0); err != nil {
+			return jobs.Result{}, err
+		}
 	}
 	nameRows, err := j.Pool.Query(ctx, `SELECT map_unit_key FROM soil_map_units WHERE map_unit_key=ANY($1) AND map_unit_name IS NULL ORDER BY map_unit_key`, keys)
 	if err != nil {
@@ -122,7 +130,7 @@ func (j ScreeningJob) Replay(ctx context.Context, captureID string) error {
 	if j.Pool == nil || j.Artifacts == nil || j.Interval <= 0 {
 		return errors.New("USDA replay requires database, artifact store and freshness interval")
 	}
-	return (ingest.Engine{Pool: j.Pool, Store: j.Artifacts}).Replay(ctx, captureID, &screeningPublication{interval: j.Interval})
+	return (ingest.Engine{Pool: j.Pool, Store: j.Artifacts}).Replay(ctx, captureID, "union.soil.screening", &screeningPublication{interval: j.Interval})
 }
 
 func usdaRequest(query string) string {
@@ -130,11 +138,12 @@ func usdaRequest(query string) string {
 }
 
 type screeningPublication struct {
-	setID    string
-	keys     []string
-	values   []soil.Interpretation
-	interval time.Duration
-	names    []byte
+	setID       string
+	keys        []string
+	values      []soil.Interpretation
+	interval    time.Duration
+	names       []byte
+	surveyDates map[string]time.Time
 }
 
 func (p *screeningPublication) Prepare(ctx context.Context, capture ingest.VerifiedCapture) error {
@@ -195,6 +204,10 @@ func (p *screeningPublication) Prepare(ctx context.Context, capture ingest.Verif
 		if len(p.names) > 16<<20 {
 			return errors.New("USDA names response exceeds capture limit")
 		}
+		p.surveyDates, err = soil.CapturedSurveyDates(p.names)
+		if err != nil {
+			return err
+		}
 		index++
 	}
 	p.values, err = soil.ParseInterpretations(ctx, soil.USDAEndpoint, keys, func(ctx context.Context, query string) ([]byte, error) {
@@ -253,9 +266,6 @@ func (p *screeningPublication) Prepare(ctx context.Context, capture ingest.Verif
 }
 
 func (p *screeningPublication) Apply(ctx context.Context, tx pgx.Tx, observation ingest.Observation) error {
-	if observation.Published {
-		return nil
-	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "soil:union:"+polygonSource); err != nil {
 		return err
 	}
@@ -265,11 +275,6 @@ func (p *screeningPublication) Apply(ctx context.Context, tx pgx.Tx, observation
 	}
 	if newer {
 		return ingest.ErrNoPublication
-	}
-	if len(p.names) > 0 {
-		if err := soil.StoreCapturedNamesTx(ctx, tx, p.names, observation.Manifest.ObservedAt); err != nil {
-			return err
-		}
 	}
 	// Serialize against parcel geometry writes before deciding whether the generation is current.
 	if _, err := tx.Exec(ctx, `LOCK TABLE parcels IN SHARE MODE`); err != nil {
@@ -305,14 +310,37 @@ func (p *screeningPublication) Apply(ctx context.Context, tx pgx.Tx, observation
 	}
 	normalized := digest(normalizedValues)
 	geometry := digest(p.setID)
-	previous, _, err := previousSoilFingerprint(ctx, tx, interpretationSource)
+	previous, _, currentCapture, err := previousSoilFingerprint(ctx, tx, interpretationSource)
 	if err != nil {
 		return err
 	}
 	next := ingest.Fingerprint{Source: canonical, SourceVersion: "usda-response-v1", Normalized: normalized, NormalizedVersion: "usda-interpretation-v1", Geometry: geometry, GeometryVersion: "soil-set-v1"}
+	var surveyChanged bool
+	for key, date := range p.surveyDates {
+		var differs bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM soil_polygon_set_members m
+LEFT JOIN soil_screening_heads h ON h.county_id='union' AND h.source_name=$1
+LEFT JOIN soil_screening_survey_dates d ON d.run_id=h.run_id AND d.polygon_id=m.polygon_id
+WHERE m.set_id=$2::uuid AND m.map_unit_key=$3 AND d.survey_saved_on IS DISTINCT FROM $4::date)`, polygonSource, p.setID, key, date.Format("2006-01-02")).Scan(&differs); err != nil {
+			return err
+		}
+		surveyChanged = surveyChanged || differs
+	}
+	revision, err := soilPublicationRevision(ctx, tx, observation, currentCapture, previous, next, surveyChanged)
+	if err != nil {
+		return err
+	}
+	if revision == 0 {
+		return ingest.ErrNoPublication
+	}
+	if len(p.names) > 0 {
+		if err := soil.StoreCapturedNamesTx(ctx, tx, p.names, observation.Manifest.ObservedAt); err != nil {
+			return err
+		}
+	}
 	cause := soilChangeCause(previous, next, observation.Replay)
 	var runID *string
-	if previous.Normalized != normalized || previous.NormalizedVersion != next.NormalizedVersion || previous.Geometry != geometry || previous.GeometryVersion != next.GeometryVersion {
+	if surveyChanged || previous.Normalized != normalized || previous.NormalizedVersion != next.NormalizedVersion || previous.Geometry != geometry || previous.GeometryVersion != next.GeometryVersion {
 		if err := soil.PublishScreeningTx(ctx, tx, county.Union, polygonSource, p.setID, polygons, p.values, soil.USDAEndpoint, p.interval, observation.Manifest.ObservedAt); err != nil {
 			return err
 		}
@@ -321,6 +349,9 @@ func (p *screeningPublication) Apply(ctx context.Context, tx pgx.Tx, observation
 			return err
 		}
 		runID = &id
+		if err := soil.StoreCapturedSurveyDatesTx(ctx, tx, p.surveyDates, id, p.setID); err != nil {
+			return err
+		}
 	} else {
 		due, err := soil.NeedsScreenTx(ctx, tx, county.Union, polygonSource)
 		if err != nil {
@@ -335,8 +366,11 @@ func (p *screeningPublication) Apply(ctx context.Context, tx pgx.Tx, observation
 				return err
 			}
 			runID = &id
+			if err := soil.StoreCapturedSurveyDatesTx(ctx, tx, p.surveyDates, id, p.setID); err != nil {
+				return err
+			}
 		}
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,published_run_id,observed_at) VALUES ($1::uuid,$2,'usda-response-v1',$3,'usda-interpretation-v1',$4,'soil-set-v1',$5,$6,$7::uuid,$8::uuid,$9)`, observation.ID, interpretationSource, canonical, normalized, geometry, cause, p.setID, runID, observation.Manifest.ObservedAt)
+	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,revision,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,published_run_id,observed_at) VALUES ($1::uuid,$2,$3,'usda-response-v1',$4,'usda-interpretation-v1',$5,'soil-set-v1',$6,$7,$8::uuid,$9::uuid,$10)`, observation.ID, revision, interpretationSource, canonical, normalized, geometry, cause, p.setID, runID, observation.Manifest.ObservedAt)
 	return err
 }

@@ -35,9 +35,17 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 	if j.Source == nil || j.Pool == nil || j.Artifacts == nil {
 		return jobs.Result{}, errors.New("soil capture requires source, database and artifact store")
 	}
+	if _, ok := jobs.AttemptID(ctx); !ok {
+		return jobs.Result{}, errors.New("soil capture requires a running runner attempt")
+	}
 	recorder, err := ingest.NewRecorder(j.Artifacts, captureSource, time.Now().UTC())
 	if err != nil {
 		return jobs.Result{}, err
+	}
+	if attempt, ok := jobs.AttemptID(ctx); ok {
+		if err := recorder.BindAttempt("union.gis.soil", attempt, "full_scan", 0); err != nil {
+			return jobs.Result{}, err
+		}
 	}
 	polygons, _, err := j.Source.CaptureSoilPolygons(ctx, func(request string, body []byte, crs int) error {
 		return recorder.Record(ctx, request, "", crs, bytes.NewReader(body))
@@ -52,7 +60,7 @@ func (j Job) Replay(ctx context.Context, id string) error {
 	if j.Pool == nil || j.Artifacts == nil {
 		return errors.New("soil replay requires database and artifact store")
 	}
-	return (ingest.Engine{Pool: j.Pool, Store: j.Artifacts}).Replay(ctx, id, &publication{})
+	return (ingest.Engine{Pool: j.Pool, Store: j.Artifacts}).Replay(ctx, id, "union.gis.soil", &publication{})
 }
 
 type publication struct {
@@ -132,9 +140,6 @@ func (p *publication) Prepare(ctx context.Context, capture ingest.VerifiedCaptur
 	return nil
 }
 func (p *publication) Apply(ctx context.Context, tx pgx.Tx, observation ingest.Observation) error {
-	if observation.Published {
-		return nil
-	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "soil:union:"+polygonSource); err != nil {
 		return err
 	}
@@ -146,19 +151,54 @@ func (p *publication) Apply(ctx context.Context, tx pgx.Tx, observation ingest.O
 		return ingest.ErrNoPublication
 	}
 	canonical := responseDigest(observation.Manifest)
-	normalized := digest(p.units)
-	geometry, err := geometryDigest(p.polygons)
+	normalized := normalizedDigest(p.polygons, p.units)
+	geometry, err := geometryDigest(ctx, tx, p.polygons)
 	if err != nil {
 		return err
 	}
-	previous, previousSet, err := previousSoilFingerprint(ctx, tx, observation.Manifest.Source)
+	previous, previousSet, currentCapture, err := previousSoilFingerprint(ctx, tx, observation.Manifest.Source)
 	if err != nil {
 		return err
 	}
-	next := ingest.Fingerprint{Source: canonical, SourceVersion: "soil-response-v1", Normalized: normalized, NormalizedVersion: "soil-unit-v1", Geometry: geometry, GeometryVersion: "soil-ewkb-v1"}
+	next := ingest.Fingerprint{Source: canonical, SourceVersion: "soil-response-v1", Normalized: normalized, NormalizedVersion: "soil-metadata-v2", Geometry: geometry, GeometryVersion: "soil-spatial-v2"}
+	revision, err := soilPublicationRevision(ctx, tx, observation, currentCapture, previous, next, false)
+	if err != nil {
+		return err
+	}
+	if revision == 0 {
+		return ingest.ErrNoPublication
+	}
 	cause := soilChangeCause(previous, next, observation.Replay)
+	sameGeometry := previous.Geometry == geometry && previous.GeometryVersion == next.GeometryVersion
+	if !sameGeometry && previousSet != "" && previous.GeometryVersion == "soil-ewkb-v1" {
+		storedID, storedPolygons, _, err := soil.StoredSet(ctx, tx, county.Union, polygonSource)
+		if err != nil && !errors.Is(err, soil.ErrNoStoredSet) {
+			return err
+		}
+		if storedID == previousSet && len(storedPolygons) == len(p.polygons) {
+			byID := make(map[string]soil.Polygon, len(storedPolygons))
+			for _, polygon := range storedPolygons {
+				byID[polygon.ObjectID] = polygon
+			}
+			ordered := make([]soil.Polygon, 0, len(p.polygons))
+			for _, polygon := range p.polygons {
+				stored, ok := byID[polygon.ObjectID]
+				if !ok {
+					break
+				}
+				ordered = append(ordered, stored)
+			}
+			if len(ordered) == len(p.polygons) {
+				storedDigest, err := geometryDigest(ctx, tx, ordered)
+				if err != nil {
+					return err
+				}
+				sameGeometry = storedDigest == geometry
+			}
+		}
+	}
 	var setID string
-	if previous.Geometry == geometry && previous.GeometryVersion == next.GeometryVersion && previousSet != "" {
+	if sameGeometry && previousSet != "" {
 		err = tx.QueryRow(ctx, `SELECT set_id::text FROM soil_polygon_set_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&setID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
@@ -168,15 +208,20 @@ func (p *publication) Apply(ctx context.Context, tx pgx.Tx, observation ingest.O
 		}
 	}
 	if setID == "" {
-		setID, err = soil.StoreWithSetTx(ctx, tx, county.Union, polygonSource, p.polygons, p.units)
+		if sameGeometry && previousSet != "" {
+			setID, err = soil.StoreMetadataWithSetTx(ctx, tx, county.Union, polygonSource, p.polygons, p.units)
+		} else {
+			setID, err = soil.StoreWithSetTx(ctx, tx, county.Union, polygonSource, p.polygons, p.units)
+		}
 		if err != nil {
 			return err
 		}
 	} else if previous.Normalized != normalized || previous.NormalizedVersion != next.NormalizedVersion {
-		if err := soil.StoreMapUnitsTx(ctx, tx, p.units); err != nil {
+		setID, err = soil.StoreMetadataWithSetTx(ctx, tx, county.Union, polygonSource, p.polygons, p.units)
+		if err != nil {
 			return err
 		}
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,observed_at) VALUES ($1::uuid,$2,'soil-response-v1',$3,'soil-unit-v1',$4,'soil-ewkb-v1',$5,$6,$7::uuid,$8)`, observation.ID, observation.Manifest.Source, canonical, normalized, geometry, cause, setID, observation.Manifest.ObservedAt)
+	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,revision,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,observed_at) VALUES ($1::uuid,$2,$3,'soil-response-v1',$4,'soil-metadata-v2',$5,'soil-spatial-v2',$6,$7,$8::uuid,$9)`, observation.ID, revision, observation.Manifest.Source, canonical, normalized, geometry, cause, setID, observation.Manifest.ObservedAt)
 	return err
 }

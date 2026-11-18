@@ -56,6 +56,9 @@ func Run(ctx context.Context, pool *pgxpool.Pool, config Config) (jobs.Result, e
 			return result, fmt.Errorf("tax input %q unreadable: %w", filepath.Base(path), errors.Join(readErr, closeErr))
 		}
 	}
+	if _, ok := jobs.AttemptID(ctx); !ok {
+		return result, errors.New("tax import requires a running runner attempt")
+	}
 	store, err := taxartifact.NewLocal(config.ArtifactDir)
 	if err != nil {
 		return result, fmt.Errorf("select private tax artifact store: %w", err)

@@ -13,9 +13,50 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestParcelVerifiedPagesPublishAndReplayWithoutSourceRequests(t *testing.T) {
+	ctx, dsn, pool := parcelFixtureDB(t)
+	fixture := &parcelHTTPFixture{features: []map[string]interface{}{
+		feature(1, "A", "first", true, 0),
+		feature(2, "B", "second", true, 0),
+		feature(3, "C", "third", true, 0),
+	}}
+	source := fixture.source(t, 1)
+	outcome, result, err := runParcelFixture(ctx, pool, dsn, source, false, 0)
+	if err != nil || outcome != jobs.OutcomeSuccess || result.Processed != 3 {
+		t.Fatalf("paged import: %s %+v %v", outcome, result, err)
+	}
+	before := parcelSnapshot(t, ctx, pool)
+	var id string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM ingest_captures WHERE source_name='union_county_gis'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mu.Lock()
+	requests := fixture.requests
+	fixture.mu.Unlock()
+	runner, err := jobs.NewRunner(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, result, err = runner.Run(ctx, jobs.Definition{ID: parceljob.JobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
+		return (parceljob.Job{DSN: dsn, Root: os.Getenv("PARCEL_EVIDENCE_DIR"), Quarantine: jobs.NewQuarantineStore(pool)}).Replay(ctx, id)
+	}})
+	if err != nil || outcome != jobs.OutcomeSuccess || result.Processed != 3 {
+		t.Fatalf("paged replay: %s %+v %v", outcome, result, err)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.requests != requests {
+		t.Fatalf("replay contacted source: %d -> %d", requests, fixture.requests)
+	}
+	if after := parcelSnapshot(t, ctx, pool); !reflect.DeepEqual(before, after) {
+		t.Fatalf("paged replay changed serving data")
+	}
+}
 
 func TestQuarantineResolutionAcrossPublicationBatches(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)

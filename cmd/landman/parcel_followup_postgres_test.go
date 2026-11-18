@@ -307,6 +307,27 @@ func TestHashVersionTransitionDoesNotWriteBusinessHistory(t *testing.T) {
 	}
 }
 
+func TestLiveParcelPublicationRequestsDerivedHandoff(t *testing.T) {
+	ctx, dsn, pool := parcelFixtureDB(t)
+	fixture := &parcelHTTPFixture{features: []map[string]interface{}{feature(1, "A", "owner", true, 0)}}
+	source := fixture.source(t, 1)
+	if out, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || out != jobs.OutcomeSuccess {
+		t.Fatalf("initial parcel import: %s %v", out, err)
+	}
+	var generation int64
+	var screen, qualification bool
+	if err := pool.QueryRow(ctx, `SELECT request_generation,screening_pending,qualification_pending FROM parcel_derived_handoff`).Scan(&generation, &screen, &qualification); err != nil || !screen || !qualification {
+		t.Fatalf("live geometry did not request both derived jobs: %d %t %t %v", generation, screen, qualification, err)
+	}
+	if out, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || out != jobs.OutcomeSuccess {
+		t.Fatalf("repeat parcel import: %s %v", out, err)
+	}
+	var after int64
+	if err := pool.QueryRow(ctx, `SELECT request_generation FROM parcel_derived_handoff`).Scan(&after); err != nil || after != generation {
+		t.Fatalf("unchanged parcel advanced derived generation: %d -> %d (%v)", generation, after, err)
+	}
+}
+
 func TestReplayDerivedHandoffPersistsAcrossPendingScreening(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	f := &parcelHTTPFixture{features: []map[string]interface{}{feature(1, "A", "owner", true, 0)}}
@@ -317,7 +338,8 @@ func TestReplayDerivedHandoffPersistsAcrossPendingScreening(t *testing.T) {
 		t.Fatalf("offline rebuild: %s %+v %v", out, result, err)
 	}
 	var screen, qualification bool
-	if err := pool.QueryRow(ctx, `SELECT screening_pending,qualification_pending FROM parcel_derived_handoff WHERE artifact_id=$1`, id).Scan(&screen, &qualification); err != nil || !screen || !qualification {
+	var generation int64
+	if err := pool.QueryRow(ctx, `SELECT screening_pending,qualification_pending,request_generation FROM parcel_derived_handoff WHERE artifact_id=$1`, id).Scan(&screen, &qualification, &generation); err != nil || !screen || !qualification {
 		t.Fatalf("missing durable derived request: %t %t %v", screen, qualification, err)
 	}
 	out, result, err = replayFollowup(t, ctx, dsn, runner, pool, id)
@@ -327,6 +349,10 @@ func TestReplayDerivedHandoffPersistsAcrossPendingScreening(t *testing.T) {
 	var requests int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM parcel_derived_handoff`).Scan(&requests); err != nil || requests != 1 {
 		t.Fatalf("duplicate handoff %d %v", requests, err)
+	}
+	var after int64
+	if err := pool.QueryRow(ctx, `SELECT request_generation FROM parcel_derived_handoff WHERE artifact_id=$1`, id).Scan(&after); err != nil || after != generation {
+		t.Fatalf("unchanged current replay advanced derived generation: %d -> %d (%v)", generation, after, err)
 	}
 	t.Setenv("DATABASE_URL", dsn)
 	args := os.Args

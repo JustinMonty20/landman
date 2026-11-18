@@ -43,6 +43,18 @@ func Reference(key string, size int64, digest [32]byte) (Artifact, error) {
 	return a, a.Valid()
 }
 
+// ReferenceForSource validates a saved reference belongs to the capture source.
+func ReferenceForSource(source, key string, size int64, digest [32]byte) (Artifact, error) {
+	artifact, err := Reference(key, size, digest)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if !validSource(source) || artifact.key != artifactKey(source, digest) {
+		return Artifact{}, errors.New("artifact source differs from capture")
+	}
+	return artifact, nil
+}
+
 // Store has one selected backend per run. Both backends retain immutable versions.
 type Store interface {
 	Put(context.Context, string, io.Reader) (Artifact, error)

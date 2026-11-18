@@ -19,8 +19,10 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/ingest"
 	"github.com/JustinMonty20/landman/internal/jobs"
+	"github.com/JustinMonty20/landman/internal/soil"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,11 +32,15 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if dsn == "" {
 		t.Skip("disposable PostGIS URL not set")
 	}
-	if !strings.Contains(dsn, "/soil_test?") {
+	if !strings.Contains(dsn, "/soil_test_") {
 		t.Fatal("soil integration requires disposable soil_test database")
 	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +88,10 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 		return count
 	}
 	run()
+	var bound int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.source_name=$1 AND a.job_id='union.gis.soil' AND a.outcome='success'`, captureSource).Scan(&bound); err != nil || bound != 1 {
+		t.Fatalf("county soil capture missing origin attempt: %d %v", bound, err)
+	}
 	if read("soil_polygons") != 1 || read("soil_polygon_sets") != 1 || read("soil_ingest_publications") != 1 {
 		t.Fatal("incomplete first soil publication")
 	}
@@ -102,14 +112,41 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := requests
-	if err := job.Replay(ctx, captureID); err != nil {
+	if _, _, err := runner.Run(ctx, jobs.Definition{ID: "union.gis.soil", Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
+		return jobs.Result{}, job.Replay(ctx, captureID)
+	}}); err != nil {
 		t.Fatal(err)
+	}
+	if read("ingest_replay_attempts") != 1 {
+		t.Fatal("county soil replay missing separate attempt")
 	}
 	if requests != before || read("soil_polygon_sets") != 1 {
 		t.Fatal("replay fetched live pages or wrote a new soil set")
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,shape) SELECT 'union','179','union_county_gis','soil-fixture',shape FROM soil_polygons WHERE object_id='1'`); err != nil {
 		t.Fatal(err)
+	}
+	// Count attempted overlap insertions, including ON CONFLICT updates with no business write.
+	if _, err := pool.Exec(ctx, `CREATE TABLE soil_test_intersection_attempts (n int); CREATE FUNCTION soil_test_count_intersection() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO soil_test_intersection_attempts VALUES (1); RETURN NEW; END $$; CREATE TRIGGER count_soil_intersection BEFORE INSERT ON soil_polygon_parcels FOR EACH ROW EXECUTE FUNCTION soil_test_count_intersection()`); err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	features := document["features"].([]any)
+	geometry := features[0].(map[string]any)["geometry"].(map[string]any)
+	rings := geometry["rings"].([]any)
+	ring := rings[0].([]any)
+	rings[0] = append(append([]any{}, ring[1:len(ring)-1]...), ring[0], ring[1])
+	rotatedFixture, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture = rotatedFixture
+	run()
+	if read("soil_polygon_sets") != 1 || read("soil_test_intersection_attempts") != 0 {
+		t.Fatal("rotated ring triggered a geometry generation or intersection")
 	}
 	rating := "Very limited"
 	requestsBefore := 0
@@ -162,12 +199,15 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	screen := ScreeningJob{Pool: pool, Artifacts: store, Client: client, Interval: time.Hour}
 	screenImport := func() {
 		t.Helper()
-		result, e := screen.Import(ctx)
+		_, result, e := runner.Run(ctx, jobs.Definition{ID: "union.soil.screening", Run: screen.Import})
 		if e != nil || result.Processed != 1 {
 			t.Fatalf("screen result=%+v error=%v", result, e)
 		}
 	}
 	screenImport()
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.source_name=$1 AND a.job_id='union.soil.screening' AND a.outcome='success'`, interpretationSource).Scan(&bound); err != nil || bound != 1 {
+		t.Fatalf("USDA capture missing origin attempt: %d %v", bound, err)
+	}
 	if read("soil_screening_runs") != 1 || read("soil_screening_ratings") != 3 || read("soil_polygon_parcels") != 1 {
 		t.Fatal("screening did not publish complete derived generation")
 	}
@@ -186,6 +226,50 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	screenImport()
 	if read("soil_screening_runs") != 2 {
 		t.Fatal("changed USDA rating did not publish generation")
+	}
+	var parcelID string
+	if e := pool.QueryRow(ctx, `SELECT id::text FROM parcels WHERE source_parcel_id='soil-fixture'`).Scan(&parcelID); e != nil {
+		t.Fatal(e)
+	}
+	assessment, e := soil.CurrentAssessment(ctx, pool, county.Union, polygonSource, parcelID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, use := range assessment.Uses {
+		for _, unit := range use.MapUnits {
+			for _, polygon := range unit.Polygons {
+				if polygon.SurveySavedOn == nil || polygon.SurveySavedOn.Format("2006-01-02") != "2026-09-03" {
+					t.Fatalf("assessment lost saved USDA survey date: %+v", polygon)
+				}
+			}
+		}
+	}
+	var dated, undated int
+	if e := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE survey_saved_on='2026-09-03'),count(*) FILTER (WHERE survey_saved_on IS NULL) FROM soil_screening_survey_dates`).Scan(&dated, &undated); e != nil || dated != 2 || undated != 0 {
+		t.Fatalf("saved USDA survey date missing from screening generations: %d %d %v", dated, undated, e)
+	}
+	var currentScreenCapture string
+	if e := pool.QueryRow(ctx, `SELECT capture_id::text FROM soil_ingest_publications WHERE source_name=$1 ORDER BY observed_at DESC LIMIT 1`, interpretationSource).Scan(&currentScreenCapture); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := pool.Exec(ctx, `UPDATE soil_ingest_publications SET normalized_version='usda-interpretation-v0' WHERE capture_id=$1::uuid`, currentScreenCapture); e != nil {
+		t.Fatal(e)
+	}
+	if e := screen.Replay(ctx, currentScreenCapture); e != nil {
+		t.Fatal(e)
+	}
+	if read("soil_screening_runs") != 3 || read("soil_screening_survey_dates") != 3 {
+		t.Fatal("current USDA correction failed to publish revised screening and preserve captured survey date")
+	}
+	var correctionRevision int
+	if e := pool.QueryRow(ctx, `SELECT max(revision) FROM soil_ingest_publications WHERE capture_id=$1::uuid`, currentScreenCapture).Scan(&correctionRevision); e != nil || correctionRevision != 2 {
+		t.Fatalf("USDA correction revision=%d error=%v", correctionRevision, e)
+	}
+	if e := screen.Replay(ctx, currentScreenCapture); e != nil {
+		t.Fatal(e)
+	}
+	if read("soil_screening_runs") != 3 || read("soil_ingest_publications") != 7 {
+		t.Fatal("unchanged USDA replay republished correction")
 	}
 	var overlapVersionAfter string
 	if e := pool.QueryRow(ctx, `SELECT xmin::text FROM soil_polygon_parcels`).Scan(&overlapVersionAfter); e != nil {
@@ -209,7 +293,7 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if e := screen.Replay(ctx, screenCapture); e != nil {
 		t.Fatal(e)
 	}
-	if requestsBefore != noRequests || read("soil_screening_runs") != 2 {
+	if requestsBefore != noRequests || read("soil_screening_runs") != 3 {
 		t.Fatal("USDA replay issued request or republished historical run")
 	}
 	// Seal a complete historical USDA capture before another county geometry generation takes the head.
@@ -257,10 +341,23 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	fixture = []byte(strings.Replace(string(fixture), `"SPATIALVER":5.0`, `"SPATIALVER":6.0`, 1))
+	if _, e := pool.Exec(ctx, `TRUNCATE soil_test_intersection_attempts`); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := pool.Exec(ctx, `UPDATE soil_ingest_publications SET geometry_version='soil-ewkb-v1' WHERE source_name=$1 AND capture_id=(SELECT capture_id FROM soil_ingest_publications WHERE source_name=$1 ORDER BY observed_at DESC LIMIT 1)`, captureSource); e != nil {
+		t.Fatal(e)
+	}
+	fixture = bytes.Replace(fixture, []byte(`"SPATIALVER":5`), []byte(`"SPATIALVER":6`), 1)
 	run()
-	if read("soil_polygon_sets") != 2 {
-		t.Fatal("changed geometry did not publish new set")
+	if read("soil_polygon_sets") != 2 || read("soil_test_intersection_attempts") != 0 {
+		t.Fatalf("metadata-only revision: sets=%d intersection attempts=%d fixture-version-six=%t", read("soil_polygon_sets"), read("soil_test_intersection_attempts"), bytes.Contains(fixture, []byte(`"SPATIALVER":6`)))
+	}
+	var savedVersion float64
+	if e := pool.QueryRow(ctx, `SELECT spatial_version FROM soil_polygon_set_members WHERE set_id=(SELECT set_id FROM soil_polygon_set_heads WHERE county_id='union' AND source_name=$1)`, polygonSource).Scan(&savedVersion); e != nil || savedVersion != 6 {
+		t.Fatalf("current set lost metadata revision: %v %v", savedVersion, e)
+	}
+	if e := pool.QueryRow(ctx, `SELECT spatial_version FROM soil_polygon_set_members WHERE set_id=$1::uuid`, firstSet).Scan(&savedVersion); e != nil || savedVersion != 5 {
+		t.Fatalf("historical set metadata mutated: %v %v", savedVersion, e)
 	}
 	previousHead := ""
 	if e := pool.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&previousHead); e != nil {
@@ -277,20 +374,24 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if e := pool.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&currentHead); e != nil {
 		t.Fatal(e)
 	}
-	if currentHead != previousHead || read("soil_screening_runs") != 2 {
+	if currentHead != previousHead || read("soil_screening_runs") != 3 {
 		t.Fatal("failed publication changed screening generation")
 	}
 	failedScreen := screen
 	failedScreen.Client = &http.Client{Transport: testUSDATransport(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("required USDA response unavailable")
 	})}
-	if _, e := failedScreen.Import(ctx); e == nil {
+	if _, _, e := runner.Run(ctx, jobs.Definition{ID: "union.soil.screening", Run: failedScreen.Import}); e == nil {
 		t.Fatal("unavailable USDA response accepted")
+	}
+	var failedCapture int
+	if e := pool.QueryRow(ctx, `SELECT count(*) FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.source_name=$1 AND c.published_at IS NULL AND a.job_id='union.soil.screening' AND a.outcome='failed' AND c.attempt_kind='full_scan'`, interpretationSource).Scan(&failedCapture); e != nil || failedCapture != 1 {
+		t.Fatalf("partial USDA capture missing failed attempt: %d %v", failedCapture, e)
 	}
 	if e := pool.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&currentHead); e != nil {
 		t.Fatal(e)
 	}
-	if currentHead != previousHead || read("soil_screening_runs") != 2 || read("soil_polygon_parcels") != 1 {
+	if currentHead != previousHead || read("soil_screening_runs") != 3 || read("soil_polygon_parcels") != 1 {
 		t.Fatal("USDA failure changed published screening or overlaps")
 	}
 	if read("soil_screening_refresh_status") != 1 {
@@ -301,8 +402,67 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 		t.Fatalf("missing registered failed capture: count=%d error=%v", partial, e)
 	}
 	var artifactCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ingest_captures WHERE source_name=$1 AND published_at IS NOT NULL`, captureSource).Scan(&artifactCount); err != nil || artifactCount != 3 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ingest_captures WHERE source_name=$1 AND published_at IS NOT NULL`, captureSource).Scan(&artifactCount); err != nil || artifactCount != 4 {
 		t.Fatalf("missing source observations %d %v", artifactCount, err)
+	}
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	geometry = document["features"].([]any)[0].(map[string]any)["geometry"].(map[string]any)
+	positiveRing := geometry["rings"].([]any)[0].([]any)
+	coordinate := positiveRing[0].([]any)
+	coordinate[0] = coordinate[0].(float64) + 4
+	positiveRing[len(positiveRing)-1].([]any)[0] = coordinate[0]
+	fixture, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run()
+	if read("soil_polygon_sets") != 3 || read("soil_test_intersection_attempts") == 0 {
+		t.Fatal("changed geometry failed positive-control intersection probe")
+	}
+	var currentCountyCapture string
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM soil_ingest_publications WHERE source_name=$1 ORDER BY observed_at DESC LIMIT 1`, captureSource).Scan(&currentCountyCapture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE soil_ingest_publications SET normalized_version='soil-metadata-v1' WHERE capture_id=$1::uuid`, currentCountyCapture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `TRUNCATE soil_test_intersection_attempts`); err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Replay(ctx, currentCountyCapture); err != nil {
+		t.Fatal(err)
+	}
+	if read("soil_polygon_sets") != 4 || read("soil_test_intersection_attempts") != 0 {
+		t.Fatal("county correction replay did not publish metadata-only generation")
+	}
+	if err := pool.QueryRow(ctx, `SELECT max(revision) FROM soil_ingest_publications WHERE capture_id=$1::uuid`, currentCountyCapture).Scan(&correctionRevision); err != nil || correctionRevision != 2 {
+		t.Fatalf("county correction revision=%d error=%v", correctionRevision, err)
+	}
+	var correctedCause string
+	if err := pool.QueryRow(ctx, `SELECT change_cause FROM soil_ingest_publications WHERE capture_id=$1::uuid AND revision=2`, currentCountyCapture).Scan(&correctedCause); err != nil || correctedCause != "normalization_correction" {
+		t.Fatalf("county correction cause=%s error=%v", correctedCause, err)
+	}
+	if err := job.Replay(ctx, currentCountyCapture); err != nil {
+		t.Fatal(err)
+	}
+	if read("soil_polygon_sets") != 4 {
+		t.Fatal("unchanged county correction replay published again")
+	}
+	screenImport()
+	assessment, err = soil.CurrentAssessment(ctx, pool, county.Union, polygonSource, parcelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, use := range assessment.Uses {
+		for _, unit := range use.MapUnits {
+			for _, polygon := range unit.Polygons {
+				if polygon.SurveySavedOn == nil || polygon.SurveySavedOn.Format("2006-01-02") != "2026-09-03" {
+					t.Fatalf("new generation lost retained USDA survey date: %+v", polygon)
+				}
+			}
+		}
 	}
 }
 

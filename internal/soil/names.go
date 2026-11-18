@@ -130,6 +130,43 @@ func CaptureNames(ctx context.Context, client *http.Client, endpoint string, key
 	return err
 }
 
+// CapturedSurveyDates returns USDA dates keyed by map unit from verified name bytes.
+func CapturedSurveyDates(raw []byte) (map[string]time.Time, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	names, err := ParseNameResponse(raw)
+	if err != nil {
+		return nil, err
+	}
+	dates := make(map[string]time.Time)
+	for key, name := range names {
+		if name.surveyDate != nil {
+			dates[key] = *name.surveyDate
+		}
+	}
+	return dates, nil
+}
+
+// StoreCapturedSurveyDatesTx binds saved USDA dates to the new screening run.
+func StoreCapturedSurveyDatesTx(ctx context.Context, tx pgx.Tx, dates map[string]time.Time, runID, setID string) error {
+	for key, date := range dates {
+		if _, err := tx.Exec(ctx, `INSERT INTO soil_screening_survey_dates(run_id,polygon_id,survey_saved_on)
+SELECT $1::uuid,polygon_id,$3::date FROM soil_polygon_set_members WHERE set_id=$2::uuid AND map_unit_key=$4`, runID, setID, date.Format("2006-01-02"), key); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO soil_screening_survey_dates(run_id,polygon_id,survey_saved_on)
+SELECT $1::uuid, m.polygon_id, old.survey_saved_on FROM soil_polygon_set_members m
+CROSS JOIN LATERAL (SELECT d.survey_saved_on FROM soil_screening_survey_dates d
+JOIN soil_screening_runs r ON r.id=d.run_id
+JOIN soil_polygon_set_members prior ON prior.set_id=r.soil_set_id AND prior.polygon_id=m.polygon_id AND prior.map_unit_key=m.map_unit_key
+WHERE d.polygon_id=m.polygon_id AND d.run_id<>$1::uuid
+ORDER BY r.created_at DESC, r.id DESC LIMIT 1) old
+WHERE m.set_id=$2::uuid ON CONFLICT DO NOTHING`, runID, setID)
+	return err
+}
+
 // StoreCapturedNamesTx applies optional labels only after their bytes are verified.
 func StoreCapturedNamesTx(ctx context.Context, tx pgx.Tx, raw []byte, observedAt time.Time) error {
 	names, err := ParseNameResponse(raw)

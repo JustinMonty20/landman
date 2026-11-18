@@ -16,9 +16,11 @@ import (
 
 // ShapeWriter stores all pages in one transaction so failed imports leave no partial rows.
 type ShapeWriter struct {
-	pool       *pgxpool.Pool
-	tx         pgx.Tx
-	partsSaved int
+	pool            *pgxpool.Pool
+	tx              pgx.Tx
+	partsSaved      int
+	geometryChanged bool
+	businessChanged bool
 }
 
 // NewShapeWriter opens one import transaction from the supplied connection string.

@@ -18,6 +18,10 @@ func TestSoilChangeCauseUsesPersistedFingerprintVersions(t *testing.T) {
 	}
 	previous.Normalized = next.Normalized
 	previous.SourceVersion = next.SourceVersion
+	if cause := soilChangeCause(previous, next, true); cause != ingest.NormalizationCorrection {
+		t.Fatalf("version-only normalization replay must preserve correction provenance: %s", cause)
+	}
+	previous.NormalizedVersion = next.NormalizedVersion
 	if cause := soilChangeCause(previous, next, true); cause != ingest.OfflineRetry {
 		t.Fatalf("unchanged replay must retain a valid publication cause: %s", cause)
 	}

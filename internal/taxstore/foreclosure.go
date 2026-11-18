@@ -39,6 +39,7 @@ func SaveForeclosure(ctx context.Context, tx pgx.Tx, cases []union.ForeclosureCa
 	digest := meta.Artifact.SHA256()
 	numbered := make(map[string][]string)
 	var caseOrder []string
+	seenCases := make([]string, 0, len(cases))
 	for _, sale := range cases {
 		if len(sale.PINs) == 0 || !foreclosureAmountValid(sale.OpeningBid) || !foreclosureAmountValid(sale.CurrentBid) || !foreclosureAmountValid(sale.UpsetBid) {
 			return result, errors.New("invalid foreclosure case")
@@ -79,6 +80,7 @@ file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now()
 			return result, fmt.Errorf("save foreclosure case: %w", err)
 		}
 		result.SavedCases++
+		seenCases = append(seenCases, caseID)
 		matched := make([]string, 0, len(sale.PINs))
 		for _, pin := range sale.PINs {
 			var parcelID string
@@ -114,6 +116,11 @@ VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
 		if err != nil {
 			return result, fmt.Errorf("remove obsolete foreclosure parcel links: %w", err)
 		}
+	}
+	// Typed rows are the active file's membership; provenance on surviving rows
+	// remains the file that last changed their business values.
+	if _, err := tx.Exec(ctx, `DELETE FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name=$2 AND NOT (id::text = ANY($3::text[]))`, county.Union, meta.Name, seenCases); err != nil {
+		return result, fmt.Errorf("remove cases absent from foreclosure file: %w", err)
 	}
 	if err := ActivateImport(ctx, tx, id); err != nil {
 		return result, err

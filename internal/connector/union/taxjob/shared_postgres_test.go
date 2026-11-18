@@ -10,8 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/ingest"
+	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -20,7 +23,7 @@ import (
 func taxSharedDatabase(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("TAX_SHARED_TEST_DSN")
-	if os.Getenv("TAX_SHARED_TEST_DISPOSABLE") != "1" || !strings.Contains(dsn, "/taxworker?") {
+	if os.Getenv("TAX_SHARED_TEST_DISPOSABLE") != "1" || !strings.Contains(dsn, "/taxworker_") {
 		t.Skip("requires a dedicated migrated taxworker database and explicit disposable guard")
 	}
 	pool, err := pgxpool.New(context.Background(), dsn)
@@ -96,8 +99,25 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := Run(ctx, pool, cfg)
+	runner, err := jobs.NewRunner(pool)
 	if err != nil {
+		t.Fatal(err)
+	}
+	run := func() (jobs.Result, error) {
+		_, result, err := runner.Run(ctx, jobs.Definition{ID: "union.tax", Run: func(ctx context.Context) (jobs.Result, error) {
+			return Run(ctx, pool, cfg)
+		}})
+		return result, err
+	}
+	result, err := run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := taxCount(t, pool, `SELECT count(*) FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE a.job_id='union.tax' AND a.outcome='success' AND c.attempt_kind='full_scan'`); n != 4 {
+		t.Fatalf("tax captures missing originating attempt: %d", n)
+	}
+	var originalBoundCapture string
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_ingest_publications WHERE source_name='union_delinquent'`).Scan(&originalBoundCapture); err != nil {
 		t.Fatal(err)
 	}
 	if result.Processed < 4 {
@@ -113,7 +133,7 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	if before < 4 || taxCount(t, pool, `SELECT count(*) FROM tax_ingest_history WHERE capture_id IS NULL`) != 0 {
 		t.Fatal("typed changes are not attributed to their verified captures")
 	}
-	if _, err := Run(ctx, pool, cfg); err != nil {
+	if _, err := run(); err != nil {
 		t.Fatal(err)
 	}
 	if got := taxCount(t, pool, `SELECT count(*) FROM tax_ingest_history`); got != before {
@@ -122,15 +142,75 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	if n := taxCount(t, pool, `SELECT count(*) FROM ingest_captures WHERE published_at IS NOT NULL`); n != 4 {
 		t.Fatalf("unchanged capture advanced freshness: %d", n)
 	}
+	// A prior normalizer's digest is not comparable to the new digest.
+	if _, err := pool.Exec(ctx, `UPDATE tax_ingest_publications SET normalization_version='tax-normalized-legacy', normalized_sha256=decode(repeat('00',32),'hex') WHERE source_name='union_delinquent'`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := taxartifact.NewLocal(cfg.ArtifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingestFile(ctx, pool, store, cfg.ArtifactDir, "union_delinquent", union.DelinquentURL, cfg.DelinquentPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := taxCount(t, pool, `SELECT count(*) FROM tax_ingest_history`); got != before {
+		t.Fatalf("normalizer version-only transition rewrote typed data: %d -> %d", before, got)
+	}
 	var captureID string
 	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_ingest_publications WHERE source_name='union_delinquent'`).Scan(&captureID); err != nil {
+		t.Fatal(err)
+	}
+	// B is retained without publication, as after a failed publication. A
+	// later identical observation of A must prevent B from replacing it.
+	pending, err := ingest.NewRecorder(store, "union_delinquent", time.Now().UTC().Truncate(time.Microsecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingBytes, err := os.ReadFile(cfg.DelinquentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.Record(ctx, union.DelinquentURL, "", 0, strings.NewReader(strings.Replace(string(pendingBytes), "$14,355.02", "$14,355.03", 1))); err != nil {
+		t.Fatal(err)
+	}
+	pendingID, err := (ingest.Engine{Pool: pool, Store: store}).Seal(ctx, pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, err := ingestFile(ctx, pool, store, cfg.ArtifactDir, "union_delinquent", union.DelinquentURL, cfg.DelinquentPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Replay(ctx, pool, cfg.ArtifactDir, pendingID); err != nil {
+		t.Fatal(err)
+	}
+	if taxCount(t, pool, `SELECT count(*) FROM ingest_captures WHERE id=$1 AND published_at IS NOT NULL`, pendingID) != 0 {
+		t.Fatal("stale retained B superseded later accepted A")
+	}
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_latest_observations WHERE source_name='union_delinquent'`).Scan(&captureID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis','07105038A',true)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Replay(ctx, pool, cfg.ArtifactDir, captureID); err != nil {
+	if _, _, err := runner.Run(ctx, jobs.Definition{ID: "union.gis.soil", Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
+		return Replay(ctx, pool, cfg.ArtifactDir, captureID)
+	}}); err == nil {
+		t.Fatal("unrelated runner attempt claimed tax replay")
+	}
+	if n := taxCount(t, pool, `SELECT count(*) FROM ingest_replay_attempts WHERE capture_id=$1::uuid`, captureID); n != 0 {
+		t.Fatalf("wrong job recorded replay attempt: %d", n)
+	}
+	if _, _, err := runner.Run(ctx, jobs.Definition{ID: "union.tax", Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
+		return Replay(ctx, pool, cfg.ArtifactDir, captureID)
+	}}); err != nil {
 		t.Fatal(err)
+	}
+	if n := taxCount(t, pool, `SELECT count(*) FROM ingest_replay_attempts r JOIN job_attempts a ON a.id=r.attempt_id WHERE r.capture_id=$1::uuid AND a.job_id='union.tax' AND a.attempt_kind='replay' AND a.outcome='success'`, captureID); n != 1 {
+		t.Fatalf("replay missing separate attempt provenance: %d", n)
+	}
+	if n := taxCount(t, pool, `SELECT count(*) FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.id=$1::uuid AND a.attempt_kind='full_scan'`, originalBoundCapture); n != 1 {
+		t.Fatalf("replay replaced original capture attempt: %d", n)
 	}
 	if n := taxCount(t, pool, `SELECT count(*) FROM tax_delinquent_balances WHERE tax_year=2025`); n != 1 {
 		t.Fatalf("replay did not link previously unmatched key: %d", n)
@@ -142,7 +222,7 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var foreclosureCapture string
-	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_ingest_publications WHERE source_name='union_foreclosure'`).Scan(&foreclosureCapture); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_latest_observations WHERE source_name='union_foreclosure'`).Scan(&foreclosureCapture); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis','07129161',false)`); err != nil {
@@ -158,10 +238,6 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 		t.Fatalf("foreclosure replay provenance: %d", n)
 	}
 	data, err := os.ReadFile(cfg.DelinquentPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := taxartifact.NewLocal(cfg.ArtifactDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +260,16 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	}
 	if n := taxCount(t, pool, `SELECT count(*) FROM ingest_captures WHERE source_name='union_delinquent' AND published_at IS NULL`); n < 1 {
 		t.Fatal("failed input left no retained registered capture")
+	}
+	invalid := cfg
+	invalid.DelinquentPath = broken
+	if _, _, err := runner.Run(ctx, jobs.Definition{ID: "union.tax", Run: func(ctx context.Context) (jobs.Result, error) {
+		return Run(ctx, pool, invalid)
+	}}); err == nil {
+		t.Fatal("malformed operator file accepted through runner")
+	}
+	if n := taxCount(t, pool, `SELECT count(*) FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.source_name='union_delinquent' AND c.published_at IS NULL AND a.job_id='union.tax' AND a.outcome='failed'`); n != 1 {
+		t.Fatalf("failed tax capture missing originating attempt: %d", n)
 	}
 	changed := filepath.Join(root, "changed-delinquent.csv")
 	data, err = os.ReadFile(cfg.DelinquentPath)

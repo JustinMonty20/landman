@@ -137,6 +137,30 @@ func StoreWithSetTx(ctx context.Context, tx pgx.Tx, countyID county.ID, source s
 	return storePolygons(ctx, tx, countyID, source, polygons, nil, false)
 }
 
+// StoreMetadataWithSetTx preserves historical set members while publishing changed
+// labels and revisions against unchanged polygon shapes and existing overlaps.
+func StoreMetadataWithSetTx(ctx context.Context, tx pgx.Tx, countyID county.ID, source string, polygons []Polygon, units []MapUnit) (string, error) {
+	if err := validateMembership(countyID, source, polygons, units); err != nil {
+		return "", err
+	}
+	if err := StoreMapUnitsTx(ctx, tx, units); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `LOCK TABLE parcels IN SHARE MODE`); err != nil {
+		return "", err
+	}
+	for _, polygon := range polygons {
+		tag, err := tx.Exec(ctx, `UPDATE soil_polygons SET map_unit_key=$4,spatial_version=$5,survey_saved_on=$6 WHERE county_id=$1 AND source_name=$2 AND object_id=$3`, countyID.String(), source, polygon.ObjectID, polygon.MapUnitKey, polygon.SpatialVersion, polygon.SurveySavedOn)
+		if err != nil {
+			return "", err
+		}
+		if tag.RowsAffected() != 1 {
+			return "", fmt.Errorf("soil: missing polygon %s", polygon.ObjectID)
+		}
+	}
+	return recordPolygonSet(ctx, tx, countyID, source, polygons)
+}
+
 // StoreMapUnitsTx updates descriptive metadata without replacing polygon geometry.
 func StoreMapUnitsTx(ctx context.Context, tx pgx.Tx, units []MapUnit) error {
 	distinct := make(map[string]MapUnit, len(units))

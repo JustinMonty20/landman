@@ -10,9 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -134,6 +134,10 @@ type Observation struct {
 // A publisher returns it when a replay finds no eligible source observation.
 var ErrNoPublication = errors.New("capture has no eligible publication")
 
+// ErrObservationOnly commits an accepted observation without changing the
+// published capture or active business freshness.
+var ErrObservationOnly = errors.New("capture accepted without publication")
+
 type Engine struct {
 	Pool  *pgxpool.Pool
 	Store taxartifact.Store
@@ -181,7 +185,26 @@ func (e Engine) Seal(ctx context.Context, recorder *Recorder) (string, error) {
 
 // Replay uses only a trusted database manifest and retained bytes. It never
 // asks a source adapter to fetch a live response.
-func (e Engine) Replay(ctx context.Context, id string, publisher Publisher) error {
+func (e Engine) Replay(ctx context.Context, id, jobID string, publisher Publisher) error {
+	if jobID == "" {
+		return errors.New("replay requires source job ID")
+	}
+	if attempt, ok := jobs.AttemptID(ctx); ok {
+		if e.Pool == nil {
+			return errors.New("replay requires database")
+		}
+		var registered string
+		err := e.Pool.QueryRow(ctx, `INSERT INTO ingest_replay_attempts(capture_id,attempt_id)
+SELECT c.id,a.id FROM ingest_captures c JOIN job_attempts a ON a.id=$2::uuid
+WHERE c.id=$1::uuid AND a.job_id=$3 AND a.outcome='running' AND a.attempt_kind='replay'
+RETURNING capture_id::text`, id, attempt, jobID).Scan(&registered)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("replay requires running replay attempt and registered capture")
+		}
+		if err != nil {
+			return err
+		}
+	}
 	return e.publish(ctx, id, true, publisher)
 }
 func (e Engine) publish(ctx context.Context, id string, replay bool, publisher Publisher) error {
@@ -221,6 +244,9 @@ func (e Engine) publish(ctx context.Context, id string, replay bool, publisher P
 			if errors.Is(err, ErrNoPublication) {
 				return ErrNoPublication
 			}
+			if errors.Is(err, ErrObservationOnly) {
+				return nil
+			}
 			return err
 		}
 		if !published {
@@ -241,7 +267,7 @@ func (e Engine) verify(ctx context.Context, manifest Manifest) (VerifiedCapture,
 	}
 	verified := VerifiedCapture{manifest: copyManifest(manifest), store: e.Store}
 	for _, receipt := range manifest.Receipts {
-		if receipt.Request == "" || receipt.CRS < 0 || !strings.HasPrefix(receipt.ArtifactKey, "tax/"+manifest.Source+"/sha256/") {
+		if receipt.Request == "" || receipt.CRS < 0 {
 			return VerifiedCapture{}, errors.New("invalid capture receipt")
 		}
 		digest, err := hex.DecodeString(receipt.SHA256)
@@ -250,7 +276,7 @@ func (e Engine) verify(ctx context.Context, manifest Manifest) (VerifiedCapture,
 		}
 		var sum [sha256.Size]byte
 		copy(sum[:], digest)
-		artifact, err := taxartifact.Reference(receipt.ArtifactKey, receipt.Size, sum)
+		artifact, err := taxartifact.ReferenceForSource(manifest.Source, receipt.ArtifactKey, receipt.Size, sum)
 		if err != nil {
 			return VerifiedCapture{}, err
 		}
