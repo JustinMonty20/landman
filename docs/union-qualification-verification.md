@@ -1,5 +1,7 @@
 # Union qualification ingestion verification
 
+The migration numbers below describe checks on the original qualification branch. Those qualification files now use shared migration versions 22 and 23. See [Union jobs](union-jobs.md) for current upgrade commands.
+
 ## Local checks
 
 The checked-in county metadata and two-feature samples cover all 15 scoped layers. The Go client retrieved the samples with HTTP 200; earlier Python probes returned HTTP 403 and do not describe application behavior. Fixtures contain no owner, parcel, contact, or mailing attribute keys. No county-scale live import was run.

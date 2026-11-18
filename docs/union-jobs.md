@@ -2,8 +2,9 @@
 
 ## Manual commands
 
-Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000021_qualification_conflict_topology.sql` for zoning and roads. The tax-only command needs migration `000018_tax_file_imports.sql`.
+Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000023_qualification_conflict_topology.sql` for zoning and roads. The tax-only command needs migration `000018_tax_file_imports.sql`.
 
+Databases already at the API's migration 21 apply qualification migrations 22 and 23. Do not manually reset the Goose version table. Development databases that previously applied qualification migrations numbered 20 and 21 must not apply this sequence blindly; reconcile their migration history and schema separately before upgrading.
 The parcel and soil commands contact the live Union GIS or USDA services. The tax job reads operator files; it does not download county files. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
 ```sh
