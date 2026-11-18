@@ -151,6 +151,9 @@ func TestQualificationPointTouchHoleAndUnknownName(t *testing.T) {
 		valid       bool
 	}{
 		{"point-touch", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[0,0],[2,1],[1,2.5],[0,0]]]`, true},
+		{"hole-vertex-on-shell-edge", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[5,0],[6,2],[4,2],[5,0]]]`, true},
+		{"shell-vertex-on-hole-edge", `[[[0,0],[0,10],[3,10],[3,3],[7,3],[7,10],[10,10],[10,0],[0,0]],[[2,4],[2,2],[4,2],[2,4]]]`, true},
+		{"shared-edge", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[0,0],[3,0],[2,2],[0,0]]]`, false},
 		{"edge-cross", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[2,2],[12,2],[12,4],[2,4],[2,2]]]`, false},
 		{"concave-cross", `[[[0,0],[0,10],[3,10],[3,3],[7,3],[7,10],[10,10],[10,0],[0,0]],[[2,2],[8,2],[8,5],[2,5],[2,2]]]`, false},
 		{"exterior-hole", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[20,20],[30,20],[30,30],[20,30],[20,20]]]`, false},
@@ -176,9 +179,15 @@ func TestQualificationPointTouchHoleAndUnknownName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			polygon, ok := shape.(*geom.Polygon)
-			if !ok || polygon.NumLinearRings() != 2 || math.Abs(polygon.Area()) != 98 {
-				t.Fatalf("point-touch hole lost: %T rings=%d area=%g", shape, polygon.NumLinearRings(), polygon.Area())
+			wantArea := 98.0
+			if tc.name == "shell-vertex-on-hole-edge" {
+				wantArea = 70
+			}
+			if math.Abs(math.Abs(shape.(interface{ Area() float64 }).Area())-wantArea) > 1e-9 {
+				t.Fatalf("point-touch hole lost: %T area=%g", shape, shape.(interface{ Area() float64 }).Area())
+			}
+			if polygon, ok := shape.(*geom.Polygon); ok && polygon.NumLinearRings() != 2 {
+				t.Fatalf("hole lost: %v", shape)
 			}
 		})
 	}

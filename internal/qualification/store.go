@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	ZoningMethod = "stored-overlay-measured/2; EPSG:2264; acres=ftUS^2/43560"
-	RoadsMethod  = "stored-nearest-measured/2; EPSG:2264; radius=5280ft; ties<=0.01ft"
+	ZoningMethod = "stored-overlay-measured/3; EPSG:2264; acres=ftUS^2/43560"
+	RoadsMethod  = "stored-nearest-measured/3; EPSG:2264; radius=5280ft; ties<=0.01ft"
 	maxSourceAge = 90 * 24 * time.Hour
 )
 
@@ -23,12 +23,29 @@ type Store struct{ Pool *pgxpool.Pool }
 func (s Store) recordRefreshFailure(group string, started time.Time, err error) {
 	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = s.Pool.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,failed_at,error)
+	tx, e := s.Pool.Begin(c)
+	if e != nil {
+		return
+	}
+	defer tx.Rollback(context.Background())
+	if e = lockQualificationPublication(c, tx, group); e != nil {
+		return
+	}
+	if _, e = tx.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,failed_at,error)
 SELECT $1,$2,$3 WHERE NOT EXISTS (
 SELECT 1 FROM qualification_heads h JOIN qualification_generations g ON g.id=h.generation_id
 WHERE h.source_group=$1 AND g.started_at>$2)
 ON CONFLICT(source_group) DO UPDATE SET failed_at=excluded.failed_at,error=excluded.error
-WHERE qualification_refresh_failures.failed_at<=excluded.failed_at`, group, started, err.Error())
+WHERE qualification_refresh_failures.failed_at<=excluded.failed_at`, group, started, err.Error()); e == nil {
+		_ = tx.Commit(c)
+	}
+}
+
+// The transaction lock makes the publication head check and failure write
+// observe the preceding committed attempt under READ COMMITTED isolation.
+func lockQualificationPublication(ctx context.Context, tx pgx.Tx, group string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('qualification-publication'),hashtext($1))`, group)
+	return err
 }
 
 // RefreshWithGate includes lock acquisition in the source attempt. A failed
@@ -90,6 +107,9 @@ func (s Store) refresh(ctx context.Context, source *union.GISSource, group strin
 		return processed, e
 	}
 	defer tx.Rollback(context.Background())
+	if e = lockQualificationPublication(ctx, tx, group); e != nil {
+		return processed, e
+	}
 	var actual int
 	if e = tx.QueryRow(ctx, `SELECT count(*) FROM qualification_layer_receipts WHERE generation_id=$1`, gen).Scan(&actual); e != nil {
 		return processed, e
@@ -226,7 +246,7 @@ func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Simplify(shape,0),2264),3) END geom FROM parcels WHERE id=ANY($1::uuid[])`, ids); err != nil {
+	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Segmentize(ST_Simplify(shape,0),10),2264),3) END geom FROM parcels WHERE id=ANY($1::uuid[])`, ids); err != nil {
 		return 0, err
 	}
 	for _, sql := range []string{`CREATE UNIQUE INDEX ON qualification_targets(id)`, `CREATE INDEX ON qualification_targets USING GIST(shape)`, `ANALYZE qualification_targets`} {

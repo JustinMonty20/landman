@@ -51,10 +51,10 @@ UNION ALL SELECT parcel_id,geom FROM qualification_jurisdiction_shapes WHERE nam
 ) pairs WHERE ST_Area(geom)>0 GROUP BY parcel_id`, nil},
 		{`INSERT INTO qualification_assessments(parcel_id,source_group,generation_id,geometry_fingerprint,method_version,total_acres,unmapped_acres,ambiguous_acres,jurisdiction_unmapped_acres,jurisdiction_ambiguous_acres,has_zone_conflict)
  SELECT p.id,'zoning',$1,p.fingerprint,$2,NULLIF(ST_Area(p.geom)/43560,0),
- CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Simplify(CASE WHEN c.geom IS NULL THEN p.shape ELSE ST_Difference(p.shape,c.geom) END,0),2264))/43560 END,
- COALESCE(ST_Area(ST_Transform(ST_Simplify(a.geom,0),2264))/43560,0),
- CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Simplify(CASE WHEN jc.geom IS NULL THEN p.shape ELSE ST_Difference(p.shape,jc.geom) END,0),2264))/43560 END,
- COALESCE(ST_Area(ST_Transform(ST_Simplify(ja.geom,0),2264))/43560,0),a.geom IS NOT NULL
+ CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(CASE WHEN c.geom IS NULL THEN p.shape ELSE ST_Difference(p.shape,c.geom) END,0),10),2264))/43560 END,
+ COALESCE(ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(a.geom,0),10),2264))/43560,0),
+ CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(CASE WHEN jc.geom IS NULL THEN p.shape ELSE ST_Difference(p.shape,jc.geom) END,0),10),2264))/43560 END,
+ COALESCE(ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ja.geom,0),10),2264))/43560,0),a.geom IS NOT NULL
  FROM qualification_targets p LEFT JOIN qualification_coverage c ON c.parcel_id=p.id
  LEFT JOIN qualification_ambiguity a ON a.parcel_id=p.id
  LEFT JOIN qualification_jurisdiction_coverage jc ON jc.parcel_id=p.id
@@ -68,11 +68,11 @@ UNION ALL SELECT parcel_id,geom FROM qualification_jurisdiction_shapes WHERE nam
 		{`DELETE FROM qualification_jurisdiction_hits WHERE parcel_id IN (SELECT id FROM qualification_targets)`, nil},
 		{`INSERT INTO qualification_zone_hits(parcel_id,layer_id,source_id,jurisdiction,district_code,acres,share)
  SELECT h.parcel_id,h.layer_id,h.source_id,h.jurisdiction,h.district_code,
- ST_Area(ST_Transform(ST_Simplify(h.geom,0),2264))/43560,ST_Area(ST_Transform(ST_Simplify(h.geom,0),2264))/ST_Area(p.geom)
+ ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/43560,ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/ST_Area(p.geom)
  FROM qualification_zone_shapes h JOIN qualification_targets p ON p.id=h.parcel_id WHERE ST_Area(p.geom)>0`, nil},
 		{`INSERT INTO qualification_jurisdiction_hits(parcel_id,layer_id,source_id,name,acres,share)
-SELECT h.parcel_id,h.layer_id,h.source_id,h.name,ST_Area(ST_Transform(ST_Simplify(h.geom,0),2264))/43560,
-ST_Area(ST_Transform(ST_Simplify(h.geom,0),2264))/ST_Area(p.geom)
+SELECT h.parcel_id,h.layer_id,h.source_id,h.name,ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/43560,
+ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/ST_Area(p.geom)
 FROM qualification_jurisdiction_shapes h JOIN qualification_targets p ON p.id=h.parcel_id WHERE ST_Area(p.geom)>0`, nil},
 	}
 	for _, step := range statements {
@@ -90,7 +90,7 @@ func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string
 	}{
 		{`CREATE TEMP TABLE qualification_distances ON COMMIT DROP AS
  SELECT p.id parcel_id,r.source_id,r.name,r.road_class,r.status,
- CASE WHEN ST_Intersects(p.shape,r.shape) THEN 0 ELSE ST_Length(ST_Transform(ST_ShortestLine(p.shape,r.shape),2264)) END feet
+ CASE WHEN ST_Intersects(p.shape,r.shape) THEN 0 ELSE ST_Distance(p.geom,ST_Transform(ST_Segmentize(r.shape,10),2264)) END feet
  FROM qualification_targets p CROSS JOIN LATERAL (
  SELECT source_id,name,road_class,status,shape FROM qualification_roads
  WHERE generation_id=$1 AND p.geom IS NOT NULL AND ST_Area(p.geom)>0
@@ -108,7 +108,7 @@ func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string
  EXISTS (SELECT 1 FROM (SELECT ST_UnaryUnion(ST_Collect(b.shape)) shape FROM qualification_boundaries b
  JOIN qualification_heads h ON h.source_group='zoning' AND h.generation_id=b.generation_id) b
  WHERE p.geom IS NOT NULL AND (b.shape IS NULL OR NOT ST_Covers(b.shape,p.shape)
- OR ST_Length(ST_Transform(ST_ShortestLine(p.shape,ST_Boundary(b.shape)),2264))<=5280))
+ OR ST_Distance(p.geom,ST_Transform(ST_Segmentize(ST_Boundary(b.shape),10),2264))<=5280))
  FROM qualification_targets p LEFT JOIN (SELECT parcel_id,min(feet) feet FROM qualification_distances GROUP BY parcel_id) d ON d.parcel_id=p.id
  ON CONFLICT(parcel_id,source_group) DO UPDATE SET generation_id=excluded.generation_id,boundary_generation_id=excluded.boundary_generation_id,
  geometry_fingerprint=excluded.geometry_fingerprint,method_version=excluded.method_version,calculated_at=now(),
