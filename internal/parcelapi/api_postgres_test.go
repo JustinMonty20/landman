@@ -106,6 +106,12 @@ func TestHTTPPostGIS(t *testing.T) {
 			t.Fatalf("map %d aggregate %v %v", zoom, contexts, matches)
 		}
 	}
+	if _, err := pool.Exec(ctx, `UPDATE parcels SET mapped_acres=NULL WHERE id=$1`, ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := request("/api/v1/parcels/map?bbox=" + bbox + "&zoom=14&min_acres=1"); code != 200 || body["context_count"] != float64(3) || body["match_count"] != float64(2) {
+		t.Fatalf("null acreage map %d %v", code, body)
+	}
 	for _, path := range []string{"/api/v1/parcels/" + ids[0], "/api/v1/parcels/" + ids[0] + "/tax", "/api/v1/parcels/" + ids[0] + "/soil", "/api/v1/sources"} {
 		if code, _ := request(path); code != 200 {
 			t.Errorf("%s: %d", path, code)

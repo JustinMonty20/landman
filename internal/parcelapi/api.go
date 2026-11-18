@@ -475,7 +475,7 @@ func (f Filters) mapMatch(args *[]any) string {
 	if len(parts) == 0 {
 		return "false"
 	}
-	return strings.Join(parts, " AND ")
+	return "COALESCE((" + strings.Join(parts, " AND ") + "), false)"
 }
 
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
