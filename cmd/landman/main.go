@@ -250,9 +250,12 @@ func run(ctx context.Context) error {
 		}})
 	}
 	refresh := func(ctx context.Context) error {
-		started := time.Now()
 		return withRefreshLock(ctx, dsn, func(ctx context.Context) error {
-			err := runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			requests, err := observedHandoffs(ctx, pool, "screening_pending")
+			if err != nil {
+				return err
+			}
+			err = runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 				count, err := soil.ScreenStored(ctx, dsn, county.Union, gisSource.Name(), interval)
 				if errors.Is(err, soil.ErrNoStoredSet) {
 					err = fmt.Errorf("%w: %w", jobs.ErrPending, err)
@@ -262,22 +265,23 @@ func run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			_, err = pool.Exec(ctx, `UPDATE parcel_derived_handoff SET screening_pending=false WHERE requested_at <= $1`, started)
-			return err
+			return acknowledgeHandoffs(ctx, pool, "screening_pending", requests)
 		})
 	}
 	qualificationRefresh := func(ctx context.Context) error {
-		started := time.Now()
 		return withQualificationLock(ctx, dsn, func(ctx context.Context) error {
-			err := runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			requests, err := observedHandoffs(ctx, pool, "qualification_pending")
+			if err != nil {
+				return err
+			}
+			err = runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 				n, e := qstore.Reconcile(ctx)
 				return jobs.Result{Processed: n}, e
 			}})
 			if err != nil {
 				return err
 			}
-			_, err = pool.Exec(ctx, `UPDATE parcel_derived_handoff SET qualification_pending=false WHERE requested_at <= $1`, started)
-			return err
+			return acknowledgeHandoffs(ctx, pool, "qualification_pending", requests)
 		})
 	}
 	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, afterSource: func(ctx context.Context, id string) error {
@@ -320,10 +324,13 @@ func run(ctx context.Context) error {
 	}
 	if mode == "schedule" {
 		definitions = append(definitions, jobs.Definition{ID: qualificationJobID, Schedule: calendar[qualificationJobID], Run: func(ctx context.Context) (jobs.Result, error) {
-			started := time.Now()
+			requests, e := observedHandoffs(ctx, pool, "qualification_pending")
+			if e != nil {
+				return jobs.Result{}, e
+			}
 			n, e := qstore.Reconcile(ctx)
 			if e == nil {
-				_, e = pool.Exec(ctx, `UPDATE parcel_derived_handoff SET qualification_pending=false WHERE requested_at <= $1`, started)
+				e = acknowledgeHandoffs(ctx, pool, "qualification_pending", requests)
 			}
 			return jobs.Result{Processed: n}, e
 		}})
@@ -348,6 +355,50 @@ func run(ctx context.Context) error {
 		return runRequired(ctx, runner, definitions[len(definitions)-1])
 	}
 	return runManual(ctx, mode, runner, executor, definitions, refresh)
+}
+
+type handoffGeneration struct {
+	artifact   string
+	generation int64
+}
+
+// Snapshot only requests visible before the derived work. A publication
+// arriving during that work must remain pending even if its clock is older.
+func observedHandoffs(ctx context.Context, pool *pgxpool.Pool, column string) ([]handoffGeneration, error) {
+	if column != "screening_pending" && column != "qualification_pending" {
+		return nil, fmt.Errorf("invalid handoff column")
+	}
+	rows, err := pool.Query(ctx, `SELECT artifact_id,request_generation FROM parcel_derived_handoff WHERE `+column)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var requests []handoffGeneration
+	for rows.Next() {
+		var request handoffGeneration
+		if err := rows.Scan(&request.artifact, &request.generation); err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	return requests, rows.Err()
+}
+
+func acknowledgeHandoffs(ctx context.Context, pool *pgxpool.Pool, column string, requests []handoffGeneration) error {
+	if column != "screening_pending" && column != "qualification_pending" {
+		return fmt.Errorf("invalid handoff column")
+	}
+	if len(requests) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(requests))
+	generations := make([]int64, 0, len(requests))
+	for _, request := range requests {
+		ids = append(ids, request.artifact)
+		generations = append(generations, request.generation)
+	}
+	_, err := pool.Exec(ctx, `UPDATE parcel_derived_handoff SET `+column+`=false WHERE `+column+` AND (artifact_id,request_generation) IN (SELECT * FROM unnest($1::text[],$2::bigint[]))`, ids, generations)
+	return err
 }
 
 func runManual(ctx context.Context, mode string, runner requiredRunner, executor unionExecutor, definitions []jobs.Definition, refresh func(context.Context) error) error {

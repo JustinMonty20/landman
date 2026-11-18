@@ -32,6 +32,15 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 			return err
 		}
 		rawKey := strconv.FormatInt(id.ObjectID, 10)
+		if len(id.PID) > maxIndexedPIDBytes {
+			if !replay {
+				if err := persistInvalid(ctx, quarantine, record, &union.InvalidParcelRecord{Identity: id, Reason: unsupportedPIDReason}, fmt.Sprintf("%s#%d", receiptRef, index)); err != nil {
+					return err
+				}
+			}
+			result.Quarantined++
+			continue
+		}
 		if err := writer.ObserveIdentity(ctx, rawKey, id.PID); err != nil {
 			return err
 		}
@@ -75,6 +84,11 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 
 const JobID = "union.gis.parcels"
 
+// A larger natural key cannot be indexed safely by PostgreSQL B-trees.
+// Preserve it in the receipt and quarantine identity, never in serving indexes.
+const maxIndexedPIDBytes = 2048
+const unsupportedPIDReason = "parcel identity exceeds indexed key limit"
+
 func persistInvalid(ctx context.Context, quarantine *jobs.QuarantineStore, record connector.RawRecord, invalid *union.InvalidParcelRecord, reference string) error {
 	payload, err := json.Marshal(map[string]interface{}{"attributes": map[string]interface{}{"PID": invalid.Identity.PID, "OBJECTID": invalid.Identity.ObjectID}})
 	if err != nil {
@@ -91,7 +105,17 @@ func persistInvalid(ctx context.Context, quarantine *jobs.QuarantineStore, recor
 
 func quarantineCaptureBatch(ctx context.Context, quarantine *jobs.QuarantineStore, records []connector.RawRecord, reference string) error {
 	for i, record := range records {
-		_, _, err := union.NormalizeParcel(record)
+		id, err := union.ParcelRecordIdentity(record)
+		if err != nil {
+			return err
+		}
+		if len(id.PID) > maxIndexedPIDBytes {
+			if err := persistInvalid(ctx, quarantine, record, &union.InvalidParcelRecord{Identity: id, Reason: unsupportedPIDReason}, fmt.Sprintf("%s#%d", reference, i)); err != nil {
+				return err
+			}
+			continue
+		}
+		_, _, err = union.NormalizeParcel(record)
 		if err == nil {
 			continue
 		}

@@ -160,7 +160,7 @@ func TestExactAcceptedNumericStringAndWideSourceArea(t *testing.T) {
 	}
 }
 
-func TestFailedRegisteredRepairReplayResolvesPendingIdentity(t *testing.T) {
+func TestFailedRegisteredRepairReplayKeepsUnverifiableIdentityPending(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	f := &parcelHTTPFixture{features: []map[string]interface{}{feature(1, "A", "bad", false, 0)}}
 	source := f.source(t, 1)
@@ -185,8 +185,8 @@ func TestFailedRegisteredRepairReplayResolvesPendingIdentity(t *testing.T) {
 	if out, result, err := replayFollowup(t, ctx, dsn, runner, pool, id); err != nil || out != jobs.OutcomeSuccess || result.Processed != 1 {
 		t.Fatalf("offline repair retry failed: %s %+v %v", out, result, err)
 	}
-	if countRows(t, ctx, pool, "quarantined_records WHERE reprocessed_at IS NULL") != 0 {
-		t.Fatal("offline repair retry did not resolve selected source identity")
+	if countRows(t, ctx, pool, "quarantined_records WHERE reprocessed_at IS NULL") != 1 {
+		t.Fatal("offline retry cannot verify original repair selection; evidence must stay pending")
 	}
 }
 
@@ -219,7 +219,7 @@ func TestFailedLaterRepairPageRetainsNewInvalidSibling(t *testing.T) {
 	}
 }
 
-func TestLargeInvalidIdentityAndExponentRemainRepairable(t *testing.T) {
+func TestLargeUnsupportedIdentityAndExponentKeepNeighborAvailable(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	pid := strings.Repeat("p", 9000)
 	bad := feature(1, pid, "bad", false, 0)
@@ -240,8 +240,8 @@ func TestLargeInvalidIdentityAndExponentRemainRepairable(t *testing.T) {
 	}
 	f.features[0] = feature(1, pid, "repaired", true, 0)
 	out, result, err = runParcelFixture(ctx, pool, dsn, source, true, 100)
-	if err != nil || out != jobs.OutcomeSuccess || result.Processed != 1 || countRows(t, ctx, pool, "parcels") != 2 {
-		t.Fatalf("stored PID could not be repaired: %s %+v %v", out, result, err)
+	if err != nil || out != jobs.OutcomeSuccessWithQuarantine || result.Processed != 0 || countRows(t, ctx, pool, "parcels") != 1 || countRows(t, ctx, pool, "quarantined_records WHERE reprocessed_at IS NULL") != 1 {
+		t.Fatalf("unsupported identity was served or lost: %s %+v %v", out, result, err)
 	}
 }
 

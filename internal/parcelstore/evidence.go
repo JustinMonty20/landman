@@ -190,7 +190,9 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 			if err = keyRows.Err(); err != nil {
 				return 0, err
 			}
-			if !correction || (publicationKind == "offline_retry" && n > 0) {
+			// A replay has no retained selection tokens or original scan cutoff.
+			// Leave unverifiable quarantine occurrences pending for a live repair.
+			if !correction {
 				if err = quarantine.ResolveObserved(ctx, w.tx, jobID, keys, selected); err != nil {
 					return 0, err
 				}
@@ -198,7 +200,7 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 		}
 	}
 	if correction && processed > 0 {
-		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_derived_handoff(artifact_id) VALUES ($1) ON CONFLICT (artifact_id) DO UPDATE SET requested_at=now(),screening_pending=true,qualification_pending=true`, manifest.ID); err != nil {
+		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_derived_handoff(artifact_id) VALUES ($1) ON CONFLICT (artifact_id) DO UPDATE SET requested_at=clock_timestamp(),request_generation=parcel_derived_handoff.request_generation+1,screening_pending=true,qualification_pending=true`, manifest.ID); err != nil {
 			return 0, err
 		}
 	}
@@ -352,48 +354,80 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	return count, nil
 }
 
-const businessProjectionSQL = `SELECT (to_jsonb(p)-'updated_at'-'shape'||jsonb_build_object(
-	'shape',encode(ST_AsEWKB(ST_Normalize(p.shape)),'hex'),
-	'sales',coalesce((SELECT jsonb_agg(to_jsonb(s)-'updated_at' ORDER BY s.sequence)
-	FROM parcel_sales s WHERE s.parcel_id=p.id),'[]'::jsonb)))::text
-	FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=$1`
-
-// A savepoint lets PostgreSQL compare the entire stored projection, including
-// sales and exact NUMERIC values, when two hash versions are incomparable.
+// Compare the complete mapped serving projection without invoking business DML.
+// PostgreSQL casts JSON decimal tokens to NUMERIC at the same column precision
+// as the writer. Generated IDs and content timestamps are excluded.
 func (w *ShapeWriter) matchesStoredProjection(ctx context.Context, pid string, candidate models.GISParcel, shape []byte, vacant bool) (bool, error) {
-	var before, after string
-	if err := w.tx.QueryRow(ctx, businessProjectionSQL, pid).Scan(&before); err != nil {
-		if err == pgx.ErrNoRows {
-			return false, nil
-		}
+	p := candidate
+	if err := parcelevidence.NormalizeStorageNumbers(&p); err != nil {
 		return false, err
 	}
-	decoded, err := ewkb.Unmarshal(shape)
+	num := func(key string, fallback *float64) any { return historyNumber(p.StorageNumbers[key], fallback) }
+	extras := p.SourceExtras
+	if len(extras) == 0 {
+		extras = json.RawMessage(`{}`)
+	}
+	fields := map[string]any{
+		"county_id": p.Identity.CountyID, "county_code": p.Identity.CountyCode,
+		"source_name": p.Identity.SourceName, "source_parcel_id": p.Identity.SourceParcelID,
+		"parcel_number": p.Identity.ParcelNumber, "account_number": p.Identity.AccountNumber, "parcel_year": p.Identity.ParcelYear,
+		"current_name_1": p.Owner.CurrentName1, "current_name_2": p.Owner.CurrentName2,
+		"tax_name_1": p.Owner.TaxName1, "tax_name_2": p.Owner.TaxName2,
+		"tax_owner_id_1": p.Owner.TaxOwnerID1, "tax_owner_id_2": p.Owner.TaxOwnerID2,
+		"mailing_line_1": p.Mailing.Line1, "mailing_line_2": p.Mailing.Line2, "mailing_city": p.Mailing.City,
+		"mailing_state": p.Mailing.State, "mailing_postal_code": p.Mailing.PostalCode,
+		"situs_line_1": p.Situs.Line1, "situs_line_2": p.Situs.Line2, "situs_city": p.Situs.City,
+		"situs_state": p.Situs.State, "situs_postal_code": p.Situs.PostalCode,
+		"legal_description": p.Legal.Description, "plat_book": p.Legal.PlatBook, "plat_page": p.Legal.PlatPage,
+		"deed_book": p.Legal.DeedBook, "deed_page": p.Legal.DeedPage,
+		"land_code": p.Land.LandCode, "land_type": p.Land.LandType, "property_use": p.Land.PropertyUse,
+		"subdivision":  p.Land.Subdivision,
+		"mapped_acres": num("mapped_acres", p.Land.MappedAcres), "gross_acres": num("gross_acres", p.Land.GrossAcres),
+		"valued_acres": num("VAL_AC", p.Land.ValuedAcres), "valued_sqft": num("VAL_SQFT", p.Land.ValuedSqFt),
+		"year_built": p.Building.YearBuilt, "sqft": num("SQFT", p.Building.SqFt),
+		"basement": p.Building.Basement, "quality_code": p.Building.QualityCode,
+		"structure": p.Building.Structure, "structure_style": p.Building.StructureStyle,
+		"valuation_land": num("FMV_LAND", p.Valuation.Land), "valuation_improvement": num("FMV_IMPRV", p.Valuation.Improvement),
+		"valuation_total": num("FMV_TOTAL", p.Valuation.Total), "valuation_assessed": num("TOTVAL", p.Valuation.Assessed),
+		"srid": defaultStorageSRID, "source_srid": p.Geometry.SourceSRID,
+		"source_area": num("SHAPE.STArea()", p.Geometry.SourceArea), "source_length": num("SHAPE.STLength()", p.Geometry.SourceLength),
+		"source_extras": extras, "likely_vacant": vacant,
+	}
+	sales := make([]map[string]any, 0, len(p.Sales))
+	for _, sale := range p.Sales {
+		var day any
+		if sale.SaleDate != nil {
+			day = sale.SaleDate.UTC().Format("2006-01-02")
+		}
+		sales = append(sales, map[string]any{
+			"sequence": sale.Sequence, "sale_date": day, "og_sale_date": sale.OGSaleDate,
+			"amount":    num(fmt.Sprintf("s%d_SALESAMT", sale.Sequence), sale.Amount),
+			"deed_book": sale.DeedBook, "deed_page": sale.DeedPage, "deed_type": sale.DeedType,
+			"deed_quality": sale.DeedQuality, "grantor": sale.Grantor, "grantor_2": sale.Grantor2,
+		})
+	}
+	parcelJSON, err := json.Marshal(fields)
 	if err != nil {
 		return false, err
 	}
-	candidate.Geometry.Shape = &decoded
-	if _, err := w.tx.Exec(ctx, `SAVEPOINT parcel_projection_comparison`); err != nil {
+	salesJSON, err := json.Marshal(sales)
+	if err != nil {
 		return false, err
 	}
-	partsSaved := w.partsSaved
-	if err := w.SavePart(ctx, candidate, vacant); err != nil {
-		return false, err
+	var same bool
+	err = w.tx.QueryRow(ctx, `SELECT
+		(to_jsonb(p)-'id'-'created_at'-'updated_at'-'shape') =
+		(to_jsonb(jsonb_populate_record(NULL::parcels,$2::jsonb))-'id'-'created_at'-'updated_at'-'shape')
+		AND ST_Equals(p.shape,ST_GeomFromEWKB($4))
+		AND coalesce((SELECT jsonb_agg(to_jsonb(s)-'id'-'parcel_id'-'created_at'-'updated_at' ORDER BY s.sequence)
+			FROM parcel_sales s WHERE s.parcel_id=p.id),'[]'::jsonb) =
+		coalesce((SELECT jsonb_agg(to_jsonb(s)-'id'-'parcel_id'-'created_at'-'updated_at' ORDER BY s.sequence)
+			FROM jsonb_populate_recordset(NULL::parcel_sales,$3::jsonb) s),'[]'::jsonb)
+		FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=$1`, pid, parcelJSON, salesJSON, shape).Scan(&same)
+	if err == pgx.ErrNoRows {
+		return false, nil
 	}
-	if _, err := w.tx.Exec(ctx, `UPDATE parcels SET shape=ST_GeomFromEWKB($2),likely_vacant=$3 WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, pid, shape, vacant); err != nil {
-		return false, err
-	}
-	if err := w.tx.QueryRow(ctx, businessProjectionSQL, pid).Scan(&after); err != nil {
-		return false, err
-	}
-	if _, err := w.tx.Exec(ctx, `ROLLBACK TO SAVEPOINT parcel_projection_comparison`); err != nil {
-		return false, err
-	}
-	if _, err := w.tx.Exec(ctx, `RELEASE SAVEPOINT parcel_projection_comparison`); err != nil {
-		return false, err
-	}
-	w.partsSaved = partsSaved
-	return before == after, nil
+	return same, err
 }
 
 func (w *ShapeWriter) updateCurrentEvidence(ctx context.Context, pid, observationID, sourceHash, normalizedHash, geometryHash string, features []json.RawMessage) error {
