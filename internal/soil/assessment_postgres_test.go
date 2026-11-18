@@ -855,6 +855,19 @@ VALUES ('115330','Appling sandy loam') ON CONFLICT DO NOTHING RETURNING map_unit
 	}
 	if err == nil {
 		f.ownedMapUnitKey = inserted
+	} else {
+		const fixtureName = "Appling sandy loam (survey date fixture)"
+		tag, err := f.db.Exec(f.ctx, `UPDATE soil_map_units SET map_unit_name=$1 WHERE map_unit_key='115330' AND map_unit_name IS NULL`, fixtureName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tag.RowsAffected() != 0 {
+			t.Cleanup(func() {
+				if _, err := f.db.Exec(f.ctx, `UPDATE soil_map_units SET map_unit_name=NULL WHERE map_unit_key='115330' AND map_unit_name=$1`, fixtureName); err != nil {
+					t.Errorf("restore map unit name: %v", err)
+				}
+			})
+		}
 	}
 	parcelID := f.parcel("full-writer-date", f.box(0, 0, 100, 100), true)
 	polygon := f.polygon("full-writer", "115341", 0, 100)
