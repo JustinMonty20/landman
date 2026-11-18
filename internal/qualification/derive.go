@@ -32,7 +32,7 @@ func (s Store) reconcileZoning(ctx context.Context, tx pgx.Tx, gen, method strin
  FROM qualification_zone_sources s JOIN qualification_targets p ON p.id=s.parcel_id GROUP BY s.parcel_id,p.analysis_geom`, nil},
 		{`CREATE TEMP TABLE qualification_ambiguity ON COMMIT DROP AS
  SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom),0.000001) geom FROM (
- SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_Intersection(a.geom,b.geom,0.000001),0.000001),3) geom
+ SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_CollectionExtract(ST_Intersection(a.geom,b.geom,0.000001),3),0.000001),3) geom
  FROM qualification_zone_sources a JOIN qualification_zone_sources b ON a.parcel_id=b.parcel_id
  JOIN qualification_targets p ON p.id=a.parcel_id AND
  (a.layer_id,a.source_id)<(b.layer_id,b.source_id)
@@ -61,7 +61,7 @@ SELECT s.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_Unary
  FROM qualification_jurisdiction_sources s JOIN qualification_targets p ON p.id=s.parcel_id GROUP BY s.parcel_id,p.analysis_geom`, nil},
 		{`CREATE TEMP TABLE qualification_jurisdiction_conflicts ON COMMIT DROP AS
 SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom),0.000001) geom FROM (
-SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_Intersection(a.geom,b.geom,0.000001),0.000001),3) geom
+SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_CollectionExtract(ST_Intersection(a.geom,b.geom,0.000001),3),0.000001),3) geom
 FROM qualification_jurisdiction_sources a JOIN qualification_jurisdiction_sources b ON a.parcel_id=b.parcel_id
 JOIN qualification_targets p ON p.id=a.parcel_id AND
 (a.layer_id,a.source_id)<(b.layer_id,b.source_id) AND (a.layer_id,a.name) IS DISTINCT FROM (b.layer_id,b.name)

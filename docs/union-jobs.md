@@ -2,7 +2,7 @@
 
 ## Manual commands
 
-Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000020_union_qualification.sql` for zoning and roads. The tax-only command needs migration `000018_tax_file_imports.sql`.
+Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000021_qualification_conflict_topology.sql` for zoning and roads. The tax-only command needs migration `000018_tax_file_imports.sql`.
 
 The parcel and soil commands contact the live Union GIS or USDA services. The tax job reads operator files; it does not download county files. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
