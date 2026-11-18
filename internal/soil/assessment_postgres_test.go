@@ -18,21 +18,23 @@ import (
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/JustinMonty20/landman/internal/parcelstore"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/ewkb"
 )
 
 type assessmentFixture struct {
-	t      *testing.T
-	ctx    context.Context
-	db     *pgxpool.Pool
-	source string
-	setID  string
-	server *httptest.Server
-	mode   atomic.Int32
-	calls  atomic.Int32
-	units  []MapUnit
+	t               *testing.T
+	ctx             context.Context
+	db              *pgxpool.Pool
+	source          string
+	setID           string
+	server          *httptest.Server
+	mode            atomic.Int32
+	calls           atomic.Int32
+	units           []MapUnit
+	ownedMapUnitKey string
 }
 
 func newAssessmentFixture(t *testing.T) *assessmentFixture {
@@ -136,6 +138,16 @@ func newAssessmentFixture(t *testing.T) *assessmentFixture {
 		} {
 			if _, err := db.Exec(context.Background(), sql, f.source); err != nil {
 				t.Errorf("cleanup: %v", err)
+			}
+		}
+		if f.ownedMapUnitKey != "" {
+			for _, query := range []string{
+				`DELETE FROM soil_interpretation_keys WHERE map_unit_key=$1`,
+				`DELETE FROM soil_map_units WHERE map_unit_key=$1`,
+			} {
+				if _, err := db.Exec(context.Background(), query, f.ownedMapUnitKey); err != nil {
+					t.Errorf("cleanup map unit: %v", err)
+				}
 			}
 		}
 		db.Close()
@@ -835,6 +847,15 @@ func TestPostgresMetadataPreservesLegacySurveyDate(t *testing.T) {
 
 func TestPostgresFullSoilWriterRetainsSurveyDateOnlyForSameMapUnit(t *testing.T) {
 	f := newAssessmentFixture(t)
+	var inserted string
+	err := f.db.QueryRow(f.ctx, `INSERT INTO soil_map_units(map_unit_key,map_unit_name)
+VALUES ('115330','Appling sandy loam') ON CONFLICT DO NOTHING RETURNING map_unit_key`).Scan(&inserted)
+	if err != nil && err != pgx.ErrNoRows {
+		t.Fatal(err)
+	}
+	if err == nil {
+		f.ownedMapUnitKey = inserted
+	}
 	parcelID := f.parcel("full-writer-date", f.box(0, 0, 100, 100), true)
 	polygon := f.polygon("full-writer", "115341", 0, 100)
 	f.store([]Polygon{polygon})
@@ -848,10 +869,10 @@ func TestPostgresFullSoilWriterRetainsSurveyDateOnlyForSameMapUnit(t *testing.T)
 	if err := f.db.QueryRow(f.ctx, `SELECT survey_saved_on FROM soil_polygons WHERE source_name=$1 AND object_id='full-writer'`, f.source).Scan(&date); err != nil || date == nil || !date.Equal(legacyDate) {
 		t.Fatalf("same-key date = %v: %v", date, err)
 	}
-	// A named target unit does not need a USDA name request and supplies no new date.
+	// The target is already named, so the full writer receives no new USDA date.
 	var name *string
 	if err := f.db.QueryRow(f.ctx, `SELECT map_unit_name FROM soil_map_units WHERE map_unit_key='115330'`).Scan(&name); err != nil || name == nil {
-		t.Fatalf("target map unit must already have its name: %v %v", name, err)
+		t.Fatalf("target map unit must have a name: %v %v", name, err)
 	}
 	polygon.MapUnitKey = "115330"
 	f.store([]Polygon{polygon})

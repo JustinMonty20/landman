@@ -1,0 +1,1 @@
+- [Unrelated bug or code smell] Ignored `artifacts/verify/shared-ingestion/` Go programs contain duplicate `main` and `must` declarations, so `staticcheck ./...` fails before analyzing application packages in this checkout. CI starts from a clean checkout; checked `./cmd/... ./internal/...` instead and left those unrelated artifacts untouched.
