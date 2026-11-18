@@ -76,20 +76,14 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 const JobID = "union.gis.parcels"
 
 func persistInvalid(ctx context.Context, quarantine *jobs.QuarantineStore, record connector.RawRecord, invalid *union.InvalidParcelRecord, reference string) error {
-	payload, err := json.Marshal(record.RawData)
+	payload, err := json.Marshal(map[string]interface{}{"attributes": map[string]interface{}{"PID": invalid.Identity.PID, "OBJECTID": invalid.Identity.ObjectID}})
 	if err != nil {
 		return err
 	}
 	if len(payload) > 8*1024 {
-		payload, err = json.Marshal(map[string]interface{}{"attributes": map[string]interface{}{"PID": invalid.Identity.PID, "OBJECTID": invalid.Identity.ObjectID}})
-		if err != nil {
-			return err
-		}
-		if len(payload) > 8*1024 {
-			payload = nil
-		}
+		payload = nil
 	}
-	if err := quarantine.Quarantine(ctx, jobs.QuarantineRecord{JobID: JobID, CountyID: "union", SourceName: "union_county_gis", RawRecordKey: strconv.FormatInt(invalid.Identity.ObjectID, 10), Payload: payload, PayloadReference: reference, Reason: invalid.Reason}); err != nil {
+	if err := quarantine.Quarantine(ctx, jobs.QuarantineRecord{JobID: JobID, CountyID: "union", SourceName: "union_county_gis", RawRecordKey: strconv.FormatInt(invalid.Identity.ObjectID, 10), SourceParcelID: invalid.Identity.PID, Payload: payload, PayloadReference: reference, Reason: invalid.Reason}); err != nil {
 		return fmt.Errorf("persist parcel quarantine: %w", err)
 	}
 	return nil
@@ -189,7 +183,7 @@ func (j Job) publish(ctx context.Context, snapshot *parcelevidence.Snapshot, sel
 			return result, err
 		}
 		count += len(records)
-		if err = stageParcelEvidenceRecords(ctx, writer, j.Quarantine, records, &result, snapshot.Manifest.ID+"/"+receipt.Path+"@"+receipt.SHA256, correction || snapshot.Manifest.Kind == "full_scan"); err != nil {
+		if err = stageParcelEvidenceRecords(ctx, writer, j.Quarantine, records, &result, snapshot.Manifest.ID+"/"+receipt.Path+"@"+receipt.SHA256, true); err != nil {
 			return result, err
 		}
 	}
@@ -197,9 +191,6 @@ func (j Job) publish(ctx context.Context, snapshot *parcelevidence.Snapshot, sel
 		return result, fmt.Errorf("snapshot feature count %d differs from manifest %d", count, snapshot.Manifest.Count)
 	}
 	result.Processed, err = writer.PublishEvidence(ctx, j.Quarantine, JobID, selected, snapshot.Manifest, correction)
-	if correction && errors.Is(err, parcelstore.ErrHistoricalReplay) {
-		return jobs.Result{Processed: count, Quarantined: result.Quarantined}, nil
-	}
 	return result, err
 }
 
@@ -237,7 +228,10 @@ func (j Job) Reprocess(ctx context.Context, limit int) (jobs.Result, error) {
 		if err != nil {
 			return result, fmt.Errorf("reprocess: invalid stored OBJECTID")
 		}
-		records, err := j.Source.CaptureParcelParts(fetchCtx, oid, pid, budget, snapshot.Save)
+		records, err := j.Source.CaptureParcelParts(fetchCtx, oid, pid, budget, snapshot.Save, func(page []connector.RawRecord) error {
+			receipt := snapshot.Manifest.Receipts[len(snapshot.Manifest.Receipts)-1]
+			return quarantineCaptureBatch(fetchCtx, j.Quarantine, page, snapshot.Manifest.ID+"/"+receipt.Path+"@"+receipt.SHA256)
+		})
 		if err != nil {
 			return result, err
 		}

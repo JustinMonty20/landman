@@ -12,7 +12,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/models"
 )
 
-const NormalizedHashVersion = "parcel-storage-v2"
+const NormalizedHashVersion = "parcel-storage-v3"
 const GeometryHashVersion = "postgis-normalized-ewkb-v1"
 
 func checksum(prefix string, data []byte) string {
@@ -59,9 +59,43 @@ func roundDecimal(value float64, scale int) (float64, error) {
 }
 
 func roundDecimalText(text string, scale int) (float64, error) {
-	r, ok := new(big.Rat).SetString(text)
+	exact, err := exactDecimalText(text, scale)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseFloat(exact, 64)
+}
+
+func exactDecimalText(text string, scale int) (string, error) {
+	mantissa, exponentText, scientific := strings.Cut(strings.ToLower(text), "e")
+	if !scientific {
+		mantissa = text
+	}
+	r, ok := new(big.Rat).SetString(mantissa)
 	if !ok {
-		return 0, fmt.Errorf("invalid numeric %s", text)
+		return "", fmt.Errorf("invalid numeric %s", text)
+	}
+	if scientific {
+		exponent, err := strconv.Atoi(exponentText)
+		if err != nil {
+			return "", fmt.Errorf("invalid numeric %s", text)
+		}
+		if exponent < -(len(mantissa) + scale + 1) {
+			return new(big.Rat).FloatString(scale), nil
+		}
+		if exponent > 10000 || exponent < -10000 {
+			return "", fmt.Errorf("numeric exponent exceeds supported precision")
+		}
+		magnitude := exponent
+		if magnitude < 0 {
+			magnitude = -magnitude
+		}
+		power := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(magnitude)), nil))
+		if exponent >= 0 {
+			r.Mul(r, power)
+		} else {
+			r.Quo(r, power)
+		}
 	}
 	multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
 	r.Mul(r, new(big.Rat).SetInt(multiplier))
@@ -69,8 +103,7 @@ func roundDecimalText(text string, scale int) (float64, error) {
 	if new(big.Int).Mul(new(big.Int).Abs(rem), big.NewInt(2)).Cmp(r.Denom()) >= 0 {
 		quotient.Add(quotient, big.NewInt(int64(r.Sign())))
 	}
-	text = new(big.Rat).SetFrac(quotient, multiplier).FloatString(scale)
-	return strconv.ParseFloat(text, 64)
+	return new(big.Rat).SetFrac(quotient, multiplier).FloatString(scale), nil
 }
 
 // QuantizeSourceNumbers rounds source decimals before binary float conversion.
@@ -109,14 +142,24 @@ func QuantizeSourceNumbers(attributes map[string]interface{}, p *models.GISParce
 			text = string(v)
 		case float64:
 			text = strconv.FormatFloat(v, 'g', -1, 64)
+		case string:
+			text = strings.TrimSpace(v)
 		default:
 			continue
 		}
-		value, err := roundDecimalText(text, field.scale)
+		exact, err := exactDecimalText(text, field.scale)
+		if err != nil {
+			return err
+		}
+		value, err := strconv.ParseFloat(exact, 64)
 		if err != nil {
 			return err
 		}
 		*field.value = &value
+		if p.StorageNumbers == nil {
+			p.StorageNumbers = make(map[string]string)
+		}
+		p.StorageNumbers[field.key] = exact
 	}
 	return nil
 }

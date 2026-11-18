@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -45,12 +47,12 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 	if _, err := base.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history"} {
+	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history", "parcel_derived_handoff"} {
 		if _, err := base.Exec(ctx, "CREATE TABLE "+name+"."+table+" (LIKE public."+table+" INCLUDING ALL) WITH (autovacuum_enabled=false)"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, sql := range []string{"ALTER TABLE " + name + ".parcel_sales ADD FOREIGN KEY(parcel_id) REFERENCES " + name + ".parcels(id)", "ALTER TABLE " + name + ".quarantined_records ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_captures ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_observations ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_current ADD FOREIGN KEY(observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(old_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(new_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)"} {
+	for _, sql := range []string{"ALTER TABLE " + name + ".parcel_sales ADD FOREIGN KEY(parcel_id) REFERENCES " + name + ".parcels(id)", "ALTER TABLE " + name + ".quarantined_records ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_captures ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_observations ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_current ADD FOREIGN KEY(observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(old_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(new_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_derived_handoff ADD FOREIGN KEY(artifact_id) REFERENCES " + name + ".parcel_evidence_observations(artifact_id)"} {
 		if _, err := base.Exec(ctx, sql); err != nil {
 			t.Fatal(err)
 		}
@@ -311,7 +313,7 @@ func TestParcelQuarantineSurvivesFailureAndStorageFailureRollsBack(t *testing.T)
 			}
 			want := 1
 			if kind == "http" {
-				want = 0
+				want = 1
 			}
 			if kind == "quarantine" {
 				want = 0
@@ -369,11 +371,20 @@ func TestParcelReprocessCurrentMultipartAndRecurrence(t *testing.T) {
 	}
 	var occurrences int
 	var current bool
-	if err := pool.QueryRow(ctx, `SELECT occurrence_count,payload #>> '{attributes,CURR_NAME1}' = 'recurrence evidence' AND reprocessed_at IS NULL FROM quarantined_records WHERE raw_record_key='1'`).Scan(&occurrences, &current); err != nil {
+	var reference, identity string
+	if err := pool.QueryRow(ctx, `SELECT occurrence_count,reprocessed_at IS NULL,payload_reference,source_parcel_id FROM quarantined_records WHERE raw_record_key='1'`).Scan(&occurrences, &current, &reference, &identity); err != nil {
 		t.Fatal(err)
 	}
-	if occurrences != 2 || !current {
-		t.Fatalf("occurrences=%d current=%v", occurrences, current)
+	path, digestIndex, valid := strings.Cut(reference, "@")
+	if !valid || !strings.HasSuffix(digestIndex, "#0") {
+		t.Fatalf("recurrence reference %q lacks exact feature identity", reference)
+	}
+	body, err := os.ReadFile(filepath.Join(os.Getenv("PARCEL_EVIDENCE_DIR"), path))
+	if err != nil || !strings.HasPrefix(digestIndex, fmt.Sprintf("%x", sha256.Sum256(body))) || !strings.Contains(string(body), "recurrence evidence") {
+		t.Fatalf("recurrence does not reference verified current bytes: %q %v", reference, err)
+	}
+	if occurrences != 2 || !current || identity != "A" {
+		t.Fatalf("occurrences=%d current=%v identity=%q", occurrences, current, identity)
 	}
 	fixture.features[0] = feature(1, "A", "recovered again", true, 0)
 	if _, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil {

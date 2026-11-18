@@ -3,7 +3,6 @@ package parcelstore
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -16,7 +15,6 @@ import (
 )
 
 var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
-var ErrHistoricalReplay = errors.New("parcel evidence: historical replay validated without publication")
 
 // StageEvidencePart keeps the complete original feature alongside the normalized part.
 func (w *ShapeWriter) StageEvidencePart(ctx context.Context, parcel models.GISParcel, vacant bool, rawKey string, feature json.RawMessage) error {
@@ -56,10 +54,14 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 	}
 	var registered bool
 	var originatingOutcome, originatingAttempt string
-	if err := w.tx.QueryRow(ctx, `SELECT c.artifact_hash=$2 AND c.manifest=$3::jsonb AND c.attempt_kind=$4,
+	registrationErr := w.tx.QueryRow(ctx, `SELECT c.artifact_hash=$2 AND c.manifest=$3::jsonb AND c.attempt_kind=$4,
 		a.outcome,c.attempt_id::text FROM parcel_evidence_captures c JOIN job_attempts a ON a.id=c.attempt_id
-		WHERE c.artifact_id=$1 AND a.job_id=$5`, manifest.ID, manifest.ArtifactHash, manifest, manifest.Kind, jobID).Scan(&registered, &originatingOutcome, &originatingAttempt); err != nil && err != pgx.ErrNoRows {
-		return 0, err
+		WHERE c.artifact_id=$1 AND a.job_id=$5`, manifest.ID, manifest.ArtifactHash, manifest, manifest.Kind, jobID).Scan(&registered, &originatingOutcome, &originatingAttempt)
+	if registrationErr != nil && registrationErr != pgx.ErrNoRows {
+		return 0, registrationErr
+	}
+	if registrationErr == nil && !registered {
+		return 0, fmt.Errorf("snapshot differs registered capture")
 	}
 	if correction {
 		var trusted []byte
@@ -93,15 +95,15 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 				if !registered || originatingOutcome != "failed" {
 					return 0, fmt.Errorf("populated replay requires its own failed registered source attempt")
 				}
-				var latest *time.Time
-				if e := w.tx.QueryRow(ctx, `SELECT max(observed_at) FROM parcel_evidence_observations WHERE county_id='union' AND source_name='union_county_gis'`).Scan(&latest); e != nil {
-					return 0, e
-				}
-				if latest != nil && !manifest.CreatedAt.After(*latest) {
-					return 0, ErrHistoricalReplay
-				}
 				publicationKind = "offline_retry"
 			} else {
+				var hasEvidence bool
+				if e := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_observations WHERE county_id='union' AND source_name='union_county_gis')`).Scan(&hasEvidence); e != nil {
+					return 0, e
+				}
+				if hasEvidence && (!registered || originatingOutcome != "failed") {
+					return 0, fmt.Errorf("rebuild requires empty source evidence")
+				}
 				publicationKind = "offline_rebuild"
 				if registered && originatingOutcome == "failed" {
 					publicationKind = "offline_retry"
@@ -113,6 +115,15 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 			return 0, fmt.Errorf("source publication requires its registered running capture")
 		}
 		publicationKind = "observed"
+	}
+	if observationID == "" && correction && publicationKind == "offline_retry" {
+		var eligible bool
+		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM (SELECT DISTINCT p.source_parcel_id FROM parcel_import_parts p WHERE NOT EXISTS (SELECT 1 FROM parcel_import_rejected r WHERE r.source_parcel_id=p.source_parcel_id)) p LEFT JOIN parcel_evidence_current c ON c.county_id='union' AND c.source_name='union_county_gis' AND c.source_parcel_id=p.source_parcel_id LEFT JOIN parcel_evidence_observations o ON o.id=c.observation_id WHERE o.observed_at IS NULL OR o.observed_at < $1)`, manifest.CreatedAt).Scan(&eligible); err != nil {
+			return 0, err
+		}
+		if !eligible {
+			return 0, nil
+		}
 	}
 	if observationID == "" {
 		err := w.tx.QueryRow(ctx, `INSERT INTO parcel_evidence_observations(artifact_id,observed_at,attempt_kind,manifest,publication_kind,attempt_id) VALUES ($1,$2,$3,$4,$5,$6::uuid) RETURNING id::text`, manifest.ID, manifest.CreatedAt, manifest.Kind, manifest, publicationKind, attemptID).Scan(&observationID)
@@ -179,11 +190,16 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 			if err = keyRows.Err(); err != nil {
 				return 0, err
 			}
-			if !correction {
+			if !correction || (publicationKind == "offline_retry" && n > 0) {
 				if err = quarantine.ResolveObserved(ctx, w.tx, jobID, keys, selected); err != nil {
 					return 0, err
 				}
 			}
+		}
+	}
+	if correction && processed > 0 {
+		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_derived_handoff(artifact_id) VALUES ($1) ON CONFLICT (artifact_id) DO UPDATE SET requested_at=now(),screening_pending=true,qualification_pending=true`, manifest.ID); err != nil {
+			return 0, err
 		}
 	}
 	if err := w.tx.Commit(ctx); err != nil {
@@ -281,8 +297,15 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 			return 0, fmt.Errorf("source observation is not newer for %s", pid)
 		}
 	}
-	if oldHash != nil && *oldHash == normalizedHash && oldHashVersion != nil && *oldHashVersion == parcelevidence.NormalizedHashVersion && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion {
-		if !correction || publicationKind == "offline_retry" {
+	unchanged := oldHash != nil && *oldHash == normalizedHash && oldHashVersion != nil && *oldHashVersion == parcelevidence.NormalizedHashVersion && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion
+	if !unchanged && oldHash != nil && oldHashVersion != nil && *oldHashVersion != parcelevidence.NormalizedHashVersion && oldGeometry != nil && *oldGeometry == geometryHash && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion {
+		unchanged, err = w.matchesStoredProjection(ctx, pid, last, shape, vacant)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if unchanged {
+		if !correction || publicationKind == "offline_retry" || *oldHashVersion != parcelevidence.NormalizedHashVersion {
 			if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 				return 0, err
 			}
@@ -299,7 +322,7 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	if err = parcelevidence.NormalizeStorageNumbers(&projection); err != nil {
 		return 0, err
 	}
-	nextFields, err := json.Marshal(map[string]interface{}{"current_name_1": projection.Owner.CurrentName1, "current_name_2": projection.Owner.CurrentName2, "tax_name_1": projection.Owner.TaxName1, "tax_name_2": projection.Owner.TaxName2, "tax_owner_id_1": projection.Owner.TaxOwnerID1, "tax_owner_id_2": projection.Owner.TaxOwnerID2, "mapped_acres": projection.Land.MappedAcres, "gross_acres": projection.Land.GrossAcres, "valued_acres": projection.Land.ValuedAcres, "valued_sqft": projection.Land.ValuedSqFt, "land_code": projection.Land.LandCode, "land_type": projection.Land.LandType, "property_use": projection.Land.PropertyUse, "subdivision": projection.Land.Subdivision, "valuation_land": projection.Valuation.Land, "valuation_improvement": projection.Valuation.Improvement, "valuation_total": projection.Valuation.Total, "valuation_assessed": projection.Valuation.Assessed})
+	nextFields, err := json.Marshal(map[string]interface{}{"current_name_1": projection.Owner.CurrentName1, "current_name_2": projection.Owner.CurrentName2, "tax_name_1": projection.Owner.TaxName1, "tax_name_2": projection.Owner.TaxName2, "tax_owner_id_1": projection.Owner.TaxOwnerID1, "tax_owner_id_2": projection.Owner.TaxOwnerID2, "mapped_acres": historyNumber(projection.StorageNumbers["mapped_acres"], projection.Land.MappedAcres), "gross_acres": historyNumber(projection.StorageNumbers["gross_acres"], projection.Land.GrossAcres), "valued_acres": historyNumber(projection.StorageNumbers["VAL_AC"], projection.Land.ValuedAcres), "valued_sqft": historyNumber(projection.StorageNumbers["VAL_SQFT"], projection.Land.ValuedSqFt), "land_code": projection.Land.LandCode, "land_type": projection.Land.LandType, "property_use": projection.Land.PropertyUse, "subdivision": projection.Land.Subdivision, "valuation_land": historyNumber(projection.StorageNumbers["FMV_LAND"], projection.Valuation.Land), "valuation_improvement": historyNumber(projection.StorageNumbers["FMV_IMPRV"], projection.Valuation.Improvement), "valuation_total": historyNumber(projection.StorageNumbers["FMV_TOTAL"], projection.Valuation.Total), "valuation_assessed": historyNumber(projection.StorageNumbers["TOTVAL"], projection.Valuation.Assessed)})
 	if err != nil {
 		return 0, err
 	}
@@ -327,6 +350,50 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 		return 0, err
 	}
 	return count, nil
+}
+
+const businessProjectionSQL = `SELECT (to_jsonb(p)-'updated_at'-'shape'||jsonb_build_object(
+	'shape',encode(ST_AsEWKB(ST_Normalize(p.shape)),'hex'),
+	'sales',coalesce((SELECT jsonb_agg(to_jsonb(s)-'updated_at' ORDER BY s.sequence)
+	FROM parcel_sales s WHERE s.parcel_id=p.id),'[]'::jsonb)))::text
+	FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=$1`
+
+// A savepoint lets PostgreSQL compare the entire stored projection, including
+// sales and exact NUMERIC values, when two hash versions are incomparable.
+func (w *ShapeWriter) matchesStoredProjection(ctx context.Context, pid string, candidate models.GISParcel, shape []byte, vacant bool) (bool, error) {
+	var before, after string
+	if err := w.tx.QueryRow(ctx, businessProjectionSQL, pid).Scan(&before); err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	decoded, err := ewkb.Unmarshal(shape)
+	if err != nil {
+		return false, err
+	}
+	candidate.Geometry.Shape = &decoded
+	if _, err := w.tx.Exec(ctx, `SAVEPOINT parcel_projection_comparison`); err != nil {
+		return false, err
+	}
+	partsSaved := w.partsSaved
+	if err := w.SavePart(ctx, candidate, vacant); err != nil {
+		return false, err
+	}
+	if _, err := w.tx.Exec(ctx, `UPDATE parcels SET shape=ST_GeomFromEWKB($2),likely_vacant=$3 WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, pid, shape, vacant); err != nil {
+		return false, err
+	}
+	if err := w.tx.QueryRow(ctx, businessProjectionSQL, pid).Scan(&after); err != nil {
+		return false, err
+	}
+	if _, err := w.tx.Exec(ctx, `ROLLBACK TO SAVEPOINT parcel_projection_comparison`); err != nil {
+		return false, err
+	}
+	if _, err := w.tx.Exec(ctx, `RELEASE SAVEPOINT parcel_projection_comparison`); err != nil {
+		return false, err
+	}
+	w.partsSaved = partsSaved
+	return before == after, nil
 }
 
 func (w *ShapeWriter) updateCurrentEvidence(ctx context.Context, pid, observationID, sourceHash, normalizedHash, geometryHash string, features []json.RawMessage) error {

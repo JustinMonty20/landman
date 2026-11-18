@@ -55,7 +55,11 @@ func SaveSales(ctx context.Context, tx pgx.Tx, identity models.ParcelIdentity, s
 	return saveSalesForParcel(ctx, tx, parcelID, sales)
 }
 
-func saveSalesForParcel(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID, sales []models.ParcelSale) ([]models.SaleID, error) {
+func saveSalesForParcel(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID, sales []models.ParcelSale, exactNumbers ...map[string]string) ([]models.SaleID, error) {
+	var exact map[string]string
+	if len(exactNumbers) != 0 {
+		exact = exactNumbers[0]
+	}
 	ids := make([]models.SaleID, 0, len(sales))
 	for _, sale := range sales {
 		var id models.SaleID
@@ -64,7 +68,7 @@ func saveSalesForParcel(ctx context.Context, tx pgx.Tx, parcelID models.ParcelID
 			sale.Sequence,
 			saleCalendarDate(sale.SaleDate),
 			sale.OGSaleDate,
-			sale.Amount,
+			numericValue(exact[fmt.Sprintf("s%d_SALESAMT", sale.Sequence)], sale.Amount),
 			sale.DeedBook,
 			sale.DeedPage,
 			sale.DeedType,

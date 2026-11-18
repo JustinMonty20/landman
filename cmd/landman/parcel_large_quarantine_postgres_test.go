@@ -27,8 +27,8 @@ func TestParcelLargeInvalidFeatureUsesCompleteFileEvidence(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT artifact_id FROM parcel_evidence_observations`).Scan(&snapshotID); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(reference, snapshotID+"/000001.json#0") || payloadSize >= 64*1024 {
-		t.Fatalf("invalid evidence reference %s payload %d", reference, payloadSize)
+	if payloadSize >= 64*1024 {
+		t.Fatalf("unbounded quarantine payload %d", payloadSize)
 	}
 	dir, err := os.Getenv("PARCEL_EVIDENCE_DIR"), nil
 	if err != nil {
@@ -37,6 +37,10 @@ func TestParcelLargeInvalidFeatureUsesCompleteFileEvidence(t *testing.T) {
 	snapshot, err := parcelevidence.Open(dir, snapshotID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantReference := snapshotID + "/" + snapshot.Manifest.Receipts[1].Path + "@" + snapshot.Manifest.Receipts[1].SHA256 + "#0"
+	if reference != wantReference {
+		t.Fatalf("invalid evidence reference %s; want %s", reference, wantReference)
 	}
 	body, err := snapshot.Read(1)
 	if err != nil || !strings.Contains(string(body), strings.Repeat("x", 70*1024)) {

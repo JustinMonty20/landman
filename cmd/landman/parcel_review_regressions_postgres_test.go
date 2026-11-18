@@ -146,6 +146,10 @@ func TestOfflineEmptyCLI(t *testing.T) {
 	if pending != 0 || qualify != 0 {
 		t.Fatalf("offline replay launched downstream jobs: pending=%d qualification=%d", pending, qualify)
 	}
+	var handoff int
+	if e := pool.QueryRow(ctx, `SELECT count(*) FROM parcel_derived_handoff WHERE screening_pending AND qualification_pending`).Scan(&handoff); e != nil || handoff != 1 {
+		t.Fatalf("offline replay did not retain pending derived request: count=%d err=%v", handoff, e)
+	}
 	var due bool
 	if e := pool.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM soil_screening_heads WHERE county_id='union' AND source_name='union_county_gis')`).Scan(&due); e != nil || !due {
 		t.Fatalf("missing stored enrichment was not left due: %v %v", due, e)

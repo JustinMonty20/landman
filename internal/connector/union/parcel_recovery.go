@@ -42,11 +42,11 @@ func (s *GISSource) FetchParcelParts(ctx context.Context, objectID int64, expect
 }
 
 // CaptureParcelParts retains selected, count, and every complete PID page.
-func (s *GISSource) CaptureParcelParts(ctx context.Context, objectID int64, expectedPID string, budget *ParcelFetchBudget, save func(string, []byte, int) error) ([]connector.RawRecord, error) {
+func (s *GISSource) CaptureParcelParts(ctx context.Context, objectID int64, expectedPID string, budget *ParcelFetchBudget, save func(string, []byte, int) error, onBatch ...connector.BatchHook) ([]connector.RawRecord, error) {
 	if save == nil {
 		return nil, fmt.Errorf("capture requires evidence sink")
 	}
-	return s.fetchParcelParts(ctx, objectID, expectedPID, budget, save)
+	return s.fetchParcelParts(ctx, objectID, expectedPID, budget, save, onBatch...)
 }
 
 func (s *GISSource) captureRepairPage(ctx context.Context, params ArcGISParams, now time.Time, save func(string, []byte, int) error) ([]connector.RawRecord, error) {
@@ -91,7 +91,7 @@ func (s *GISSource) captureRepairCount(ctx context.Context, params ArcGISParams,
 	}
 	return count.Int(), nil
 }
-func (s *GISSource) fetchParcelParts(ctx context.Context, objectID int64, expectedPID string, budget *ParcelFetchBudget, save func(string, []byte, int) error) ([]connector.RawRecord, error) {
+func (s *GISSource) fetchParcelParts(ctx context.Context, objectID int64, expectedPID string, budget *ParcelFetchBudget, save func(string, []byte, int) error, onBatch ...connector.BatchHook) ([]connector.RawRecord, error) {
 	if objectID <= 0 || expectedPID == "" {
 		return nil, fmt.Errorf("union repair: invalid selected identity")
 	}
@@ -158,6 +158,11 @@ func (s *GISSource) fetchParcelParts(ctx context.Context, objectID int64, expect
 			}
 			seen[part.ObjectID] = true
 			previousObjectID = part.ObjectID
+		}
+		if len(onBatch) != 0 && onBatch[0] != nil {
+			if err := onBatch[0](page); err != nil {
+				return nil, err
+			}
 		}
 		records = append(records, page...)
 	}

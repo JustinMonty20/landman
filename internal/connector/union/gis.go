@@ -325,6 +325,8 @@ func DecodeParcelPage(body []byte, fetchedAt time.Time, sourceName string) ([]co
 		declared := crs
 		if ref := gjson.GetBytes(feature, "geometry.spatialReference.wkid"); ref.Exists() {
 			declared = int(ref.Int())
+		} else if ref := gjson.GetBytes(feature, "geometry.spatialReference.latestWkid"); ref.Exists() {
+			declared = int(ref.Int())
 		}
 		data["source_declared_crs"] = declared
 		out = append(out, connector.RawRecord{SourceName: sourceName, ParcelID: pid, FetchedAt: fetchedAt, RawData: data})

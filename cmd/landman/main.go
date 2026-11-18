@@ -250,22 +250,34 @@ func run(ctx context.Context) error {
 		}})
 	}
 	refresh := func(ctx context.Context) error {
+		started := time.Now()
 		return withRefreshLock(ctx, dsn, func(ctx context.Context) error {
-			return runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			err := runDerived(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 				count, err := soil.ScreenStored(ctx, dsn, county.Union, gisSource.Name(), interval)
 				if errors.Is(err, soil.ErrNoStoredSet) {
 					err = fmt.Errorf("%w: %w", jobs.ErrPending, err)
 				}
 				return jobs.Result{Processed: count}, err
 			}})
+			if err != nil {
+				return err
+			}
+			_, err = pool.Exec(ctx, `UPDATE parcel_derived_handoff SET screening_pending=false WHERE requested_at <= $1`, started)
+			return err
 		})
 	}
 	qualificationRefresh := func(ctx context.Context) error {
+		started := time.Now()
 		return withQualificationLock(ctx, dsn, func(ctx context.Context) error {
-			return runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			err := runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 				n, e := qstore.Reconcile(ctx)
 				return jobs.Result{Processed: n}, e
 			}})
+			if err != nil {
+				return err
+			}
+			_, err = pool.Exec(ctx, `UPDATE parcel_derived_handoff SET qualification_pending=false WHERE requested_at <= $1`, started)
+			return err
 		})
 	}
 	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, afterSource: func(ctx context.Context, id string) error {
@@ -308,7 +320,11 @@ func run(ctx context.Context) error {
 	}
 	if mode == "schedule" {
 		definitions = append(definitions, jobs.Definition{ID: qualificationJobID, Schedule: calendar[qualificationJobID], Run: func(ctx context.Context) (jobs.Result, error) {
+			started := time.Now()
 			n, e := qstore.Reconcile(ctx)
+			if e == nil {
+				_, e = pool.Exec(ctx, `UPDATE parcel_derived_handoff SET qualification_pending=false WHERE requested_at <= $1`, started)
+			}
 			return jobs.Result{Processed: n}, e
 		}})
 		scheduler, err := jobs.NewScheduler(executor, definitions)

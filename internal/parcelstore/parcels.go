@@ -69,7 +69,7 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 	if err != nil {
 		return err
 	}
-	if _, err := saveSalesForParcel(ctx, w.tx, parcelID, parcel.Sales); err != nil {
+	if _, err := saveSalesForParcel(ctx, w.tx, parcelID, parcel.Sales, parcel.StorageNumbers); err != nil {
 		return err
 	}
 	seqs := make([]int16, 0, len(parcel.Sales))
@@ -194,25 +194,25 @@ func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel, likelyV
 		parcel.Land.LandType,
 		parcel.Land.PropertyUse,
 		parcel.Land.Subdivision,
-		parcel.Land.MappedAcres,
-		parcel.Land.GrossAcres,
-		parcel.Land.ValuedAcres,
-		parcel.Land.ValuedSqFt,
+		numericValue(parcel.StorageNumbers["mapped_acres"], parcel.Land.MappedAcres),
+		numericValue(parcel.StorageNumbers["gross_acres"], parcel.Land.GrossAcres),
+		numericValue(parcel.StorageNumbers["VAL_AC"], parcel.Land.ValuedAcres),
+		numericValue(parcel.StorageNumbers["VAL_SQFT"], parcel.Land.ValuedSqFt),
 		parcel.Building.YearBuilt,
-		parcel.Building.SqFt,
+		numericValue(parcel.StorageNumbers["SQFT"], parcel.Building.SqFt),
 		parcel.Building.Basement,
 		parcel.Building.QualityCode,
 		parcel.Building.Structure,
 		parcel.Building.StructureStyle,
-		parcel.Valuation.Land,
-		parcel.Valuation.Improvement,
-		parcel.Valuation.Total,
-		parcel.Valuation.Assessed,
+		numericValue(parcel.StorageNumbers["FMV_LAND"], parcel.Valuation.Land),
+		numericValue(parcel.StorageNumbers["FMV_IMPRV"], parcel.Valuation.Improvement),
+		numericValue(parcel.StorageNumbers["FMV_TOTAL"], parcel.Valuation.Total),
+		numericValue(parcel.StorageNumbers["TOTVAL"], parcel.Valuation.Assessed),
 		shape,
 		srid,
 		parcel.Geometry.SourceSRID,
-		parcel.Geometry.SourceArea,
-		parcel.Geometry.SourceLength,
+		numericValue(parcel.StorageNumbers["SHAPE.STArea()"], parcel.Geometry.SourceArea),
+		numericValue(parcel.StorageNumbers["SHAPE.STLength()"], parcel.Geometry.SourceLength),
 		extras,
 		vacant,
 	).Scan(&id)

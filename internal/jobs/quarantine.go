@@ -20,6 +20,7 @@ type QuarantineRecord struct {
 	CountyID         string
 	SourceName       string
 	RawRecordKey     string
+	SourceParcelID   string
 	Payload          []byte
 	PayloadReference string
 	Reason           string
@@ -46,15 +47,16 @@ func (s *QuarantineStore) Quarantine(ctx context.Context, record QuarantineRecor
 		payload = &text
 	}
 	tag, err := s.pool.Exec(ctx, `
-		INSERT INTO quarantined_records (job_id, county_id, source_name, raw_record_key, payload, payload_reference, reason, attempt_id)
-		SELECT $1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7, id
+		INSERT INTO quarantined_records (job_id, county_id, source_name, raw_record_key, payload, payload_reference, reason, attempt_id, source_parcel_id)
+		SELECT $1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7, id, NULLIF($9, '')
 		FROM job_attempts
 		WHERE id = $8::uuid AND job_id = $1 AND outcome = 'running'
 		ON CONFLICT (job_id, raw_record_key, reason) DO UPDATE
 		SET attempt_id = EXCLUDED.attempt_id,
 		    payload = EXCLUDED.payload, payload_reference = EXCLUDED.payload_reference,
+		    source_parcel_id = EXCLUDED.source_parcel_id,
 		    reprocessed_at = NULL, last_seen_at = clock_timestamp(), occurrence_count = quarantined_records.occurrence_count + 1`,
-		record.JobID, record.CountyID, record.SourceName, record.RawRecordKey, payload, record.PayloadReference, record.Reason, attemptID)
+		record.JobID, record.CountyID, record.SourceName, record.RawRecordKey, payload, record.PayloadReference, record.Reason, attemptID, record.SourceParcelID)
 	if err != nil {
 		return err
 	}
@@ -81,7 +83,7 @@ func (s *QuarantineStore) Pending(ctx context.Context, jobID string, limit int) 
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text, raw_record_key,
- COALESCE(NULLIF(payload #>> '{attributes,PID}', ''), raw_record_key), last_seen_at
+ COALESCE(NULLIF(source_parcel_id, ''), NULLIF(payload #>> '{attributes,PID}', ''), raw_record_key), last_seen_at
  FROM quarantined_records WHERE job_id=$1 AND reprocessed_at IS NULL
  ORDER BY last_seen_at, id LIMIT $2`, jobID, limit)
 	if err != nil {
