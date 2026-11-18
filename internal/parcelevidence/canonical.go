@@ -13,7 +13,7 @@ import (
 )
 
 const SourceHashVersion = "json-rational-directed-rings-v2"
-const NormalizerVersion = "union-parcel-v1"
+const NormalizerVersion = "union-parcel-v2"
 
 // SourceHash hashes decoded JSON values, not locally observed retrieval details.
 // Numbers are reduced as exact decimal rationals before hashing.

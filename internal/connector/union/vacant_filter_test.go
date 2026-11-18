@@ -1,6 +1,7 @@
 package union
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/JustinMonty20/landman/internal/connector"
@@ -35,6 +36,8 @@ func TestIsLikelyVacantGISRecord(t *testing.T) {
 		{name: "missing attributes", want: false},
 		{name: "null values", attributes: map[string]interface{}{"YEARBLT": nil, "SQFT": nil}, want: false},
 		{name: "numeric-looking string", attributes: map[string]interface{}{"YEARBLT": "0"}, want: false},
+		{name: "exact decoded numeric zero", attributes: map[string]interface{}{"YEARBLT": json.Number("0.000")}, want: true},
+		{name: "exact decoded nonzero", attributes: map[string]interface{}{"YEARBLT": json.Number("0.0000000000000000000000000001")}, want: false},
 		{name: "case-insensitive fields", attributes: map[string]interface{}{"yearblt": 0}, want: true},
 	}
 	for _, tt := range tests {

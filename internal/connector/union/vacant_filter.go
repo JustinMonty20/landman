@@ -1,6 +1,8 @@
 package union
 
 import (
+	"encoding/json"
+	"math/big"
 	"strings"
 
 	"github.com/JustinMonty20/landman/internal/connector"
@@ -43,8 +45,15 @@ func isZeroNumeric(value interface{}) bool {
 		return v == 0
 	case float64:
 		return v == 0
+	case json.Number:
+		return v.String() == "0" || numericZero(v.String())
 	}
 	return false
+}
+
+func numericZero(value string) bool {
+	n, ok := new(big.Rat).SetString(value)
+	return ok && n.Sign() == 0
 }
 
 func extractGISAttributes(raw map[string]interface{}) map[string]interface{} {

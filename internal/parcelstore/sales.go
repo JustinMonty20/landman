@@ -101,7 +101,7 @@ WHERE county_id = $1
 `
 
 const saveSaleSQL = `
-INSERT INTO parcel_sales (
+WITH saved AS (INSERT INTO parcel_sales (
 	parcel_id,
 	sequence,
 	sale_date,
@@ -128,5 +128,14 @@ DO UPDATE SET
 	grantor = EXCLUDED.grantor,
 	grantor_2 = EXCLUDED.grantor_2,
 	updated_at = now()
-RETURNING id
+WHERE (parcel_sales.sale_date,parcel_sales.og_sale_date,parcel_sales.amount,
+       parcel_sales.deed_book,parcel_sales.deed_page,parcel_sales.deed_type,
+       parcel_sales.deed_quality,parcel_sales.grantor,parcel_sales.grantor_2)
+IS DISTINCT FROM (EXCLUDED.sale_date,EXCLUDED.og_sale_date,EXCLUDED.amount,
+       EXCLUDED.deed_book,EXCLUDED.deed_page,EXCLUDED.deed_type,
+       EXCLUDED.deed_quality,EXCLUDED.grantor,EXCLUDED.grantor_2)
+RETURNING id)
+SELECT id FROM saved
+UNION ALL SELECT id FROM parcel_sales WHERE parcel_id=$1 AND sequence=$2
+LIMIT 1
 `

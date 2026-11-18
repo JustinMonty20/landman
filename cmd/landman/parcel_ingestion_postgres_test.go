@@ -45,12 +45,12 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 	if _, err := base.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history"} {
+	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history"} {
 		if _, err := base.Exec(ctx, "CREATE TABLE "+name+"."+table+" (LIKE public."+table+" INCLUDING ALL) WITH (autovacuum_enabled=false)"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, sql := range []string{"ALTER TABLE " + name + ".parcel_sales ADD FOREIGN KEY(parcel_id) REFERENCES " + name + ".parcels(id)", "ALTER TABLE " + name + ".quarantined_records ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_observations ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_current ADD FOREIGN KEY(observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(old_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(new_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)"} {
+	for _, sql := range []string{"ALTER TABLE " + name + ".parcel_sales ADD FOREIGN KEY(parcel_id) REFERENCES " + name + ".parcels(id)", "ALTER TABLE " + name + ".quarantined_records ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_captures ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_observations ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(attempt_id) REFERENCES " + name + ".job_attempts(id)", "ALTER TABLE " + name + ".parcel_evidence_current ADD FOREIGN KEY(observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(old_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)", "ALTER TABLE " + name + ".parcel_evidence_history ADD FOREIGN KEY(new_observation_id) REFERENCES " + name + ".parcel_evidence_observations(id)"} {
 		if _, err := base.Exec(ctx, sql); err != nil {
 			t.Fatal(err)
 		}

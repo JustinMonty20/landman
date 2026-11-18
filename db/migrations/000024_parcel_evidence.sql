@@ -2,6 +2,15 @@
 ALTER TABLE job_attempts DROP CONSTRAINT job_attempts_attempt_kind_check;
 ALTER TABLE job_attempts ADD CONSTRAINT job_attempts_attempt_kind_check CHECK (attempt_kind IN ('full_scan','reprocess','replay'));
 
+CREATE TABLE parcel_evidence_captures (
+ artifact_id TEXT PRIMARY KEY,
+ artifact_hash TEXT NOT NULL CHECK (artifact_hash ~ '^[0-9a-f]{64}$'),
+ manifest JSONB NOT NULL,
+ attempt_id UUID NOT NULL REFERENCES job_attempts(id),
+ attempt_kind TEXT NOT NULL CHECK (attempt_kind IN ('full_scan','reprocess')),
+ registered_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
 CREATE TABLE parcel_evidence_observations (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
  county_id TEXT NOT NULL DEFAULT 'union',
@@ -59,8 +68,16 @@ CREATE TABLE parcel_evidence_history (
 );
 CREATE INDEX parcel_evidence_history_pid_idx ON parcel_evidence_history(county_id,source_name,source_parcel_id,changed_at);
 -- +goose Down
+-- +goose StatementBegin
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM parcel_evidence_observations) OR EXISTS (SELECT 1 FROM parcel_evidence_captures) THEN
+  RAISE EXCEPTION 'cannot discard registered parcel capture or published source evidence';
+ END IF;
+END $$;
+-- +goose StatementEnd
 DROP TABLE parcel_evidence_history;
 DROP TABLE parcel_evidence_current;
 DROP TABLE parcel_evidence_observations;
+DROP TABLE parcel_evidence_captures;
 ALTER TABLE job_attempts DROP CONSTRAINT job_attempts_attempt_kind_check;
 ALTER TABLE job_attempts ADD CONSTRAINT job_attempts_attempt_kind_check CHECK (attempt_kind IN ('full_scan','reprocess'));

@@ -73,9 +73,9 @@ func TestParcelDerivedWorkChecksPersistedDependencies(t *testing.T) {
 	if err != nil || outcome != jobs.OutcomeSuccess {
 		t.Fatalf("geometry correction %s %v", outcome, err)
 	}
-	changed, geometryChanged, err := parcelReplayDependencies(ctx, pool)
-	if err != nil || !changed || !geometryChanged {
-		t.Fatalf("persisted dependency decision changed=%v geometry=%v error=%v", changed, geometryChanged, err)
+	var corrections int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM parcel_evidence_history WHERE cause='normalization_correction' AND old_geometry_hash IS DISTINCT FROM new_geometry_hash`).Scan(&corrections); err != nil || corrections != 1 {
+		t.Fatalf("geometry correction history=%d error=%v", corrections, err)
 	}
 	if due() {
 		t.Fatal("restored original geometry should match assessed fingerprint")

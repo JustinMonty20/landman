@@ -295,25 +295,8 @@ func run(ctx context.Context) error {
 		if outcome != jobs.OutcomeSuccess && outcome != jobs.OutcomeSuccessWithQuarantine {
 			return fmt.Errorf("replay did not validate: %s", outcome)
 		}
-		changed, geometryChanged, err := parcelReplayDependencies(ctx, pool)
-		if err != nil {
-			return err
-		}
-		if !changed {
-			return nil
-		}
-		if geometryChanged {
-			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
-			if err != nil {
-				return err
-			}
-			if due {
-				if err := refresh(ctx); err != nil {
-					return err
-				}
-			}
-		}
-		return qualificationRefresh(ctx)
+		// Independent stored-input jobs discover stale dependencies later.
+		return nil
 	}
 	if mode == "reprocess" {
 		limit, _ := parceljob.ReprocessLimit(os.Args[4])
@@ -472,12 +455,4 @@ func withAdvisoryLock(ctx context.Context, dsn, key string, fn func(context.Cont
 		return cause
 	}
 	return result
-}
-
-// parcelReplayDependencies reads committed correction rows for the last runner
-// attempt. Historical validation has no publication and no dependencies.
-func parcelReplayDependencies(ctx context.Context, pool *pgxpool.Pool) (bool, bool, error) {
-	var changed, geometryChanged bool
-	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_history h WHERE h.attempt_id=a.id), EXISTS(SELECT 1 FROM parcel_evidence_history h WHERE h.attempt_id=a.id AND h.old_geometry_hash IS DISTINCT FROM h.new_geometry_hash) FROM job_attempts a WHERE a.id=(SELECT id FROM job_attempts WHERE job_id=$1 AND attempt_kind='replay' ORDER BY started_at DESC,id DESC LIMIT 1)`, parcelJobID).Scan(&changed, &geometryChanged)
-	return changed, geometryChanged, err
 }

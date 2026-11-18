@@ -269,9 +269,23 @@ func ParcelResponseCRS(body []byte) (int, error) {
 		return 0, fmt.Errorf("parcel response missing features")
 	}
 	for _, feature := range features.Array() {
+		localRef := feature.Get("geometry.spatialReference")
+		if localRef.Exists() {
+			if len(localRef.Map()) == 0 {
+				return 0, fmt.Errorf("unsupported feature CRS declaration")
+			}
+			localWKID := feature.Get("geometry.spatialReference.wkid")
+			localLatest := feature.Get("geometry.spatialReference.latestWkid")
+			if !localWKID.Exists() && !localLatest.Exists() {
+				return 0, fmt.Errorf("unsupported feature CRS declaration")
+			}
+			if feature.Get("geometry.spatialReference.wkt").Exists() || feature.Get("geometry.spatialReference.wkt2").Exists() {
+				return 0, fmt.Errorf("unsupported feature CRS declaration")
+			}
+		}
 		for _, field := range []string{"geometry.spatialReference.wkid", "geometry.spatialReference.latestWkid"} {
 			local := feature.Get(field)
-			if local.Exists() && !valid(local) {
+			if local.Exists() && (!valid(local) || int(local.Int()) != crs && !(crs == 3857 && local.Int() == 102100) && !(crs == 102100 && local.Int() == 3857)) {
 				return 0, fmt.Errorf("feature CRS conflicts with response")
 			}
 		}

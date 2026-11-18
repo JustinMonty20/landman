@@ -54,6 +54,13 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 	if !ok {
 		return 0, fmt.Errorf("parcel publication requires a job attempt")
 	}
+	var registered bool
+	var originatingOutcome, originatingAttempt string
+	if err := w.tx.QueryRow(ctx, `SELECT c.artifact_hash=$2 AND c.manifest=$3::jsonb AND c.attempt_kind=$4,
+		a.outcome,c.attempt_id::text FROM parcel_evidence_captures c JOIN job_attempts a ON a.id=c.attempt_id
+		WHERE c.artifact_id=$1 AND a.job_id=$5`, manifest.ID, manifest.ArtifactHash, manifest, manifest.Kind, jobID).Scan(&registered, &originatingOutcome, &originatingAttempt); err != nil && err != pgx.ErrNoRows {
+		return 0, err
+	}
 	if correction {
 		var trusted []byte
 		err := w.tx.QueryRow(ctx, `SELECT id::text,manifest FROM parcel_evidence_observations WHERE artifact_id=$1`, manifest.ID).Scan(&observationID, &trusted)
@@ -78,23 +85,33 @@ func (w *ShapeWriter) PublishEvidence(ctx context.Context, quarantine *jobs.Quar
 				return 0, fmt.Errorf("snapshot differs from trusted observation manifest")
 			}
 		} else {
-			var latest *time.Time
-			if e := w.tx.QueryRow(ctx, `SELECT max(observed_at) FROM parcel_evidence_observations WHERE county_id='union' AND source_name='union_county_gis'`).Scan(&latest); e != nil {
+			var populated bool
+			if e := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcels WHERE county_id='union' AND source_name='union_county_gis')`).Scan(&populated); e != nil {
 				return 0, e
 			}
-			if latest != nil && !manifest.CreatedAt.After(*latest) {
-				return 0, ErrHistoricalReplay
-			}
-			publicationKind = "offline_rebuild"
-			var failed bool
-			if e := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM job_attempts WHERE job_id=$1 AND attempt_kind=$2 AND outcome='failed' AND finished_at >= $3)`, jobID, manifest.Kind, manifest.CreatedAt).Scan(&failed); e != nil {
-				return 0, e
-			}
-			if failed {
+			if populated {
+				if !registered || originatingOutcome != "failed" {
+					return 0, fmt.Errorf("populated replay requires its own failed registered source attempt")
+				}
+				var latest *time.Time
+				if e := w.tx.QueryRow(ctx, `SELECT max(observed_at) FROM parcel_evidence_observations WHERE county_id='union' AND source_name='union_county_gis'`).Scan(&latest); e != nil {
+					return 0, e
+				}
+				if latest != nil && !manifest.CreatedAt.After(*latest) {
+					return 0, ErrHistoricalReplay
+				}
 				publicationKind = "offline_retry"
+			} else {
+				publicationKind = "offline_rebuild"
+				if registered && originatingOutcome == "failed" {
+					publicationKind = "offline_retry"
+				}
 			}
 		}
 	} else {
+		if !registered || originatingOutcome != "running" || originatingAttempt != attemptID {
+			return 0, fmt.Errorf("source publication requires its registered running capture")
+		}
 		publicationKind = "observed"
 	}
 	if observationID == "" {
@@ -196,6 +213,7 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 			err = fmt.Errorf("missing source evidence for PID %s", pid)
 			break
 		}
+		last = models.GISParcel{}
 		if err = json.Unmarshal(payload, &last); err != nil {
 			break
 		}
@@ -237,14 +255,14 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	}
 	if correction && publicationKind == "" {
 		if previousObservation == nil {
-			return 0, ErrHistoricalReplay
+			return 0, nil
 		}
 		var currentID string
 		if err = w.tx.QueryRow(ctx, `SELECT artifact_id FROM parcel_evidence_observations WHERE id=$1::uuid`, *previousObservation).Scan(&currentID); err != nil {
 			return 0, err
 		}
 		if currentID != artifactID {
-			return 0, ErrHistoricalReplay
+			return 0, nil
 		}
 		observationID = *previousObservation
 		if oldSourceHash == nil || *oldSourceHash != sourceHash || oldSourceVersion == nil || *oldSourceVersion != parcelevidence.SourceHashVersion {
@@ -257,11 +275,14 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 			return 0, err
 		}
 		if newer {
+			if correction {
+				return 0, nil
+			}
 			return 0, fmt.Errorf("source observation is not newer for %s", pid)
 		}
 	}
 	if oldHash != nil && *oldHash == normalizedHash && oldHashVersion != nil && *oldHashVersion == parcelevidence.NormalizedHashVersion && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion {
-		if !correction {
+		if !correction || publicationKind == "offline_retry" {
 			if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 				return 0, err
 			}
@@ -294,11 +315,10 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 		return 0, err
 	}
 	cause := "source_observation"
-	if correction {
+	if previousObservation != nil && oldSourceHash != nil && *oldSourceHash == sourceHash && oldSourceVersion != nil && *oldSourceVersion == parcelevidence.SourceHashVersion {
 		cause = "normalization_correction"
-		if publicationKind != "" {
-			cause = publicationKind
-		}
+	} else if correction {
+		cause = publicationKind
 	}
 	if _, err = w.tx.Exec(ctx, `INSERT INTO parcel_evidence_history(county_id,source_name,source_parcel_id,old_observation_id,new_observation_id,cause,source_hash_version,old_source_hash_version,normalizer_version,old_normalizer_version,old_source_hash,new_source_hash,old_normalized_hash,new_normalized_hash,old_geometry_hash,new_geometry_hash,old_fields,new_fields,attempt_id,normalized_hash_version,old_normalized_hash_version,geometry_hash_version,old_geometry_hash_version) VALUES ('union','union_county_gis',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::uuid,$18,$19,$20,$21)`, pid, previousObservation, observationID, cause, parcelevidence.SourceHashVersion, oldSourceVersion, parcelevidence.NormalizerVersion, oldNormalizer, oldSourceHash, sourceHash, oldHash, normalizedHash, oldGeometry, geometryHash, old, nextFields, attemptID, parcelevidence.NormalizedHashVersion, oldHashVersion, parcelevidence.GeometryHashVersion, oldGeometryVersion); err != nil {
 		return 0, err

@@ -12,7 +12,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/models"
 )
 
-const NormalizedHashVersion = "parcel-storage-v1"
+const NormalizedHashVersion = "parcel-storage-v2"
 const GeometryHashVersion = "postgis-normalized-ewkb-v1"
 
 func checksum(prefix string, data []byte) string {
@@ -55,7 +55,10 @@ func NormalizeStorageNumbers(p *models.GISParcel) error {
 }
 
 func roundDecimal(value float64, scale int) (float64, error) {
-	text := strconv.FormatFloat(value, 'g', -1, 64)
+	return roundDecimalText(strconv.FormatFloat(value, 'g', -1, 64), scale)
+}
+
+func roundDecimalText(text string, scale int) (float64, error) {
 	r, ok := new(big.Rat).SetString(text)
 	if !ok {
 		return 0, fmt.Errorf("invalid numeric %s", text)
@@ -68,6 +71,54 @@ func roundDecimal(value float64, scale int) (float64, error) {
 	}
 	text = new(big.Rat).SetFrac(quotient, multiplier).FloatString(scale)
 	return strconv.ParseFloat(text, 64)
+}
+
+// QuantizeSourceNumbers rounds source decimals before binary float conversion.
+// Original source values remain unchanged in retained evidence.
+func QuantizeSourceNumbers(attributes map[string]interface{}, p *models.GISParcel) error {
+	fields := []struct {
+		key   string
+		value **float64
+		scale int
+	}{
+		{"mapped_acres", &p.Land.MappedAcres, 6}, {"gross_acres", &p.Land.GrossAcres, 6},
+		{"VAL_AC", &p.Land.ValuedAcres, 6}, {"VAL_SQFT", &p.Land.ValuedSqFt, 2},
+		{"SQFT", &p.Building.SqFt, 2}, {"FMV_LAND", &p.Valuation.Land, 2},
+		{"FMV_IMPRV", &p.Valuation.Improvement, 2}, {"FMV_TOTAL", &p.Valuation.Total, 2},
+		{"TOTVAL", &p.Valuation.Assessed, 2}, {"SHAPE.STArea()", &p.Geometry.SourceArea, 6},
+		{"SHAPE.STLength()", &p.Geometry.SourceLength, 6},
+	}
+	for i, prefix := range []string{"s1", "s2", "s3"} {
+		for j := range p.Sales {
+			if p.Sales[j].Sequence == i+1 {
+				fields = append(fields, struct {
+					key   string
+					value **float64
+					scale int
+				}{prefix + "_SALESAMT", &p.Sales[j].Amount, 2})
+			}
+		}
+	}
+	for _, field := range fields {
+		if *field.value == nil {
+			continue
+		}
+		var text string
+		switch v := attributes[field.key].(type) {
+		case json.Number:
+			text = string(v)
+		case float64:
+			text = strconv.FormatFloat(v, 'g', -1, 64)
+		default:
+			continue
+		}
+		value, err := roundDecimalText(text, field.scale)
+		if err != nil {
+			return err
+		}
+		*field.value = &value
+	}
+	return nil
 }
 
 // NormalizedHash excludes generated IDs and observation metadata. The caller
