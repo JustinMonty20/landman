@@ -44,16 +44,16 @@ Select the direct-handler proposal for its smaller public interface. Retain the 
 
 ## Verification
 
-- [ ] Require valid sessions and allowed accounts on all data routes. Test absent, malformed, expired, revoked, and disallowed sessions. Database errors must deny access.
-- [ ] Verify query validation, keyset page order, lookup independence, county and viewport counts, and agreement between list and map filters.
-- [ ] Verify neutral map context, broad-zoom aggregation, close-zoom simplification, multipart shapes, feature and byte limits, and request cancellation.
-- [ ] Verify tax active-file selection, distinct delinquent years and totals, missing evidence, decimal values, and both foreclosure feeds.
-- [ ] Verify soil assessment provenance, stale and unavailable states, and no request-time recomputation or source fetch.
-- [ ] Add disposable PostGIS integration tests to CI. Test through HTTP and the existing soil read interface.
-- [ ] Measure a disposable copy of retained ingested county parcels and soil assessments. Import the four existing offline tax files through `jobs.Runner.Run`. Do not change the source databases.
-- [ ] Record dataset counts, PostgreSQL and PostGIS versions, machine load, query plans with buffers, first-use and repeated timings, p50 and p95 request latency, errors, actual response contents, and response sizes.
-- [ ] Measure lookup, first and later list pages, combined filters, county counts, close and broad map views, parcel facts, tax detail, and soil detail. Include at least five repeated rounds and four concurrent requests. Measure real authenticated HTTP requests as well as SQL plans.
-- [ ] Investigate the slowest measured paths. Retain index or SQL changes only with repeatable evidence and unchanged results. Do not claim optimal performance or a speed improvement without a comparable baseline.
+- [x] Require valid sessions and allowed accounts on all data routes. Test absent, malformed, expired, revoked, and disallowed sessions. Database errors must deny access.
+- [x] Verify query validation, keyset page order, lookup independence, county and viewport counts, and agreement between list and map filters.
+- [x] Verify neutral map context, broad-zoom aggregation, close-zoom simplification, multipart shapes, feature and byte limits, and request cancellation.
+- [x] Verify tax active-file selection, distinct delinquent years and totals, missing evidence, decimal values, and both foreclosure feeds.
+- [x] Verify soil assessment provenance, stale and unavailable states, and no request-time recomputation or source fetch.
+- [x] Add disposable PostGIS integration tests to CI. Test through HTTP and the existing soil read interface.
+- [x] Measure a disposable copy of retained ingested county parcels and soil assessments. Import the four existing offline tax files through `jobs.Runner.Run`. Do not change the source databases.
+- [x] Record dataset counts, PostgreSQL and PostGIS versions, machine load, query plans with buffers, first-observed and repeated timings, p50 and p95 request latency, errors, actual response contents, and response sizes.
+- [x] Measure lookup, first and later list pages, combined filters, county counts, close and broad map views, parcel facts, tax detail, and soil detail. Include at least five repeated rounds and four concurrent requests. Measure real authenticated HTTP requests as well as SQL plans.
+- [x] Investigate the slowest measured paths. Retain index or SQL changes only with repeatable evidence and unchanged results. Do not claim optimal performance or a speed improvement without a comparable baseline.
 - [ ] Run repository Go checks, database checks, and one independent final review. Open a PR with the measured results and remaining performance limits.
 
 ## Scope limits
