@@ -1,6 +1,10 @@
 # Parcel UI
 
 - Keep the application header to the brand and account controls.
+- Keep map status compact. Show a county/filter summary only when filters are active. Keep search and panel positions fixed across zoom levels; omit visible view-level headings.
+- Select counties through map outlines or keyboard-accessible county labels. Use coverage-page links when the map is unavailable. Keep the county dropdown off the map.
+- Keep ingestion details and the full coverage list on `/coverage`. Reserve the map's right-hand panel for parcel results and details. Keep county selection, locked labels, and a short locked-county notice on the map.
+- Preserve discovery controls when changing map data. The approved regional view hides parcel controls without clearing their state. Explicit county selection sets the search area; zoom changes display detail only. Show parcel controls in the selected configured county at county and parcel zoom levels. Show a locked explanation for other counties. Mark parcel controls unavailable until real data is connected. The grouped filter layout is approved. Omit mock and preview badges. Until real data is connected, keep a short data-availability notice; selections must not change parcel results, map evidence, or make data requests.
 
 - Use blue focus outlines for controls. Keep keyboard focus visible; do not use the selected parcel's amber color for control focus.
 

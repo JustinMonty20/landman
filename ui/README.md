@@ -1,14 +1,16 @@
-# Parcel discovery prototype
+# County coverage UI
 
 ## Run
 
-Use Node.js 22.12 or later and npm. Configure Google sign-in, apply the authentication migration, and start the Go application API first. See [application login](../docs/application-login.md).
+Use Node.js 22.12 or later and npm. Configure Google sign-in and the authentication migration. See [application login](../docs/application-login.md).
 
-From the repository root, start the API in a separate terminal:
+Start the API from the repository root:
 
 ```sh
 make -s api
 ```
+
+Start the UI in a separate terminal:
 
 ```sh
 cd ui
@@ -16,34 +18,45 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite. The map fills the application area. Filters are closed at startup. The right-hand panel shows all matching results. Filters use only the left-side panel. Use its edge arrow (**Show filters**) to open it. The layout is fixed; no comparison controls remain. The UI uses a softer graphite map background (`#24272b`), lighter charcoal panels (`#303438`), blue match highlights, and an amber selected-parcel outline. Dark mode is independent of the operating-system preference.
+## County coverage
 
-## Review
+The map shows nine county outlines. Union, North Carolina, has ingestion configured. Parcel display is not connected yet. Anson, Mecklenburg, Cabarrus, Gaston, and Stanly in North Carolina, plus Lancaster, York, and Chesterfield in South Carolina, show **Locked — ingestion not configured**.
 
-Start with zero filter matches. All sample parcel boundaries remain visible in neutral gray. An active filter highlights its matches in blue and lists them on the right. Clearing filters removes highlights and results, not parcel boundaries. Search and map clicks can inspect any parcel; a selected parcel has an amber outline even if it is not a filter match.
+The initial regional view shows all nine county outlines and locked labels. Select a county outline or label to enter its county view. County labels are buttons and support keyboard selection. The map has no county dropdown. Selection sets the search area. Zoom and map movement do not select another county. Use **Show all counties** to restore the regional view. Use **Locate selected county** to return to the selected county.
 
+Map zoom below 9 shows the regional view. Zoom from 9 to below 13 shows the county view. Zoom 13 or greater shows the parcel view. Regional view hides parcel controls without clearing filter values or panel preferences. A compact summary shows the selected county and filter count only when filters are active. County labels are hidden at parcel zoom to reduce map clutter. Locked counties show their explanation at all zoom levels, without parcel controls.
 
-- Type `DEMO-001` or `Sample Oak Lane`. Select a suggestion to locate the parcel and open its details directly. Typing does not change the map or filter matches. No separate Go button is required.
-- Combine acreage, likely-vacant, mailing-outside-NC, and LLC-name filters. The right-hand list and map show the same matching parcels. The selected parcel has a separate outline. Filters remain open while you select a parcel.
-- Select a result with a click or the keyboard. Parcel details replace the list in the right-hand panel. Close details with **×** to restore the filtered list and its page. Select a map shape to inspect the same parcel. The other matching parcels remain visible on the map.
-- Use only the right-edge arrow (**Hide matches**) to hide the list. Use the right-edge arrow (**Show matches**) to restore it. Use only the left-edge arrow to hide filters. Panels slide toward their screen edge. Reduced-motion preferences disable the animation. Filters, map highlights, list mode, and page do not change. Selecting a map parcel still opens details; closing details restores the list.
-- Move or zoom the map. Compare all matches with matches in the map view.
-- Close and open the side panel. Active filters remain visible. Click an active-filter label, or focus it and press Enter, to remove only that filter. Removing the last filter restores zero matches while parcel boundaries remain visible.
-- Test desktop and tablet widths. The results list and details remain usable without WebGL.
+When WebGL is not available, use **Show on map** links on the coverage page to select a county. WebGL is the browser graphics interface used by the map.
 
-## UI components
+No parcels are shown. The page does not use the fictional parcel fixtures. Union county and parcel views show search, the left-side filter panel, and the right-side results panel. Parcel search is disabled until the Union parcel API is connected. The grouped filter layout is approved. Until parcel data is connected, its controls change selections only, not parcel results or map highlights. A short data-availability notice remains; mock and preview labels are removed. Use the edge arrows to hide or show filters and results. The results panel states that results are unavailable, not that a search found zero parcels. County counts or density at county zoom and bounded parcel geometry at close zoom still require the parcel API connection. Existing ingestion jobs are unchanged. A configured status does not assert that a source is current or that an import succeeded.
 
-Use [Skeleton](https://www.skeleton.dev/) for standard UI controls. `@skeletonlabs/skeleton` supplies button and form styles. `@skeletonlabs/skeleton-svelte` supplies the result `Pagination` component. Tailwind CSS and its forms plugin compile the shared styles.
+## Filter design
 
-Skeleton styles native inputs, checkboxes, and selects; these do not need custom Svelte wrappers. Application-specific map rendering, result rows, and sliding panels remain custom. The Google button keeps Google's pre-approved artwork.
+The left panel groups fields into expandable **Owner**, **Soil**, **Tax**, and **Parcel** sections. Multiple sections can remain open. Long content scrolls inside the panel. The selection count and **Clear all** action remain at the bottom.
 
-`src/theme.css` sets the approved charcoal and blue colors through Skeleton theme properties. `src/style.css` contains the map layout and application-specific styles. Dark mode is fixed with the `dark` class and `color-scheme: dark`, independent of the operating-system preference. Prefer Skeleton components over new custom standard widgets.
+Owner includes **Business-name match** and **Out-of-state owner**. Out-of-state uses the owner's mailing address outside North Carolina. A business-name match includes LLC terms; it does not verify registration. Tax includes reported delinquency and foreclosure records. Parcel includes acreage and provisional vacancy. Section headings show selection counts. Selection buttons remove one field at a time.
 
-## Google button
+Soil shows a disabled **Soil type** dropdown. Real choices must come from connected county soil data. The panel supplies no invented soil types or text search.
 
-The login screen uses Google's unmodified, pre-approved dark button artwork. The local file is `static/brand/google-signin-dark.png`. It is the Android + Web, dark, square, text-visible, 2x PNG from [Google's asset archive](https://developers.google.com/static/identity/images/signin-assets.zip). Display it at 180 by 40 pixels. Follow [Google's branding guidelines](https://developers.google.com/identity/branding-guidelines).
+Selections remain when sections close, the panel hides, or the map returns to regional zoom. A compact button appears only when filters are selected. It opens the filter panel again. Controls make no parcel API requests until data integration. Real filter semantics, available fields, soil-overlap rules, source dates, and unknown states remain integration work.
 
-The button uses the existing server-side Google login route. It does not load an additional identity SDK, request calendar access, or make an external image request.
+## Coverage page
+
+Open **County coverage** from the map to visit `/coverage`. This authenticated page contains the full county list, ingestion configuration, parcel display availability, and map legend. Ingestion details do not appear in the map results panel. The map keeps only county selection, locked labels, and a short notice for a selected locked county.
+
+Each **Show on map** link opens that county through a validated `county` query parameter. **Return to map** retains the selected county. Unknown county values use the default regional view. The coverage page does not fetch ingestion history or assert source freshness.
+
+## Boundary source
+
+`src/lib/data/counties.json` and `src/lib/data/chesterfield-stanly.json` contain local GeoJSON from the U.S. Census Bureau TIGERweb county service. GeoJSON is a JSON format for geographic shapes. The source was retrieved on 2026-11-17:
+
+- Service: <https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1>
+- Original query: `GEOID IN ('37179','37007','37119','37025','37071','45057','45091')`
+- Chesterfield and Stanly query: `GEOID IN ('45025','37167')`
+- Fields: `GEOID,NAME,STATE,COUNTY`
+- Output: `f=geojson`, `outSR=4326`, `geometryPrecision=5`, `maxAllowableOffset=0.001`
+
+The boundaries are simplified for display. Do not use them for legal boundaries or parcel evidence calculations. The browser makes no Census, county, tile, or font requests. County labels are local HTML buttons. County availability is explicit UI configuration, not an ingestion status API.
 
 ## Checks
 
@@ -53,19 +66,12 @@ npm test
 npm run build
 npx playwright install chromium
 npm run test:e2e
-npm audit
 ```
 
-Browser tests use desktop and tablet sizes. They check that the default map uses more than 90% of the screen height and that side panels use less than 40% of the screen width. Tests use a separate local port so they can run while the development server remains available. Screenshots are written to the ignored `test-results/` directory. The static build is written to the ignored `build/` directory. No Go build is required for this prototype.
+Browser checks cover desktop and tablet layouts, authentication, county selection, locked states, panel controls, local map resources, and unavailable WebGL. Screenshots are written to the ignored `test-results/` directory.
 
 ## Boundaries
 
-All 24 parcels, IDs, owners, addresses, dates, and boundaries are fictional. The map uses MapLibre with local geometry and no external tiles. The acreage values do not describe the display geometry. This is a UI prototype with a fixed side-panel layout, not a county map or a source-evidence assessment.
+This is a county coverage view, not a completed parcel application. Real parcel queries, private lead records, tax requests, and reminders are not connected. Required zoning, road, and flood evidence and county-scale performance checks remain in [the browser application plan](../plans/browser-parcel-ui.md) and [the V1 plan](../plans/v1.md). This change does not alter those release gates.
 
-Filtering runs in the browser only for this small sample set. This is not the production county-query design. County-wide queries, bounded map geometry, source-generation consistency, and measured performance budgets remain required by `plans/browser-parcel-ui.md`.
-
-The application API is in `cmd/api/`. Google sign-in, the allowed-account list, user identities, and revocable database sessions are implemented. The UI checks `/api/me` before showing discovery. Server-only settings stay in the repository-root `.env`. Browser tests use explicit authentication fixtures, not an application bypass.
-
-Private lead storage, tax requests, calendar access, and reminders are not implemented. The UI makes no county or FEMA requests. Reloading clears sample discovery changes. The authentication migration adds tables without changing parcel or tax data.
-
-Zoning, road, flood, and tax evidence are not connected. Positive filters exclude unknown evidence. Mailing state does not prove owner residence. An LLC-name match does not prove registration or corporate status.
+Keep standard controls in Skeleton styles. Keep the approved dark palette and Google's pre-approved sign-in artwork unchanged.
