@@ -315,6 +315,10 @@ func arcGISDate(attrs map[string]interface{}, key string) (*time.Time, *int64) {
 }
 
 func geometryShape(raw map[string]interface{}) *geom.T {
+	return geometryShapeWithRingCheck(raw, ringInsideShell)
+}
+
+func geometryShapeWithRingCheck(raw map[string]interface{}, inside func([]float64, []float64) bool) *geom.T {
 	if raw == nil {
 		return nil
 	}
@@ -361,7 +365,7 @@ func geometryShape(raw map[string]interface{}) *geom.T {
 	for _, hole := range holes {
 		owner := -1
 		for i, candidate := range shells {
-			if ringInsideShell(hole, candidate.flat) && (owner < 0 || candidate.area < shells[owner].area) {
+			if inside(hole, candidate.flat) && (owner < 0 || candidate.area < shells[owner].area) {
 				owner = i
 			}
 		}

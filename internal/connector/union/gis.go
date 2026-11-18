@@ -289,9 +289,15 @@ func (s *GISSource) get(ctx context.Context, rawURL string) ([]byte, error) {
 	return body, nil
 }
 
+type httpStatusError struct{ code int }
+
+func (e httpStatusError) Error() string {
+	return fmt.Sprintf("union county gis unexpected status: %d", e.code)
+}
+
 func unexpectedHTTPStatus(statusCode int) error {
 	if statusCode < http.StatusOK || statusCode > 299 {
-		return fmt.Errorf("union county gis unexpected status: %d", statusCode)
+		return httpStatusError{code: statusCode}
 	}
 	return nil
 }

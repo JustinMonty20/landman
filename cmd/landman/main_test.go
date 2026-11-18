@@ -92,6 +92,7 @@ func TestCommands(t *testing.T) {
 		{nil, "all"}, {[]string{"schedule"}, "schedule"},
 		{[]string{"run", parcelJobID}, parcelJobID}, {[]string{"run", soilJobID}, soilJobID},
 		{[]string{"run", screeningJobID}, screeningJobID}, {[]string{"run", taxJobID}, taxJobID},
+		{[]string{"run", zoningJobID}, zoningJobID}, {[]string{"run", roadsJobID}, roadsJobID}, {[]string{"run", qualificationJobID}, qualificationJobID},
 	} {
 		mode, err := command(tc.args)
 		if err != nil || mode != tc.mode {
@@ -107,8 +108,11 @@ func TestCommands(t *testing.T) {
 
 func TestIndependentSchedules(t *testing.T) {
 	env := map[string]string{
-		"UNION_PARCELS_CRON": "CRON_TZ=America/New_York 0 2 * * 0,3",
-		"UNION_SOIL_CRON":    "CRON_TZ=UTC 0 3 1 */3 *",
+		"UNION_PARCELS_CRON":       "CRON_TZ=America/New_York 0 2 * * 0,3",
+		"UNION_SOIL_CRON":          "CRON_TZ=UTC 0 3 1 */3 *",
+		"UNION_ZONING_CRON":        "CRON_TZ=UTC 0 4 * * 1",
+		"UNION_ROADS_CRON":         "CRON_TZ=UTC 0 5 * * 2",
+		"UNION_QUALIFICATION_CRON": "CRON_TZ=UTC 0 6 * * *",
 	}
 	getenv := func(key string) string { return env[key] }
 	before, err := schedules(getenv)
@@ -120,7 +124,7 @@ func TestIndependentSchedules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before[soilJobID] != after[soilJobID] || before[parcelJobID] == after[parcelJobID] || len(after) != 2 {
+	if before[soilJobID] != after[soilJobID] || before[parcelJobID] == after[parcelJobID] || len(after) != 5 {
 		t.Fatalf("schedules not independent: %v -> %v", before, after)
 	}
 	for _, invalid := range []string{"", "0 2 * * *", "CRON_TZ=UTC @every 1h", "CRON_TZ= 0 2 * * *", "CRON_TZ=Invalid/Zone 0 2 * * *", "CRON_TZ=UTC 99 2 * * *"} {
@@ -140,7 +144,7 @@ func TestSchedulesNormalizeWhitespace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("schedules(%q): %v", expression, err)
 		}
-		for _, id := range []string{parcelJobID, soilJobID} {
+		for _, id := range []string{parcelJobID, soilJobID, zoningJobID, roadsJobID, qualificationJobID} {
 			if calendar[id] != "CRON_TZ=UTC 0 2 * * *" {
 				t.Fatalf("schedule %s = %q", id, calendar[id])
 			}
@@ -472,5 +476,20 @@ func TestCleanRepairUsesExistingDerivedExecutor(t *testing.T) {
 	outcome, result, err := executor.Run(context.Background(), jobs.Definition{ID: parcelJobID, Kind: jobs.AttemptReprocess, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{Processed: 2}, nil }})
 	if outcome != jobs.OutcomeSuccess || result.Processed != 2 || refreshes != 1 || err == nil {
 		t.Fatalf("outcome=%s result=%v refreshes=%d error=%v", outcome, result, refreshes, err)
+	}
+}
+
+func TestScheduledQualificationDoesNotRefreshSoil(t *testing.T) {
+	runner := &executingRunner{}
+	called := 0
+	executor := unionExecutor{runner: runner, refresh: func(context.Context) error { called++; return errors.New("soil refresh should not run") }}
+	scheduler, err := jobs.NewScheduler(executor, []jobs.Definition{{ID: qualificationJobID, Schedule: "CRON_TZ=UTC 0 4 * * *", Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scheduler.Stop()
+	outcome, _, err := scheduler.Run(context.Background(), qualificationJobID)
+	if err != nil || outcome != jobs.OutcomeSuccess || called != 0 {
+		t.Fatalf("scheduled qualification: outcome %s error %v soil refreshes %d", outcome, err, called)
 	}
 }

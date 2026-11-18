@@ -8,6 +8,26 @@ The Go application API is in `cmd/api/`. Authentication is in `internal/auth/`. 
 
 Calendar permissions, saved leads, private notes, and reminder delivery are not implemented. The map still uses fictional sample parcels. Authentication establishes user identities; it does not make the sample data real.
 
+## Approved application and API design
+
+Use separate UI and Go API processes with separate build artifacts. Present both through one browser origin: the same scheme, host, and port. Route requests as follows:
+
+| Path | Destination |
+| --- | --- |
+| `/api/*` | Go application API in `cmd/api/` |
+| `/auth/*` | Go authentication routes |
+| All other application paths | SvelteKit UI in `ui/` |
+
+Keep the Vite proxy for local development. Select the production hosting platform and request-routing configuration separately. This decision does not select a cloud platform or add deployment configuration.
+
+Use the existing Google sign-in and database-backed application sessions. Send the application session token in an HttpOnly cookie. Require Secure cookies under HTTPS. Do not store authentication tokens in browser local storage or add a browser bearer-token flow.
+
+Require server-side session validation and the allowed-account check on every parcel API request. Return HTTP 401 when authentication is absent or invalid. A database failure must not permit access. The UI sign-in screen is not access control for the API. These checks must extend the existing authentication module; parcel routes are not implemented yet.
+
+Require protection against cross-site request forgery (CSRF) for authenticated state-changing requests. Keep the exact-origin check on logout. Apply equivalent protection to future write routes; SameSite cookies alone are not the complete write-access contract.
+
+Query PostGIS from Go. The browser requests bounded map data, paged results, and parcel evidence. Keep ingestion in `cmd/landman/`. Keep shared parcel evidence separate from private user records. This decision does not add private lead actions or ingestion routes.
+
 ## Configure
 
 Keep these settings in the repository-root `.env`:

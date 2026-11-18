@@ -17,6 +17,7 @@ You are a principal engineer.
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
 - The buyer writes handwritten notes outside the application. Lead tracking means a personal scratchpad, explicit lead states, and follow-up reminders to the buyer—not AI outreach, mailing preparation/exports, campaigns, or owner-facing message delivery. Do not add those features without explicit operator authorization.
 - Route every new Union County ingestion entry point through `jobs.Runner.Run` with a stable job ID. Keep source-specific work in the job definition or an ordered caller. For tax ingestion, keep four-file parsing and storage in a county-scoped job module, not in `main.go`; `main.go` configures and registers the job. Do not call source ingestion directly from an executable or scheduler.
+- Before declaring an existing source unavailable, inspect its documented source evidence and established client request path. Report a failed ad hoc probe separately from application-client failure. Preserve access-denial boundaries.
 - For offline operator-supplied tax files, require file paths, not source URLs from the operator. Keep known county source references as provenance only; do not claim that the application fetched the files.
 - Keep independent calendar schedules for Union source jobs. When parcel or soil data changes, update derived soil overlaps and screening from the stored soil set without forcing an extra county soil fetch. Do not replace source-specific schedules with one combined import schedule.
 - Verify parcel-import performance on an empty migrated database and after a failed first import. Include foreign-key checks and omitted-sale deletes in query measurements. Removing an explicit lookup does not prove that cached query plans remain efficient.
@@ -42,6 +43,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 
 - Prefer simplicity over cleverness.
 - When assigning polygon rings to shells, verify full boundary containment, including edges crossing concave shells; one interior vertex is not sufficient.
+- For spatial evidence, finish intersection, coverage, conflict, and gap topology in the stored CRS. Independently projecting polygon pieces before overlay can invent shared-edge gaps, overlaps, and invalid shapes; transform only completed measured geometries. Classify conflict by positive stored-area topology, not an acreage threshold.
 - Prefer composition over conditional branches.
 - Abstract on shared intent, not surface similarity.
 - Avoid nested conditionals; extract functions that narrow the branching surface.
