@@ -616,7 +616,7 @@ SELECT $1,m.polygon_id FROM soil_polygon_set_members m JOIN soil_polygons p ON p
 			return e
 		}
 		var interpretationID string
-		if e = tx.QueryRow(ctx, `SELECT id FROM soil_interpretation_keys WHERE map_unit_key=$1 AND rule_key=$2 AND aggregation=$3 AND survey_version=$4 AND rule_version=$5`, v.MapUnitKey, v.RuleKey, v.Aggregation, v.Revision.SurveyVersion, v.Revision.RuleVersion).Scan(&interpretationID); e != nil {
+		if e = tx.QueryRow(ctx, `SELECT id FROM soil_interpretation_keys WHERE map_unit_key=$1 AND rule_key=$2 AND aggregation=$3 AND survey_version IS NOT DISTINCT FROM $4 AND rule_version IS NOT DISTINCT FROM $5`, v.MapUnitKey, v.RuleKey, v.Aggregation, v.Revision.SurveyVersion, v.Revision.RuleVersion).Scan(&interpretationID); e != nil {
 			return e
 		}
 		if _, e = tx.Exec(ctx, `INSERT INTO soil_screening_ratings(run_id,map_unit_key,rule_key,aggregation,rating,availability,components,evidence,source_query,fetched_at,provenance,interpretation_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, runID, v.MapUnitKey, v.RuleKey, v.Aggregation, rated, v.Availability, components, evidence, v.SourceQuery, v.FetchedAt, provenance, interpretationID); e != nil {
