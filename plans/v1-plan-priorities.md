@@ -4,13 +4,13 @@
 
 [V1 delivery order](v1.md) remains the product and release contract. This index maps the smaller plans to that contract. It does not rewrite historical checklists, remove committed features, or authorize implementation.
 
-The review uses merged `main` commit `3fbb8f4`. [PR 72](https://github.com/JustinMonty20/landman/pull/72) supplies the authenticated read API. [PR 73](https://github.com/JustinMonty20/landman/pull/73) supplies stored county zoning, jurisdiction, boundary, and road evidence. Both are merged. Neither PR completes the browser workflow or V1.
+The review uses merged `main` commit `80b6e18`, after the separate migration repair. [PR 72](https://github.com/JustinMonty20/landman/pull/72) supplies the authenticated read API. [PR 73](https://github.com/JustinMonty20/landman/pull/73) supplies stored county zoning, jurisdiction, boundary, and road evidence. Both are merged. Neither PR completes the browser workflow or V1.
 
 The browser still uses fictional discovery data. Private saved lists, scratchpad entries, lead transitions, personal activity, reminders, and the explicit saved-parcel tax request are not implemented. Owner labels, the new vacancy tier, FEMA ingestion, and encumbrance ingestion are not implemented.
 
 Use branch `plan/v1-plan-priorities` and PR title `[plan:v1-plan-priorities] <summary>` for this index. Implementation units need their own matching scoped plan and branch when they are not already covered by an applicable plan.
 
-The operator owns migration repair in separate work. It is excluded from this feature queue. This document contains planning only.
+Migration repair was completed separately in [PR 74](https://github.com/JustinMonty20/landman/pull/74). It is excluded from this feature queue. This document contains planning only.
 
 ## How priority is assessed
 

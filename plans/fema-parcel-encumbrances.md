@@ -15,7 +15,7 @@ Use branch `plan/fema-parcel-encumbrances` and PR title `[plan:fema-parcel-encum
 
 ## Existing work and dependencies
 
-The county zoning, jurisdiction, boundary, and road backend is proposed in [PR 73](https://github.com/JustinMonty20/landman/pull/73). At plan creation, that PR is open, not merged. Its source generations, spatial assessment storage, runner composition, and geometry regression tests are proposed dependencies. Check the merged code before implementation. Do not assume those modules are already on `main`.
+The county zoning, jurisdiction, boundary, and road backend merged in [PR 73](https://github.com/JustinMonty20/landman/pull/73). Reuse its source generations, spatial assessment storage, runner composition, and geometry regression tests. [PR 74](https://github.com/JustinMonty20/landman/pull/74) reconciled the merged migration versions. Inspect the current merged code before implementation.
 
 Reuse stable parcel IDs, complete parcel geometry, `jobs.Runner.Run`, and the application's existing Go API and UI. Keep source publication separate from parcel assessment. Do not create another scheduler, parcel importer, application, or general GIS framework.
 
