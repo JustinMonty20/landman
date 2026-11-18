@@ -38,7 +38,7 @@ test('logout removes discovery and returns to Google sign-in', async ({ page }) 
     await route.fulfill({ status: 204 });
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '0 matches', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'County coverage', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Sign in with Google' })).toBeVisible();
   await expect(page.locator('canvas')).toHaveCount(0);
