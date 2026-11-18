@@ -10,18 +10,7 @@ The browser still uses fictional discovery data. Private saved lists, scratchpad
 
 Use branch `plan/v1-plan-priorities` and PR title `[plan:v1-plan-priorities] <summary>` for this index. Implementation units need their own matching scoped plan and branch when they are not already covered by an applicable plan.
 
-## Immediate correctness blocker
-
-The merged tree contains two migrations numbered 20 and two numbered 21:
-
-- `000020_parcel_api_indexes.sql` and `000020_union_qualification.sql`.
-- `000021_parcel_api_stamp.sql` and `000021_qualification_conflict_topology.sql`.
-
-Goose migration collection reproduced a duplicate-version-20 panic before database access. The SQL-file `validate` command passed; it does not establish unique version ordering. Do not apply this merged migration set to an operator database until it is reconciled.
-
-First inspect which migrations have been applied to each intended database. Then choose a safe version and upgrade path. Do not blindly rename applied migrations or rewrite migration history. Verify a new database and each relevant prior schema state. Preserve parcel IDs, source generations, tax evidence, authentication data, and user records. Add a duplicate-version check and run the combined database suite, not just each former branch's suite.
-
-This blocker has higher correctness value than any new feature below.
+The operator owns migration repair in separate work. It is excluded from this feature queue. This document contains planning only.
 
 ## How priority is assessed
 
@@ -35,7 +24,6 @@ The ranking is not a single serial queue. Start long required source checks in p
 
 | Order | Scoped work | V1 attachment | Return on effort | Reason |
 | --- | --- | --- | --- | --- |
-| 0 | Reconcile merged migrations and verify the combined application | 1, 2, 3, 4A, 4C | Highest correctness value; small to medium scope | The merged migration set cannot be collected. All later database work depends on a safe baseline. |
 | 1 | Connect the browser to real parcel, tax, and soil API reads | 4A | Highest immediate buyer value; medium scope | The read API exists, but the discovery view still shows fictional parcels. Reuse working data before adding more sources. |
 | 2 | Add private saved lists, scratchpad, lead states, activity, and exclusion | 4A | Very high buyer value; medium to large scope | The buyer needs to retain decisions and manage manual owner contact. A read-only map cannot complete that workflow. |
 | 3 | Implement owner and mailing labels, then expose filters | 4B | High value for relatively small scope | The needed names and mailing states are already stored. No new source fetch is needed. |
@@ -52,12 +40,6 @@ The ranking is not a single serial queue. Start long required source checks in p
 The main browser, private workflow, owner-label, flood, zoning/road delivery, reminder, and explicit tax-request commitments still belong to V1. The vacancy extension is requested work with source decisions still open; the current V1 release-gate list does not explicitly say that tier replacement must precede release. Confirm that boundary before final release acceptance. Do not silently drop the extension or claim the provisional boolean is a completed vacancy tier.
 
 ## Scope and completion boundaries
-
-### Combined baseline
-
-Reconcile migration identities after checking applied database states. Verify a fresh migration, relevant upgrade paths, and the combined API, qualification, authentication, parcel, tax, and soil behavior. Add a version-collision guard. Do not change product features during this fix.
-
-Completion means the combined tree has one safe migration sequence and passes its selected integrated checks. An isolated success on either former PR branch is not sufficient.
 
 ### Real-data browser
 
@@ -149,7 +131,7 @@ Outside `plans/`, [the old scraper todo](../todo/webscraper_enrichment.md) alrea
 
 ```mermaid
 flowchart TD
-    B[Safe merged migrations and combined checks] --> U[Real-data browser]
+    B[Existing merged backend] --> U[Real-data browser]
     B --> O[Owner labels]
     B --> F[FEMA source gates and ingestion]
     B --> C[Approved county qualification scale check]
@@ -177,7 +159,6 @@ Do not wait for FEMA completion to make existing real parcel and tax data useful
 
 ## Handoff checks
 
-- [ ] Resolve the migration collision and verify the combined schema before another migration-bearing feature.
 - [ ] Confirm source and runtime decisions for the next selected unit. Live imports require explicit approval and a disposable database.
 - [ ] Create or select one scoped implementation plan with concrete completion checks. Keep unrelated source imports, private workflow changes, and research separate.
 - [ ] Preserve the original V1 commitments, source-access decisions, user isolation, and no-outreach boundary.
