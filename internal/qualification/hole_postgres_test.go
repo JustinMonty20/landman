@@ -61,7 +61,7 @@ func TestQualificationHoleAndUnavailableStates(t *testing.T) {
 		}
 	}
 	for _, wkt := range []string{"POLYGON((150 150,250 150,250 250,150 250,150 150))", "POLYGON((400 0,450 0,450 400,400 400,400 0))"} {
-		_, e = pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,source_srid,shape) VALUES($1,190,(SELECT count(*)+1 FROM qualification_zones WHERE generation_id=$1),'Union County','A',2264,ST_Multi(ST_Transform(ST_GeomFromText($2,2264),3857)))`, zone, wkt)
+		_, e = pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES($1,190,(SELECT count(*)+1 FROM qualification_zones WHERE generation_id=$1),'Union County','A',2264,ST_Multi(ST_Transform(ST_GeomFromText($2,2264),3857)),ST_Multi(ST_Transform(ST_GeomFromText($2,2264),3857)),'original',0)`, zone, wkt)
 		if e != nil {
 			t.Fatal(e)
 		}

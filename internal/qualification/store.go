@@ -24,10 +24,6 @@ func (s Store) Refresh(ctx context.Context, source *union.GISSource, group strin
 	if group != union.QualificationZoning && group != union.QualificationRoads {
 		return 0, fmt.Errorf("invalid qualification group %s", group)
 	}
-	var gen string
-	if err = s.Pool.QueryRow(ctx, `INSERT INTO qualification_generations(source_group) VALUES($1) RETURNING id::text`, group).Scan(&gen); err != nil {
-		return 0, err
-	}
 	defer func() {
 		if err != nil {
 			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -35,6 +31,10 @@ func (s Store) Refresh(ctx context.Context, source *union.GISSource, group strin
 			_, _ = s.Pool.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,error) VALUES($1,$2) ON CONFLICT(source_group) DO UPDATE SET failed_at=now(),error=excluded.error`, group, err.Error())
 		}
 	}()
+	var gen string
+	if err = s.Pool.QueryRow(ctx, `INSERT INTO qualification_generations(source_group) VALUES($1) RETURNING id::text`, group).Scan(&gen); err != nil {
+		return 0, err
+	}
 	for _, id := range union.QualificationLayers(group) {
 		var receipt union.QualificationReceipt
 		receipt, err = source.FetchQualificationLayer(ctx, id, func(f union.QualificationFeature) error { return s.insertFeature(ctx, gen, f) })
@@ -78,19 +78,51 @@ func (s Store) Refresh(ctx context.Context, source *union.GISSource, group strin
 
 func (s Store) insertFeature(ctx context.Context, gen string, feature union.QualificationFeature) error {
 	var err error
+	var identity union.SourceIdentity
 	switch f := feature.(type) {
 	case union.ZoneFeature:
-		_, err = s.Pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,shape,jurisdiction,district_code,district_description,case_reference,official_url,source_date) VALUES($1,$2,$3,$4,ST_Multi(ST_GeomFromEWKB($5)), $6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),NULLIF($11,''))`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Jurisdiction, f.DistrictCode, f.Description, f.CaseReference, f.OfficialURL, f.SourceDate)
+		identity = f.SourceIdentity
+		_, err = s.Pool.Exec(ctx, `WITH input AS (SELECT ST_Multi(ST_GeomFromEWKB($5)) g),
+repair AS (SELECT g, ST_Multi(ST_CollectionExtract(ST_MakeValid(g),3)) fixed FROM input)
+INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2,jurisdiction,district_code,district_description,case_reference,official_url,source_date)
+SELECT $1,$2,$3,$4,
+CASE WHEN ST_IsValid(g) THEN g WHEN ST_IsValid(fixed) AND NOT ST_IsEmpty(fixed)
+AND abs(ST_Area(fixed)-ST_Area(g)) <= 0.01
+AND abs(ST_Area(fixed)-ST_Area(g)) <= 1e-8 * greatest(ST_Area(g),ST_Area(fixed))
+THEN fixed END,g,CASE WHEN ST_IsValid(g) THEN 'original' ELSE 'repaired' END,
+CASE WHEN ST_IsValid(g) THEN 0 ELSE abs(ST_Area(fixed)-ST_Area(g)) END,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),NULLIF($11,'') FROM repair`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Jurisdiction, f.DistrictCode, f.Description, f.CaseReference, f.OfficialURL, f.SourceDate)
 	case union.JurisdictionFeature:
-		_, err = s.Pool.Exec(ctx, `INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,source_srid,shape,name,source_date) VALUES($1,$2,$3,$4,ST_Multi(ST_GeomFromEWKB($5)),$6,NULLIF($7,''))`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Name, f.SourceDate)
+		identity = f.SourceIdentity
+		_, err = s.Pool.Exec(ctx, `WITH input AS (SELECT ST_Multi(ST_GeomFromEWKB($5)) g),
+repair AS (SELECT g, ST_Multi(ST_CollectionExtract(ST_MakeValid(g),3)) fixed FROM input)
+INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2,name,source_date)
+SELECT $1,$2,$3,$4,
+CASE WHEN ST_IsValid(g) THEN g WHEN ST_IsValid(fixed) AND NOT ST_IsEmpty(fixed)
+AND abs(ST_Area(fixed)-ST_Area(g)) <= 0.01
+AND abs(ST_Area(fixed)-ST_Area(g)) <= 1e-8 * greatest(ST_Area(g),ST_Area(fixed))
+THEN fixed END,g,CASE WHEN ST_IsValid(g) THEN 'original' ELSE 'repaired' END,
+CASE WHEN ST_IsValid(g) THEN 0 ELSE abs(ST_Area(fixed)-ST_Area(g)) END,$6,NULLIF($7,'') FROM repair`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Name, f.SourceDate)
 	case union.BoundaryFeature:
-		_, err = s.Pool.Exec(ctx, `INSERT INTO qualification_boundaries(generation_id,layer_id,source_id,source_srid,shape) VALUES($1,$2,$3,$4,ST_Multi(ST_GeomFromEWKB($5)))`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape)
+		identity = f.SourceIdentity
+		_, err = s.Pool.Exec(ctx, `WITH input AS (SELECT ST_Multi(ST_GeomFromEWKB($5)) g),
+repair AS (SELECT g, ST_Multi(ST_CollectionExtract(ST_MakeValid(g),3)) fixed FROM input)
+INSERT INTO qualification_boundaries(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2)
+SELECT $1,$2,$3,$4,
+CASE WHEN ST_IsValid(g) THEN g WHEN ST_IsValid(fixed) AND NOT ST_IsEmpty(fixed)
+AND abs(ST_Area(fixed)-ST_Area(g)) <= 0.01
+AND abs(ST_Area(fixed)-ST_Area(g)) <= 1e-8 * greatest(ST_Area(g),ST_Area(fixed))
+THEN fixed END,g,CASE WHEN ST_IsValid(g) THEN 'original' ELSE 'repaired' END,
+CASE WHEN ST_IsValid(g) THEN 0 ELSE abs(ST_Area(fixed)-ST_Area(g)) END FROM repair`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape)
 	case union.RoadFeature:
+		identity = f.SourceIdentity
 		_, err = s.Pool.Exec(ctx, `INSERT INTO qualification_roads(generation_id,layer_id,source_id,source_srid,shape,name,road_class,status,source_date) VALUES($1,$2,$3,$4,ST_Multi(ST_GeomFromEWKB($5)),NULLIF($6,''),NULLIF($7,''),NULLIF($8,''),$9)`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Name, f.Class, f.Status, f.SourceDate)
 	default:
 		return errors.New("unsupported qualification feature")
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("qualification feature layer %d OID %d: %w", identity.LayerID, identity.SourceID, err)
+	}
+	return nil
 }
 
 // Reconcile derives only stale parcel groups. A source or parcel change after a

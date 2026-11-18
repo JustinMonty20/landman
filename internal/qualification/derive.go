@@ -12,9 +12,9 @@ func (s Store) reconcileZoning(ctx context.Context, tx pgx.Tx, gen, method strin
 	}{
 		{`CREATE TEMP TABLE qualification_zone_shapes ON COMMIT DROP AS
  SELECT p.id parcel_id,z.layer_id,z.source_id,z.jurisdiction,z.district_code,
- ST_CollectionExtract(ST_Intersection(p.geom,ST_Transform(z.shape,2264)),3) geom
+ ST_CollectionExtract(ST_Transform(ST_CollectionExtract(ST_Intersection(p.shape,z.shape),3),2264),3) geom
  FROM qualification_zones z CROSS JOIN LATERAL
- (SELECT id,geom FROM qualification_targets WHERE shape && z.shape AND geom IS NOT NULL AND ST_Intersects(shape,z.shape) OFFSET 0) p
+ (SELECT id,shape,geom FROM qualification_targets WHERE shape && z.shape AND geom IS NOT NULL AND ST_Intersects(shape,z.shape) OFFSET 0) p
  WHERE z.generation_id=$1`, []any{gen}},
 		{`DELETE FROM qualification_zone_shapes WHERE ST_Area(geom)=0`, nil},
 		{`CREATE INDEX ON qualification_zone_shapes(parcel_id)`, nil},
@@ -32,9 +32,9 @@ func (s Store) reconcileZoning(ctx context.Context, tx pgx.Tx, gen, method strin
  ) conflicts WHERE ST_Area(geom)>0 GROUP BY parcel_id`, nil},
 		{`CREATE TEMP TABLE qualification_jurisdiction_shapes ON COMMIT DROP AS
 SELECT p.id parcel_id,j.layer_id,j.source_id,j.name,
-ST_CollectionExtract(ST_Intersection(p.geom,ST_Transform(j.shape,2264)),3) geom
+ST_CollectionExtract(ST_Transform(ST_CollectionExtract(ST_Intersection(p.shape,j.shape),3),2264),3) geom
 FROM qualification_jurisdictions j CROSS JOIN LATERAL
-(SELECT id,geom FROM qualification_targets WHERE shape && j.shape AND geom IS NOT NULL AND ST_Intersects(shape,j.shape) OFFSET 0) p
+(SELECT id,shape,geom FROM qualification_targets WHERE shape && j.shape AND geom IS NOT NULL AND ST_Intersects(shape,j.shape) OFFSET 0) p
 WHERE j.generation_id=$1`, []any{gen}},
 		{`DELETE FROM qualification_jurisdiction_shapes WHERE ST_Area(geom)=0`, nil},
 		{`CREATE INDEX ON qualification_jurisdiction_shapes(parcel_id)`, nil},
@@ -45,7 +45,7 @@ SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom)) geom FROM qualification_jurisdi
 SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom)) geom FROM (
 SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(a.geom,b.geom),3) geom
 FROM qualification_jurisdiction_shapes a JOIN qualification_jurisdiction_shapes b ON a.parcel_id=b.parcel_id AND
-(a.layer_id,a.source_id)<(b.layer_id,b.source_id) AND a.name IS DISTINCT FROM b.name
+(a.layer_id,a.source_id)<(b.layer_id,b.source_id) AND (a.layer_id,a.name) IS DISTINCT FROM (b.layer_id,b.name)
 WHERE a.geom && b.geom AND ST_Intersects(a.geom,b.geom)
 ) pairs WHERE ST_Area(geom)>0 GROUP BY parcel_id`, nil},
 		{`INSERT INTO qualification_assessments(parcel_id,source_group,generation_id,geometry_fingerprint,method_version,total_acres,unmapped_acres,ambiguous_acres,jurisdiction_unmapped_acres,jurisdiction_ambiguous_acres)
@@ -89,7 +89,7 @@ func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string
 	}{
 		{`CREATE TEMP TABLE qualification_distances ON COMMIT DROP AS
  SELECT p.id parcel_id,r.source_id,r.name,r.road_class,r.status,
- ST_Distance(p.geom,ST_Transform(r.shape,2264)) feet
+ CASE WHEN ST_Intersects(p.shape,r.shape) THEN 0 ELSE ST_Distance(p.geom,ST_Transform(r.shape,2264)) END feet
  FROM qualification_targets p CROSS JOIN LATERAL (
  SELECT source_id,name,road_class,status,shape FROM qualification_roads
  WHERE generation_id=$1 AND p.geom IS NOT NULL AND ST_Area(p.geom)>0
@@ -103,9 +103,10 @@ func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string
  NULLIF(ST_Area(p.geom)/43560,0),
  CASE WHEN p.geom IS NULL OR ST_Area(p.geom)=0 THEN 'missing_parcel_geometry'
  WHEN d.feet IS NULL THEN 'none_within_radius' ELSE 'nearest' END,d.feet,5280,
- EXISTS (SELECT 1 FROM qualification_boundaries b JOIN qualification_heads h ON h.source_group='zoning' AND h.generation_id=b.generation_id
- WHERE p.geom IS NOT NULL AND ST_DWithin(p.geom,ST_Boundary(ST_Transform(b.shape,2264)),5280))
- OR NOT EXISTS(SELECT 1 FROM qualification_heads WHERE source_group='zoning')
+ EXISTS (SELECT 1 FROM (SELECT ST_UnaryUnion(ST_Collect(b.shape)) shape FROM qualification_boundaries b
+ JOIN qualification_heads h ON h.source_group='zoning' AND h.generation_id=b.generation_id) b
+ WHERE p.geom IS NOT NULL AND (b.shape IS NULL OR NOT ST_Covers(b.shape,p.shape)
+ OR ST_DWithin(p.geom,ST_Boundary(ST_Transform(b.shape,2264)),5280)))
  FROM qualification_targets p LEFT JOIN (SELECT parcel_id,min(feet) feet FROM qualification_distances GROUP BY parcel_id) d ON d.parcel_id=p.id
  ON CONFLICT(parcel_id,source_group) DO UPDATE SET generation_id=excluded.generation_id,boundary_generation_id=excluded.boundary_generation_id,
  geometry_fingerprint=excluded.geometry_fingerprint,method_version=excluded.method_version,calculated_at=now(),

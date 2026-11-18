@@ -478,3 +478,18 @@ func TestCleanRepairUsesExistingDerivedExecutor(t *testing.T) {
 		t.Fatalf("outcome=%s result=%v refreshes=%d error=%v", outcome, result, refreshes, err)
 	}
 }
+
+func TestScheduledQualificationDoesNotRefreshSoil(t *testing.T) {
+	runner := &executingRunner{}
+	called := 0
+	executor := unionExecutor{runner: runner, refresh: func(context.Context) error { called++; return errors.New("soil refresh should not run") }}
+	scheduler, err := jobs.NewScheduler(executor, []jobs.Definition{{ID: qualificationJobID, Schedule: "CRON_TZ=UTC 0 4 * * *", Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scheduler.Stop()
+	outcome, _, err := scheduler.Run(context.Background(), qualificationJobID)
+	if err != nil || outcome != jobs.OutcomeSuccess || called != 0 {
+		t.Fatalf("scheduled qualification: outcome %s error %v soil refreshes %d", outcome, err, called)
+	}
+}

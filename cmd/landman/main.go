@@ -61,7 +61,10 @@ func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (job
 	defer cancel()
 	outcome, result, err := e.runner.Run(ctx, definition)
 	if err == nil && outcome == jobs.OutcomeSuccess {
-		if e.afterSource != nil && definition.ID != qualificationJobID {
+		if definition.ID == qualificationJobID {
+			return outcome, result, nil
+		}
+		if e.afterSource != nil {
 			err = e.afterSource(ctx, definition.ID)
 		} else {
 			err = e.refresh(ctx)
@@ -366,15 +369,13 @@ func withRefreshLock(ctx context.Context, dsn string, refresh func(context.Conte
 // under the same request budget without changing the scheduler.
 func withCountyHostLock(ctx context.Context, dsn string, fn func(context.Context) error) error {
 	return withAdvisoryLock(ctx, dsn, "county-host:atlas.unioncountync.gov", func(ctx context.Context) error {
-		err := fn(ctx)
-		if err != nil {
-			return err
-		}
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Second):
-			return nil
+		case <-timer.C:
+			return fn(ctx)
 		}
 	})
 }

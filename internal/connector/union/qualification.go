@@ -1,6 +1,7 @@
 package union
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -103,16 +104,49 @@ func layerByID(id int) (qualificationLayer, error) {
 
 func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, srid int) (QualificationFeature, error) {
 	var value map[string]interface{}
-	if err := json.Unmarshal(raw, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
 		return nil, err
 	}
 	attrs, ok := asMap(value["attributes"])
 	if !ok {
 		return nil, errors.New("missing attributes")
 	}
-	id, ok := intValue(attrs[spec.oid])
-	if !ok || id < 0 {
-		return nil, fmt.Errorf("missing %s", spec.oid)
+	oid, ok := attrs[spec.oid].(json.Number)
+	if !ok {
+		return nil, fmt.Errorf("missing or noninteger %s", spec.oid)
+	}
+	id, err := oid.Int64()
+	if err != nil || id < 0 {
+		return nil, fmt.Errorf("invalid %s", spec.oid)
+	}
+	fields := []string{spec.code, spec.description, spec.caseField, spec.dateField}
+	if spec.kind == QualificationRoads {
+		fields = append(fields, "FTR_CODE", "RoadClass", "STATUS")
+	}
+	for _, field := range fields {
+		if field == "" {
+			continue
+		}
+		v, exists := attrs[field]
+		if !exists {
+			return nil, fmt.Errorf("missing required attribute %s", field)
+		}
+		if v == nil {
+			continue
+		}
+		if spec.kind == QualificationRoads && field == spec.dateField {
+			n, valid := v.(json.Number)
+			if !valid {
+				return nil, fmt.Errorf("noninteger attribute %s", field)
+			}
+			if _, err := n.Int64(); err != nil {
+				return nil, fmt.Errorf("noninteger attribute %s: %w", field, err)
+			}
+		} else if _, valid := v.(string); !valid {
+			return nil, fmt.Errorf("nonstring attribute %s", field)
+		}
 	}
 	var shape geom.T
 	if spec.kind == QualificationRoads {
@@ -216,9 +250,12 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 		return BoundaryFeature{SourceIdentity: identity}, nil
 	case QualificationRoads:
 		var date *time.Time
-		if n, ok := intValue(attrs[spec.dateField]); ok && n > 0 {
-			t := time.UnixMilli(n).UTC()
-			date = &t
+		if rawDate, ok := attrs[spec.dateField].(json.Number); ok {
+			n, _ := rawDate.Int64()
+			if n > 0 {
+				t := time.UnixMilli(n).UTC()
+				date = &t
+			}
 		}
 		name := clean("FullName")
 		if name == "" {

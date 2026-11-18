@@ -62,6 +62,18 @@ type ZoningAssessment struct {
 	Jurisdictions              []JurisdictionHit `json:"jurisdictions"`
 	Freshness                  Freshness         `json:"freshness"`
 }
+
+// RoadState distinguishes a published source awaiting assessment from an absent source.
+type RoadState string
+
+const (
+	RoadSourceUnavailable     RoadState = "source_unavailable"
+	RoadPendingAssessment     RoadState = "pending_assessment"
+	RoadNearest               RoadState = "nearest"
+	RoadNoneWithinRadius      RoadState = "none_within_radius"
+	RoadMissingParcelGeometry RoadState = "missing_parcel_geometry"
+)
+
 type RoadAssessment struct {
 	ParcelID             string     `json:"parcel_id"`
 	Available            bool       `json:"available"`
@@ -70,7 +82,7 @@ type RoadAssessment struct {
 	GeometryFingerprint  string     `json:"geometry_fingerprint"`
 	MethodVersion        string     `json:"method_version"`
 	CalculatedAt         *time.Time `json:"calculated_at"`
-	State                string     `json:"state"`
+	State                RoadState  `json:"state"`
 	DistanceFeet         *float64   `json:"distance_feet"`
 	SearchRadiusFeet     int        `json:"search_radius_feet"`
 	CountyEdgeWarning    bool       `json:"county_edge_warning"`
@@ -95,10 +107,10 @@ func current(ctx context.Context, tx pgx.Tx, parcelID, group, method string) (cu
  a.boundary_generation_id::text,zh.generation_id::text,zg.fetched_at,zf.failed_at
  FROM qualification_assessments a JOIN parcels p ON p.id=a.parcel_id
  LEFT JOIN qualification_heads h ON h.source_group=a.source_group
- LEFT JOIN qualification_generations g ON g.id=h.generation_id
+ LEFT JOIN qualification_generations g ON g.id=a.generation_id
  LEFT JOIN qualification_refresh_failures f ON f.source_group=a.source_group
  LEFT JOIN qualification_heads zh ON zh.source_group='zoning'
- LEFT JOIN qualification_generations zg ON zg.id=zh.generation_id
+ LEFT JOIN qualification_generations zg ON zg.id=a.boundary_generation_id
  LEFT JOIN qualification_refresh_failures zf ON zf.source_group='zoning'
  WHERE a.parcel_id=$1 AND a.source_group=$2`, parcelID, group).Scan(&row.id, &row.geometry, &row.version, &row.calculated, &row.total, &head, &actual, &fetched, &row.fresh.RefreshFailedAt, &row.fresh.RefreshError, &row.boundary, &headBoundary, &boundaryFetched, &boundaryFailed)
 	if err != nil {
@@ -210,7 +222,7 @@ func CurrentZoning(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Zo
 
 // CurrentRoads returns a bounded distance, ties, and coverage warning, not legal access.
 func CurrentRoads(ctx context.Context, pool *pgxpool.Pool, parcelID string) (RoadAssessment, error) {
-	result := RoadAssessment{ParcelID: parcelID, State: "source_unavailable", SearchRadiusFeet: 5280, Ties: []RoadTie{}, Freshness: Freshness{Reasons: []string{}}}
+	result := RoadAssessment{ParcelID: parcelID, State: RoadSourceUnavailable, SearchRadiusFeet: 5280, Ties: []RoadTie{}, Freshness: Freshness{Reasons: []string{}}}
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return result, err
@@ -219,6 +231,9 @@ func CurrentRoads(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Roa
 	base, err := current(ctx, tx, parcelID, union.QualificationRoads, RoadsMethod)
 	if errors.Is(err, pgx.ErrNoRows) {
 		result.Freshness, err = unavailable(ctx, tx, union.QualificationRoads)
+		if result.Freshness.SourceFetchedAt != nil {
+			result.State = RoadPendingAssessment
+		}
 		return result, err
 	}
 	if err != nil {
@@ -231,10 +246,12 @@ func CurrentRoads(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Roa
 	result.MethodVersion = base.version
 	result.CalculatedAt = &base.calculated
 	result.Freshness = base.fresh
-	err = tx.QueryRow(ctx, `SELECT road_state,road_distance_feet,road_search_radius_feet,county_edge_warning FROM qualification_assessments WHERE parcel_id=$1 AND source_group='roads'`, parcelID).Scan(&result.State, &result.DistanceFeet, &result.SearchRadiusFeet, &result.CountyEdgeWarning)
+	var roadState string
+	err = tx.QueryRow(ctx, `SELECT road_state,road_distance_feet,road_search_radius_feet,county_edge_warning FROM qualification_assessments WHERE parcel_id=$1 AND source_group='roads'`, parcelID).Scan(&roadState, &result.DistanceFeet, &result.SearchRadiusFeet, &result.CountyEdgeWarning)
 	if err != nil {
 		return result, err
 	}
+	result.State = RoadState(roadState)
 	for _, reason := range result.Freshness.Reasons {
 		if reason == "boundary_source_age_or_unavailable" || reason == "boundary_source_refresh_failed" || reason == "boundary_generation_changed" {
 			result.CountyEdgeWarning = true

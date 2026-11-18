@@ -27,6 +27,9 @@ CREATE TABLE qualification_zones (
     source_date TEXT,
     source_srid INTEGER NOT NULL,
     shape GEOMETRY(MultiPolygon,3857) NOT NULL,
+raw_shape GEOMETRY(MultiPolygon,3857) NOT NULL,
+repair_status TEXT NOT NULL CHECK (repair_status IN ('original','repaired')),
+repair_delta_m2 DOUBLE PRECISION NOT NULL CHECK (repair_delta_m2 >= 0 AND repair_delta_m2 <= 0.01),
     PRIMARY KEY (generation_id,layer_id,source_id),
     CHECK (ST_IsValid(shape) AND NOT ST_IsEmpty(shape))
 );
@@ -39,6 +42,9 @@ CREATE TABLE qualification_jurisdictions (
     source_date TEXT,
     source_srid INTEGER NOT NULL,
     shape GEOMETRY(MultiPolygon,3857) NOT NULL,
+raw_shape GEOMETRY(MultiPolygon,3857) NOT NULL,
+repair_status TEXT NOT NULL CHECK (repair_status IN ('original','repaired')),
+repair_delta_m2 DOUBLE PRECISION NOT NULL CHECK (repair_delta_m2 >= 0 AND repair_delta_m2 <= 0.01),
     PRIMARY KEY (generation_id,layer_id,source_id),
     CHECK (ST_IsValid(shape) AND NOT ST_IsEmpty(shape))
 );
@@ -49,6 +55,9 @@ CREATE TABLE qualification_boundaries (
     source_id BIGINT NOT NULL,
     source_srid INTEGER NOT NULL,
     shape GEOMETRY(MultiPolygon,3857) NOT NULL,
+raw_shape GEOMETRY(MultiPolygon,3857) NOT NULL,
+repair_status TEXT NOT NULL CHECK (repair_status IN ('original','repaired')),
+repair_delta_m2 DOUBLE PRECISION NOT NULL CHECK (repair_delta_m2 >= 0 AND repair_delta_m2 <= 0.01),
     PRIMARY KEY (generation_id,layer_id,source_id),
     CHECK (ST_IsValid(shape) AND NOT ST_IsEmpty(shape))
 );

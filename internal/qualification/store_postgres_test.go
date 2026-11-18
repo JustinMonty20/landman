@@ -60,7 +60,7 @@ func TestQualificationSpatialAndFreshness(t *testing.T) {
 	}
 	polygon := func(id int, code, wkt string) {
 		t.Helper()
-		_, e := pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,source_srid,shape) VALUES($1,190,$2,'Union County',$3,2264,ST_Multi(ST_Transform(ST_GeomFromText($4,2264),3857)))`, zone, id, code, wkt)
+		_, e := pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES($1,190,$2,'Union County',$3,2264,ST_Multi(ST_Transform(ST_GeomFromText($4,2264),3857)),ST_Multi(ST_Transform(ST_GeomFromText($4,2264),3857)),'original',0)`, zone, id, code, wkt)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -69,15 +69,15 @@ func TestQualificationSpatialAndFreshness(t *testing.T) {
 	polygon(2, "B", "POLYGON((200 0,400 0,400 100,200 100,200 0))")
 	polygon(3, "B", "POLYGON((250 0,300 0,300 100,250 100,250 0))")
 	polygon(4, "C", "POLYGON((435.6 0,500 0,500 100,435.6 100,435.6 0))")
-	_, e = pool.Exec(ctx, `INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,shape) VALUES($1,194,7,'ETJ',2264,ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((0 0,400 0,400 100,0 100,0 0))',2264),3857)))`, zone)
+	_, e = pool.Exec(ctx, `INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES($1,194,7,'ETJ',2264,ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((0 0,400 0,400 100,0 100,0 0))',2264),3857)),ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((0 0,400 0,400 100,0 100,0 0))',2264),3857)),'original',0)`, zone)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = pool.Exec(ctx, `INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,shape) VALUES($1,195,8,'Municipality',2264,ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((100 0,200 0,200 100,100 100,100 0))',2264),3857)))`, zone)
+	_, e = pool.Exec(ctx, `INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES($1,195,8,'Municipality',2264,ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((100 0,200 0,200 100,100 100,100 0))',2264),3857)),ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((100 0,200 0,200 100,100 100,100 0))',2264),3857)),'original',0)`, zone)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = pool.Exec(ctx, `INSERT INTO qualification_boundaries(generation_id,source_id,source_srid,shape) VALUES($1,1,2264,ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((-1000 -1000,450 -1000,450 1000,-1000 1000,-1000 -1000))',2264),3857)))`, zone)
+	_, e = pool.Exec(ctx, `INSERT INTO qualification_boundaries(generation_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES($1,1,2264,ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((-1000 -1000,450 -1000,450 1000,-1000 1000,-1000 -1000))',2264),3857)),ST_Multi(ST_Transform(ST_GeomFromText('POLYGON((-1000 -1000,450 -1000,450 1000,-1000 1000,-1000 -1000))',2264),3857)),'original',0)`, zone)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -147,16 +147,16 @@ func TestQualificationSpatialAndFreshness(t *testing.T) {
 		id        int
 		code, wkt string
 	}{{1, "A", "POLYGON((0 0,200 0,200 100,0 100,0 0))"}, {2, "B", "POLYGON((200 0,435.6 0,435.6 100,200 100,200 0))"}} {
-		_, e = pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,jurisdiction,district_code,shape) VALUES($1,190,$2,2264,'Union County',$3,ST_Multi(ST_Transform(ST_GeomFromText($4,2264),3857)))`, zoneReplacement, district.id, district.code, district.wkt)
+		_, e = pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,jurisdiction,district_code,shape,raw_shape,repair_status,repair_delta_m2) VALUES($1,190,$2,2264,'Union County',$3,ST_Multi(ST_Transform(ST_GeomFromText($4,2264),3857)),ST_Multi(ST_Transform(ST_GeomFromText($4,2264),3857)),'original',0)`, zoneReplacement, district.id, district.code, district.wkt)
 		if e != nil {
 			t.Fatal(e)
 		}
 	}
-	_, e = pool.Exec(ctx, `INSERT INTO qualification_jurisdictions SELECT $1,layer_id,source_id,name,source_date,source_srid,shape FROM qualification_jurisdictions WHERE generation_id=$2`, zoneReplacement, zone)
+	_, e = pool.Exec(ctx, `INSERT INTO qualification_jurisdictions SELECT $1,layer_id,source_id,name,source_date,source_srid,shape,raw_shape,repair_status,repair_delta_m2 FROM qualification_jurisdictions WHERE generation_id=$2`, zoneReplacement, zone)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = pool.Exec(ctx, `INSERT INTO qualification_boundaries SELECT $1,layer_id,source_id,source_srid,shape FROM qualification_boundaries WHERE generation_id=$2`, zoneReplacement, zone)
+	_, e = pool.Exec(ctx, `INSERT INTO qualification_boundaries SELECT $1,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2 FROM qualification_boundaries WHERE generation_id=$2`, zoneReplacement, zone)
 	if e != nil {
 		t.Fatal(e)
 	}
