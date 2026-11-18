@@ -12,23 +12,59 @@ import (
 )
 
 const (
-	ZoningMethod = "full-overlay-exclusive/1; EPSG:2264; acres=ftUS^2/43560"
-	RoadsMethod  = "full-shape-nearest/1; EPSG:2264; radius=5280ft; ties<=0.01ft"
+	ZoningMethod = "stored-overlay-measured/2; EPSG:2264; acres=ftUS^2/43560"
+	RoadsMethod  = "stored-nearest-measured/2; EPSG:2264; radius=5280ft; ties<=0.01ft"
 	maxSourceAge = 90 * 24 * time.Hour
 )
 
 // Store owns retained qualification generations and typed parcel evidence.
 type Store struct{ Pool *pgxpool.Pool }
 
-func (s Store) Refresh(ctx context.Context, source *union.GISSource, group string) (processed int, err error) {
+func (s Store) recordRefreshFailure(group string, started time.Time, err error) {
+	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = s.Pool.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,failed_at,error)
+SELECT $1,$2,$3 WHERE NOT EXISTS (
+SELECT 1 FROM qualification_heads h JOIN qualification_generations g ON g.id=h.generation_id
+WHERE h.source_group=$1 AND g.fetched_at>$2)
+ON CONFLICT(source_group) DO UPDATE SET failed_at=excluded.failed_at,error=excluded.error
+WHERE qualification_refresh_failures.failed_at<=excluded.failed_at`, group, started, err.Error())
+}
+
+// RefreshWithGate includes lock acquisition in the source attempt. A failed
+// waiter records failure without replacing the previously published generation.
+func (s Store) RefreshWithGate(ctx context.Context, source *union.GISSource, group string, gate func(context.Context, func(context.Context) error) error) (processed int, err error) {
 	if group != union.QualificationZoning && group != union.QualificationRoads {
 		return 0, fmt.Errorf("invalid qualification group %s", group)
 	}
+	started := time.Now().UTC()
+	entered := false
+	var refreshErr error
+	err = gate(ctx, func(work context.Context) error {
+		entered = true
+		processed, refreshErr = s.refresh(work, source, group, started)
+		return refreshErr
+	})
+	if err != nil && !entered {
+		s.recordRefreshFailure(group, started, err)
+	} else if err != nil && refreshErr == nil {
+		// The source published, but the host gate itself failed after the callback.
+		s.recordRefreshFailure(group, time.Now().UTC(), err)
+	}
+	return processed, err
+}
+
+func (s Store) Refresh(ctx context.Context, source *union.GISSource, group string) (int, error) {
+	if group != union.QualificationZoning && group != union.QualificationRoads {
+		return 0, fmt.Errorf("invalid qualification group %s", group)
+	}
+	return s.refresh(ctx, source, group, time.Now().UTC())
+}
+
+func (s Store) refresh(ctx context.Context, source *union.GISSource, group string, started time.Time) (processed int, err error) {
 	defer func() {
 		if err != nil {
-			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_, _ = s.Pool.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,error) VALUES($1,$2) ON CONFLICT(source_group) DO UPDATE SET failed_at=now(),error=excluded.error`, group, err.Error())
+			s.recordRefreshFailure(group, started, err)
 		}
 	}()
 	var gen string
@@ -67,7 +103,7 @@ func (s Store) Refresh(ctx context.Context, source *union.GISSource, group strin
 	if _, e = tx.Exec(ctx, `INSERT INTO qualification_heads(source_group,generation_id) VALUES($1,$2) ON CONFLICT(source_group) DO UPDATE SET generation_id=excluded.generation_id`, group, gen); e != nil {
 		return processed, e
 	}
-	if _, e = tx.Exec(ctx, `DELETE FROM qualification_refresh_failures WHERE source_group=$1`, group); e != nil {
+	if _, e = tx.Exec(ctx, `DELETE FROM qualification_refresh_failures WHERE source_group=$1 AND failed_at<=$2`, group, started); e != nil {
 		return processed, e
 	}
 	if e = tx.Commit(ctx); e != nil {
@@ -101,7 +137,7 @@ CASE WHEN ST_IsValid(g) THEN g WHEN ST_IsValid(fixed) AND NOT ST_IsEmpty(fixed)
 AND abs(ST_Area(fixed)-ST_Area(g)) <= 0.01
 AND abs(ST_Area(fixed)-ST_Area(g)) <= 1e-8 * greatest(ST_Area(g),ST_Area(fixed))
 THEN fixed END,g,CASE WHEN ST_IsValid(g) THEN 'original' ELSE 'repaired' END,
-CASE WHEN ST_IsValid(g) THEN 0 ELSE abs(ST_Area(fixed)-ST_Area(g)) END,$6,NULLIF($7,'') FROM repair`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Name, f.SourceDate)
+CASE WHEN ST_IsValid(g) THEN 0 ELSE abs(ST_Area(fixed)-ST_Area(g)) END,$6,$7 FROM repair`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Name, f.SourceDate)
 	case union.BoundaryFeature:
 		identity = f.SourceIdentity
 		_, err = s.Pool.Exec(ctx, `WITH input AS (SELECT ST_Multi(ST_GeomFromEWKB($5)) g),
@@ -190,7 +226,7 @@ func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(shape,2264),3) END geom FROM parcels WHERE id=ANY($1::uuid[])`, ids); err != nil {
+	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Simplify(shape,0),2264),3) END geom FROM parcels WHERE id=ANY($1::uuid[])`, ids); err != nil {
 		return 0, err
 	}
 	for _, sql := range []string{`CREATE UNIQUE INDEX ON qualification_targets(id)`, `CREATE INDEX ON qualification_targets USING GIST(shape)`, `ANALYZE qualification_targets`} {

@@ -35,7 +35,7 @@ type ZoneHit struct {
 type JurisdictionHit struct {
 	LayerID    int     `json:"layer_id"`
 	SourceID   int64   `json:"source_id"`
-	Name       string  `json:"name"`
+	Name       *string `json:"name"`
 	SourceDate *string `json:"source_date"`
 	Area       Area    `json:"area"`
 }
@@ -173,7 +173,8 @@ func CurrentZoning(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Zo
 	result.CalculatedAt = &base.calculated
 	result.TotalAcres = base.total
 	result.Freshness = base.fresh
-	if err = tx.QueryRow(ctx, `SELECT unmapped_acres,ambiguous_acres,jurisdiction_unmapped_acres,jurisdiction_ambiguous_acres FROM qualification_assessments WHERE parcel_id=$1 AND source_group='zoning'`, parcelID).Scan(&result.UnmappedAcres, &result.AmbiguousAcres, &result.JurisdictionUnmappedAcres, &result.JurisdictionAmbiguousAcres); err != nil {
+	var hasConflict bool
+	if err = tx.QueryRow(ctx, `SELECT unmapped_acres,ambiguous_acres,jurisdiction_unmapped_acres,jurisdiction_ambiguous_acres,has_zone_conflict FROM qualification_assessments WHERE parcel_id=$1 AND source_group='zoning'`, parcelID).Scan(&result.UnmappedAcres, &result.AmbiguousAcres, &result.JurisdictionUnmappedAcres, &result.JurisdictionAmbiguousAcres, &hasConflict); err != nil {
 		return result, err
 	}
 	rows, err := tx.Query(ctx, `SELECT h.layer_id,h.source_id,h.jurisdiction,h.district_code,h.acres,h.share,z.district_description,z.case_reference,z.official_url,z.source_date FROM qualification_zone_hits h JOIN qualification_assessments a ON a.parcel_id=h.parcel_id AND a.source_group='zoning' JOIN qualification_zones z ON z.generation_id=a.generation_id AND z.layer_id=h.layer_id AND z.source_id=h.source_id WHERE h.parcel_id=$1 ORDER BY h.layer_id,h.source_id`, parcelID)
@@ -193,7 +194,7 @@ func CurrentZoning(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Zo
 	if err != nil {
 		return result, err
 	}
-	rows, err = tx.Query(ctx, `SELECT h.layer_id,h.source_id,h.name,h.acres,h.share,j.source_date FROM qualification_jurisdiction_hits h JOIN qualification_assessments a ON a.parcel_id=h.parcel_id AND a.source_group='zoning' JOIN qualification_jurisdictions j ON j.generation_id=a.generation_id AND j.layer_id=h.layer_id AND j.source_id=h.source_id WHERE h.parcel_id=$1 ORDER BY h.layer_id,h.source_id`, parcelID)
+	rows, err = tx.Query(ctx, `SELECT h.layer_id,h.source_id,NULLIF(h.name,''),h.acres,h.share,j.source_date FROM qualification_jurisdiction_hits h JOIN qualification_assessments a ON a.parcel_id=h.parcel_id AND a.source_group='zoning' JOIN qualification_jurisdictions j ON j.generation_id=a.generation_id AND j.layer_id=h.layer_id AND j.source_id=h.source_id WHERE h.parcel_id=$1 ORDER BY h.layer_id,h.source_id`, parcelID)
 	if err != nil {
 		return result, err
 	}
@@ -216,7 +217,7 @@ func CurrentZoning(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Zo
 			districts[hit.Jurisdiction+"\x00"+*hit.DistrictCode] = true
 		}
 	}
-	result.Split = len(districts) > 1 && result.AmbiguousAcres < 1e-7
+	result.Split = len(districts) > 1 && !hasConflict
 	return result, tx.Commit(ctx)
 }
 

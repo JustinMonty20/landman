@@ -17,6 +17,9 @@ import (
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/ewkb"
 	"github.com/twpayne/go-geom/xy"
+	"github.com/twpayne/go-geom/xy/lineintersection"
+	"github.com/twpayne/go-geom/xy/lineintersector"
+	"github.com/twpayne/go-geom/xy/location"
 )
 
 const (
@@ -210,7 +213,7 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 		for _, hole := range holes {
 			contained := false
 			for _, shell := range shells {
-				if ringInsideShell(hole, shell) {
+				if qualificationRingInsideShell(hole, shell) {
 					contained = true
 					break
 				}
@@ -219,7 +222,7 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 				return nil, errors.New("polygon hole is not inside a source shell")
 			}
 		}
-		polygon := geometryShape(value)
+		polygon := geometryShapeWithRingCheck(value, qualificationRingInsideShell)
 		if polygon == nil {
 			return nil, errors.New("invalid polygon rings")
 		}
@@ -495,4 +498,53 @@ func (s *GISSource) qualificationGet(ctx context.Context, u string) ([]byte, err
 		}
 	}
 	return nil, errors.New("qualification request exhausted")
+}
+
+// Qualification polygons permit one shared shell/hole vertex, but not shared
+// edges or boundary crossings. Parcel ring interpretation stays unchanged.
+func qualificationRingInsideShell(ring, shell []float64) bool {
+	touching := false
+	var contact geom.Coord
+	for i := 0; i < len(ring)-2; i += 2 {
+		point := geom.Coord(ring[i : i+2])
+		switch xy.LocatePointInRing(geom.XY, point, shell) {
+		case location.Exterior:
+			return false
+		case location.Boundary:
+			if touching {
+				return false
+			}
+			found := false
+			for j := 0; j < len(shell)-2; j += 2 {
+				if point[0] == shell[j] && point[1] == shell[j+1] {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+			touching = true
+			contact = point
+		}
+	}
+	for i := 0; i < len(ring)-2; i += 2 {
+		point := geom.Coord(ring[i : i+2])
+		for j := 0; j < len(shell)-2; j += 2 {
+			intersection := lineintersector.LineIntersectsLine(lineintersector.RobustLineIntersector{},
+				point, geom.Coord(ring[i+2:i+4]), geom.Coord(shell[j:j+2]), geom.Coord(shell[j+2:j+4]))
+			if !intersection.HasIntersection() {
+				continue
+			}
+			if intersection.Type() != lineintersection.PointIntersection || len(intersection.Intersection()) != 1 {
+				return false
+			}
+			hit := intersection.Intersection()[0]
+			if !touching || hit[0] != contact[0] || hit[1] != contact[1] ||
+				!((hit[0] == shell[j] && hit[1] == shell[j+1]) || (hit[0] == shell[j+2] && hit[1] == shell[j+3])) {
+				return false
+			}
+		}
+	}
+	return true
 }

@@ -43,6 +43,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 
 - Prefer simplicity over cleverness.
 - When assigning polygon rings to shells, verify full boundary containment, including edges crossing concave shells; one interior vertex is not sufficient.
+- For spatial evidence, finish intersection, coverage, conflict, and gap topology in the stored CRS. Independently projecting polygon pieces before overlay can invent shared-edge gaps, overlaps, and invalid shapes; transform only completed measured geometries. Classify conflict by positive stored-area topology, not an acreage threshold.
 - Prefer composition over conditional branches.
 - Abstract on shared intent, not surface similarity.
 - Avoid nested conditionals; extract functions that narrow the branching surface.

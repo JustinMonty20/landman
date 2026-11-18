@@ -220,10 +220,10 @@ func run(ctx context.Context) error {
 		for _, entry := range []struct{ id, group string }{{zoningJobID, union.QualificationZoning}, {roadsJobID, union.QualificationRoads}} {
 			group := entry.group
 			definitions = append(definitions, jobs.Definition{ID: entry.id, Schedule: calendar[entry.id], Run: func(ctx context.Context) (jobs.Result, error) {
-				return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) {
-					n, e := qstore.Refresh(ctx, gisSource, group)
-					return jobs.Result{Processed: n}, e
+				n, e := qstore.RefreshWithGate(ctx, gisSource, group, func(ctx context.Context, work func(context.Context) error) error {
+					return withCountyHostLock(ctx, dsn, work)
 				})
+				return jobs.Result{Processed: n}, e
 			}})
 		}
 	}

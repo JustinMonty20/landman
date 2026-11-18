@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -144,6 +145,45 @@ func fixtureHandler(t *testing.T, id int, mutate func(*http.Request, int, string
 		return http.StatusOK, body
 	}
 }
+func TestQualificationPointTouchHoleAndUnknownName(t *testing.T) {
+	for _, tc := range []struct {
+		name, rings string
+		valid       bool
+	}{
+		{"point-touch", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[0,0],[2,1],[1,2.5],[0,0]]]`, true},
+		{"edge-cross", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[2,2],[12,2],[12,4],[2,4],[2,2]]]`, false},
+		{"concave-cross", `[[[0,0],[0,10],[3,10],[3,3],[7,3],[7,10],[10,10],[10,0],[0,0]],[[2,2],[8,2],[8,5],[2,5],[2,2]]]`, false},
+		{"exterior-hole", `[[[0,0],[0,10],[10,10],[10,0],[0,0]],[[20,20],[30,20],[30,30],[20,30],[20,20]]]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, _ := layerByID(195)
+			raw := json.RawMessage(fmt.Sprintf(`{"attributes":{"OBJECTID":1,"NAME":null,"LAST_UPDATE":null},"geometry":{"rings":%s}}`, tc.rings))
+			feature, err := parseQualificationFeature(spec, raw, 3857)
+			if !tc.valid {
+				if err == nil {
+					t.Fatalf("accepted invalid hole %T", feature)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			jurisdiction := feature.(JurisdictionFeature)
+			if jurisdiction.Name != "" {
+				t.Fatalf("null NAME converted to authority %q", jurisdiction.Name)
+			}
+			shape, err := ewkb.Unmarshal(jurisdiction.Shape)
+			if err != nil {
+				t.Fatal(err)
+			}
+			polygon, ok := shape.(*geom.Polygon)
+			if !ok || polygon.NumLinearRings() != 2 || math.Abs(polygon.Area()) != 98 {
+				t.Fatalf("point-touch hole lost: %T rings=%d area=%g", shape, polygon.NumLinearRings(), polygon.Area())
+			}
+		})
+	}
+}
+
 func TestQualificationRejectsUncontainedHole(t *testing.T) {
 	spec, err := layerByID(221)
 	if err != nil {
