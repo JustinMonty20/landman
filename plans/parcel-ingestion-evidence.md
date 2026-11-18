@@ -73,7 +73,8 @@ The design comparison used the configured GPT-6 Sol and GPT-6 Luna models. The c
 - [x] Verify publication failure, cancellation, stable UUIDs, fallback IDs, last-part precedence, omitted-sale deletion, and foreign-key integrity.
 - [x] Verify migration on an empty database and a populated pre-evidence fixture. Do not invent historical evidence during migration.
 - [x] Measure a representative full-import fixture on an empty migrated database and after a failed first import. Include foreign-key checks and omitted-sale deletion in query measurements. Preserve the ten-minute limit. Synthetic fixture results do not prove live county performance.
-- [ ] Run local Go CI equivalents, relevant PostGIS tests, and independent code review. Record selected checks and specific incomplete gates before handoff.
+- [x] Run local Go CI equivalents, relevant PostGIS tests, and independent code review. Record selected checks and specific incomplete gates before handoff.
+- [ ] Complete the cross-vendor decision-trail audit. xAI HTTP 402 blocks this check until account credits or a subscription are available. No audit pass is claimed.
 - [ ] Open a matching PR and stop at parcels. Do not merge or extend the contract to other ingestion methods.
 
 ## Throughput checkpoint

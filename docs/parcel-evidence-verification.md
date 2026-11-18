@@ -25,6 +25,8 @@ Persisted dependency tests distinguish owner-only changes, geometry changes, exp
 
 Migration 24 passed on empty and populated disposable databases.
 The populated fixture retained its parcel, sale, IDs, content, geometry, timestamps, and previous job attempt exactly.
+The built replay command also passed with HTTP proxies pointed at a closed local port.
+It retained the parcel UUID and original observation time without source freshness or soil work.
 The migration created no historical source evidence. Rollback and reapplication passed.
 
 The decimal fingerprint regression fails with the original signed rounding helper and passes with the correction.
@@ -45,7 +47,10 @@ These are single-run synthetic deadline and correctness results. They do not est
 
 Local logs and input hashes are under `artifacts/verify/parcel-ingestion-evidence/` and remain outside Git.
 The repository review tool records the candidate commit, diff, input hashes, and receipt hashes.
-A separate model reviews the committed code and the receipts before the PR handoff.
+GPT-6 Luna independently reviewed the committed code and the receipts. The final focused review passed.
+The branch then rebased onto a browser-only main update. The receipt checker reported `UNCHANGED PATCH`.
+The cross-vendor decision-trail audit did not run. xAI returned HTTP 402 for insufficient credits or subscription access.
+This access failure is not a code failure or an audit pass. The PR is for operator review, not a merge-ready claim.
 
 Local storage requires backups. No automatic retention expiry or cloud backend is added.
 Checksums do not prove source authenticity. Offset pagination does not prove remote snapshot isolation.
