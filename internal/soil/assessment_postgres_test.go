@@ -791,3 +791,44 @@ func TestPostgresAssessmentFailedRefreshAndCancellationAreAtomic(t *testing.T) {
 		t.Fatal("duplicate membership reached USDA")
 	}
 }
+
+func TestPostgresMetadataPreservesLegacySurveyDate(t *testing.T) {
+	f := newAssessmentFixture(t)
+	parcelID := f.parcel("legacy-date", f.box(0, 0, 100, 100), true)
+	polygon := f.polygon("legacy", "115341", 0, 100)
+	f.store([]Polygon{polygon})
+	legacyDate := time.Date(2025, 7, 8, 0, 0, 0, 0, time.UTC)
+	if _, err := f.db.Exec(f.ctx, `UPDATE soil_polygons SET survey_saved_on=$2 WHERE source_name=$1 AND object_id='legacy'`, f.source, legacyDate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(f.ctx, `UPDATE soil_map_units SET map_unit_name='Retained name' WHERE map_unit_key=$1`, polygon.MapUnitKey); err != nil {
+		t.Fatal(err)
+	}
+	version := 6.0
+	polygon.SpatialVersion = &version
+	polygon.SurveySavedOn = nil
+	tx, err := f.db.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(f.ctx)
+	setID, err := StoreMetadataWithSetTx(f.ctx, tx, county.Union, f.source, []Polygon{polygon}, f.units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.setID = setID
+	f.screen([]Polygon{polygon})
+	assessment := f.read(parcelID)
+	for _, use := range assessment.Uses {
+		for _, unit := range use.MapUnits {
+			for _, evidence := range unit.Polygons {
+				if evidence.SurveySavedOn == nil || evidence.SurveySavedOn.Format("2006-01-02") != "2025-07-08" {
+					t.Fatalf("legacy survey date lost on metadata refresh: %+v", evidence)
+				}
+			}
+		}
+	}
+}

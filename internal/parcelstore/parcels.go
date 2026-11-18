@@ -20,7 +20,6 @@ type ShapeWriter struct {
 	tx              pgx.Tx
 	partsSaved      int
 	geometryChanged bool
-	businessChanged bool
 }
 
 // NewShapeWriter opens one import transaction from the supplied connection string.

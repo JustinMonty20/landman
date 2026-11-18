@@ -326,6 +326,16 @@ func TestLiveParcelPublicationRequestsDerivedHandoff(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT request_generation FROM parcel_derived_handoff`).Scan(&after); err != nil || after != generation {
 		t.Fatalf("unchanged parcel advanced derived generation: %d -> %d (%v)", generation, after, err)
 	}
+	fixture.features = []map[string]interface{}{feature(1, "A", "new owner", true, 0)}
+	if out, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || out != jobs.OutcomeSuccess {
+		t.Fatalf("ownership-only import: %s %v", out, err)
+	}
+	if countRows(t, ctx, pool, "parcel_evidence_history") != 2 || countRows(t, ctx, pool, "parcel_derived_handoff") != 1 {
+		t.Fatal("ownership-only import lost history or enqueued derived work")
+	}
+	if err := pool.QueryRow(ctx, `SELECT request_generation FROM parcel_derived_handoff`).Scan(&after); err != nil || after != generation {
+		t.Fatalf("ownership-only import advanced derived generation: %d -> %d (%v)", generation, after, err)
+	}
 }
 
 func TestReplayDerivedHandoffPersistsAcrossPendingScreening(t *testing.T) {
@@ -355,6 +365,11 @@ func TestReplayDerivedHandoffPersistsAcrossPendingScreening(t *testing.T) {
 		t.Fatalf("unchanged current replay advanced derived generation: %d -> %d (%v)", generation, after, err)
 	}
 	t.Setenv("DATABASE_URL", dsn)
+	blockedRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedRoot, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PARCEL_EVIDENCE_DIR", filepath.Join(blockedRoot, "soil"))
 	args := os.Args
 	defer func() { os.Args = args }()
 	os.Args = []string{"landman", "run", qualificationJobID}

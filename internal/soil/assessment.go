@@ -125,7 +125,16 @@ func copyUnchangedAssessment(ctx context.Context, tx pgx.Tx, runID, setID string
  JOIN soil_polygon_sets old_set ON old_set.id=prev.soil_set_id
  JOIN soil_polygon_sets new_set ON new_set.id=$3
  WHERE h.county_id=$1 AND h.source_name=$2
- AND prev.assessment_method=$4 AND old_set.fingerprint=new_set.fingerprint
+ AND prev.assessment_method=$4
+ AND (SELECT count(*) FROM soil_polygon_set_members WHERE set_id=old_set.id) =
+     (SELECT count(*) FROM soil_polygon_set_members WHERE set_id=new_set.id)
+ AND NOT EXISTS (
+   SELECT 1 FROM soil_polygon_set_members old_member
+   LEFT JOIN soil_polygon_set_members new_member ON new_member.set_id=new_set.id AND new_member.polygon_id=old_member.polygon_id
+   WHERE old_member.set_id=old_set.id AND (new_member.polygon_id IS NULL
+     OR old_member.map_unit_key IS DISTINCT FROM new_member.map_unit_key
+     OR ST_AsEWKB(old_member.shape) IS DISTINCT FROM ST_AsEWKB(new_member.shape))
+ )
  AND (SELECT count(*) FROM soil_parcel_assessments a WHERE a.run_id=prev.id) =
      (SELECT count(*) FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2)
  AND NOT EXISTS (

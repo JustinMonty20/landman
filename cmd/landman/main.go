@@ -234,16 +234,19 @@ func run(ctx context.Context) error {
 		return result, err
 	}
 	artifactRoot := os.Getenv("PARCEL_EVIDENCE_DIR")
-	if artifactRoot == "" {
+	if artifactRoot == "" && mode != taxJobID && mode != "tax-replay" && mode != qualificationJobID {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
 		}
 		artifactRoot = home + "/.local/share/landman/parcel-evidence"
 	}
-	soilArtifacts, err := taxartifact.NewLocal(artifactRoot)
-	if err != nil {
-		return err
+	var soilArtifacts taxartifact.Store
+	if mode != taxJobID && mode != "tax-replay" && mode != qualificationJobID && mode != "replay" && mode != "reprocess" {
+		soilArtifacts, err = taxartifact.NewLocal(artifactRoot)
+		if err != nil {
+			return err
+		}
 	}
 	geometryJob := soiljob.Job{Source: gisSource, Pool: pool, Artifacts: soilArtifacts}
 	screeningJob := soiljob.ScreeningJob{Pool: pool, Artifacts: soilArtifacts, Client: http.DefaultClient, Interval: interval}

@@ -117,10 +117,9 @@ VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
 			return result, fmt.Errorf("remove obsolete foreclosure parcel links: %w", err)
 		}
 	}
-	// Typed rows are the active file's membership; provenance on surviving rows
-	// remains the file that last changed their business values.
-	if _, err := tx.Exec(ctx, `DELETE FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name=$2 AND NOT (id::text = ANY($3::text[]))`, county.Union, meta.Name, seenCases); err != nil {
-		return result, fmt.Errorf("remove cases absent from foreclosure file: %w", err)
+	// Membership changes independently of retained identity, links, and provenance.
+	if _, err := tx.Exec(ctx, `UPDATE tax_foreclosure_cases SET active=(id::text = ANY($3::text[])) WHERE county_id=$1 AND source_name=$2 AND active IS DISTINCT FROM (id::text = ANY($3::text[]))`, county.Union, meta.Name, seenCases); err != nil {
+		return result, fmt.Errorf("update foreclosure membership: %w", err)
 	}
 	if err := ActivateImport(ctx, tx, id); err != nil {
 		return result, err

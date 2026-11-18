@@ -295,4 +295,21 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	if amount != "14355.03" {
 		t.Fatal(fmt.Sprintf("stale replay rolled back balance to %s", amount))
 	}
+	// A corrected typed projection and an absent link can coincide on replay.
+	if _, err := pool.Exec(ctx, `UPDATE tax_ingest_publications SET canonical_sha256=decode(repeat('00',32),'hex'),canonical_version='legacy',normalization_version='legacy' WHERE source_name='union_delinquent'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM tax_delinquent_balances WHERE parcel_id=(SELECT id FROM parcels WHERE source_parcel_id='09125043')`); err != nil {
+		t.Fatal(err)
+	}
+	var correctedCapture string
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_latest_observations WHERE source_name='union_delinquent'`).Scan(&correctedCapture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Replay(ctx, pool, cfg.ArtifactDir, correctedCapture); err != nil {
+		t.Fatal(err)
+	}
+	if n := taxCount(t, pool, `SELECT count(*) FROM tax_ingest_history WHERE cause='normalization_correction' AND table_name='tax_delinquent_balances' AND after_value IS NOT NULL`); n == 0 {
+		t.Fatal("corrected projection relink attributed to offline retry")
+	}
 }

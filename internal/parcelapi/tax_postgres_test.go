@@ -75,10 +75,17 @@ func TestTaxActiveFeedIdentity(t *testing.T) {
 	}
 	f = file(3)
 	var caseID string
-	if err = tx.QueryRow(ctx, `INSERT INTO tax_foreclosure_cases(county_id,source_name,case_number,parcel_set_sha256,legal_sha256,status,redeemed,bidding_closed,source_url,file_sha256,fetched_at) VALUES('union',$1,'CASE',decode(repeat('01',32),'hex'),decode(repeat('02',32),'hex'),'closed',true,true,$2,decode($3,'hex'),'2026-01-02') RETURNING id::text`, f[0], f[1], f[2]).Scan(&caseID); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO tax_foreclosure_cases(county_id,source_name,case_number,parcel_set_sha256,legal_sha256,status,redeemed,bidding_closed,source_url,file_sha256,fetched_at,active) VALUES('union',$1,'CASE',decode(repeat('01',32),'hex'),decode(repeat('02',32),'hex'),'closed',true,true,$2,decode($3,'hex'),'2026-01-02',true) RETURNING id::text`, f[0], f[1], f[2]).Scan(&caseID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO tax_foreclosure_parcels(case_id,parcel_id) VALUES($1,$2)`, caseID, parcel); err != nil {
+		t.Fatal(err)
+	}
+	var omittedID string
+	if err = tx.QueryRow(ctx, `INSERT INTO tax_foreclosure_cases(county_id,source_name,case_number,parcel_set_sha256,legal_sha256,source_url,file_sha256,fetched_at) VALUES('union',$1,NULL,decode(repeat('03',32),'hex'),decode(repeat('04',32),'hex'),$2,decode(repeat('05',32),'hex'),'2026-01-01') RETURNING id::text`, f[0], f[1]).Scan(&omittedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO tax_foreclosure_parcels(case_id,parcel_id) VALUES($1,$2)`, omittedID, parcel); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -86,7 +93,7 @@ func TestTaxActiveFeedIdentity(t *testing.T) {
 	}
 	defer func() {
 		pool.Exec(context.Background(), "DELETE FROM tax_file_imports WHERE source_name=ANY($1)", names)
-		pool.Exec(context.Background(), "DELETE FROM tax_foreclosure_cases WHERE id=$1", caseID)
+		pool.Exec(context.Background(), "DELETE FROM tax_foreclosure_cases WHERE id=$1 OR id=$2", caseID, omittedID)
 	}()
 	get := func(id string) map[string]any {
 		t.Helper()
@@ -116,6 +123,9 @@ func TestTaxActiveFeedIdentity(t *testing.T) {
 				t.Fatalf("missing identity %s %v", key, v)
 			}
 		}
+	}
+	if len(tax["foreclosure_cases"].([]any)) != 1 {
+		t.Fatal("retained omitted case was served as current")
 	}
 	if tax["pipeline"].([]any)[0].(map[string]any)["redeemed"] != true || tax["foreclosure_cases"].([]any)[0].(map[string]any)["bidding_closed"] != true {
 		t.Fatal("foreclosure status lost")

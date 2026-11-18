@@ -464,6 +464,22 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 			}
 		}
 	}
+	fixture = bytes.Replace(fixture, []byte(`"SPATIALVER":6`), []byte(`"SPATIALVER":7`), 1)
+	if !bytes.Contains(fixture, []byte(`"SPATIALVER":7`)) {
+		t.Fatal("metadata revision fixture not found")
+	}
+	run()
+	if _, err := pool.Exec(ctx, `TRUNCATE soil_test_intersection_attempts`); err != nil {
+		t.Fatal(err)
+	}
+	screenImport()
+	if read("soil_test_intersection_attempts") != 0 {
+		t.Fatal("metadata-only county to screening refresh recomputed intersections")
+	}
+	assessment, err = soil.CurrentAssessment(ctx, pool, county.Union, polygonSource, parcelID)
+	if err != nil || !assessment.Available {
+		t.Fatalf("metadata-only screening assessment unavailable: %+v %v", assessment, err)
+	}
 }
 
 type testUSDATransport func(*http.Request) (*http.Response, error)

@@ -270,14 +270,14 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 		return err
 	}
 	cause := decision.Cause
-	if sameBytes && missing {
+	if sameBytes && missing && sameProjection {
 		cause = ingest.OfflineRetry
+	}
+	if sameBytes && !sameProjection {
+		cause = ingest.NormalizationCorrection
 	}
 	if cause == "" {
 		cause = ingest.SourceObservation
-		if sameBytes && !sameProjection {
-			cause = ingest.NormalizationCorrection
-		}
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('landman.tax_change_cause',$1,true)`, string(cause)); err != nil {
 		return err

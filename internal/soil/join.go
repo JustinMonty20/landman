@@ -150,7 +150,7 @@ func StoreMetadataWithSetTx(ctx context.Context, tx pgx.Tx, countyID county.ID, 
 		return "", err
 	}
 	for _, polygon := range polygons {
-		tag, err := tx.Exec(ctx, `UPDATE soil_polygons SET map_unit_key=$4,spatial_version=$5,survey_saved_on=$6 WHERE county_id=$1 AND source_name=$2 AND object_id=$3`, countyID.String(), source, polygon.ObjectID, polygon.MapUnitKey, polygon.SpatialVersion, polygon.SurveySavedOn)
+		tag, err := tx.Exec(ctx, `UPDATE soil_polygons SET map_unit_key=$4,spatial_version=$5,survey_saved_on=CASE WHEN soil_polygons.map_unit_key=$4 THEN COALESCE($6,soil_polygons.survey_saved_on) ELSE $6 END WHERE county_id=$1 AND source_name=$2 AND object_id=$3`, countyID.String(), source, polygon.ObjectID, polygon.MapUnitKey, polygon.SpatialVersion, polygon.SurveySavedOn)
 		if err != nil {
 			return "", err
 		}

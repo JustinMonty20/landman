@@ -199,8 +199,8 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 			}
 		}
 	}
-	if w.businessChanged {
-		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_derived_handoff(artifact_id,screening_pending,qualification_pending) VALUES ($1,$2,true) ON CONFLICT (artifact_id) DO UPDATE SET requested_at=clock_timestamp(),request_generation=parcel_derived_handoff.request_generation+1,screening_pending=parcel_derived_handoff.screening_pending OR EXCLUDED.screening_pending,qualification_pending=true`, manifest.ID, w.geometryChanged); err != nil {
+	if w.geometryChanged {
+		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_derived_handoff(artifact_id,screening_pending,qualification_pending) VALUES ($1,true,true) ON CONFLICT (artifact_id) DO UPDATE SET requested_at=clock_timestamp(),request_generation=parcel_derived_handoff.request_generation+1,screening_pending=true,qualification_pending=true`, manifest.ID); err != nil {
 			return 0, err
 		}
 	}
@@ -348,7 +348,6 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 		return 0, err
 	}
-	w.businessChanged = true
 	if oldGeometry == nil || *oldGeometry != geometryHash {
 		w.geometryChanged = true
 	}

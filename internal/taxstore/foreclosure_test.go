@@ -143,9 +143,34 @@ WHERE case_number IS NULL AND parcel_set_sha256=$1 AND legal_sha256=$2`, pinHash
 	if result, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{numbered}, meta, skipped); err != nil || result.SavedCases != 1 || result.SavedJoins != 1 || result.Unmatched != 0 {
 		t.Fatalf("new number=%+v err=%v", result, err)
 	}
-	var sameNull int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_cases WHERE id=$1 AND case_number IS NULL`, nullID).Scan(&sameNull); err != nil || sameNull != 0 {
-		t.Fatalf("omitted TBD case remained active: %d err=%v", sameNull, err)
+	var sameNull, retainedLinks int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_cases WHERE id=$1 AND case_number IS NULL AND NOT active`, nullID).Scan(&sameNull); err != nil || sameNull != 1 {
+		t.Fatalf("omitted TBD case not retained inactive: %d err=%v", sameNull, err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_parcels WHERE case_id=$1`, nullID).Scan(&retainedLinks); err != nil || retainedLinks != 1 {
+		t.Fatalf("omitted TBD links not retained: %d err=%v", retainedLinks, err)
+	}
+	original, err := os.ReadFile(filepath.Join("..", "connector", "union", "testdata", "tax", "foreclosure.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := filepath.Join(t.TempDir(), "formatted.pdf")
+	if err := os.WriteFile(formatted, append(original, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	formattedList, err := union.NewForeclosureList(formatted, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formattedMeta, err := formattedList.Read(ctx, func(union.ForeclosureCase) error { return nil })
+	if err != nil || formattedMeta.SHA256 == meta.SHA256 {
+		t.Fatalf("format-only fixture failed: %v", err)
+	}
+	if _, err := taxstore.SaveForeclosure(ctx, tx, []union.ForeclosureCase{numbered}, formattedMeta, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_foreclosure_cases WHERE id=$1 AND NOT active`, nullID).Scan(&sameNull); err != nil || sameNull != 1 {
+		t.Fatalf("format-only import reactivated omitted case: %d %v", sameNull, err)
 	}
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM parcels`).Scan(&after); err != nil || before != after {
 		t.Fatalf("parcels before=%d after=%d err=%v", before, after, err)

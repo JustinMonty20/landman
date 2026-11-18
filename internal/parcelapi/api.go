@@ -779,7 +779,7 @@ func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
-	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('case_number',t.case_number,'status',t.status,'sale_on',t.sale_on,'opening_bid',t.opening_bid::text,'current_bid',t.current_bid::text,'upset_bid',t.upset_bid::text,'redeemed',t.redeemed,'bidding_closed',t.bidding_closed,'source',t.source_name,'source_url',t.source_url,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex'))),'[]'::jsonb) FROM tax_foreclosure_cases t JOIN tax_foreclosure_parcels fp ON fp.case_id=t.id `+active+` WHERE fp.parcel_id=$1`, id).Scan(&cases)
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('case_number',t.case_number,'status',t.status,'sale_on',t.sale_on,'opening_bid',t.opening_bid::text,'current_bid',t.current_bid::text,'upset_bid',t.upset_bid::text,'redeemed',t.redeemed,'bidding_closed',t.bidding_closed,'source',t.source_name,'source_url',t.source_url,'fetched_at',t.fetched_at,'sha256',encode(t.file_sha256,'hex'))),'[]'::jsonb) FROM tax_foreclosure_cases t JOIN tax_foreclosure_parcels fp ON fp.case_id=t.id `+active+` WHERE fp.parcel_id=$1 AND t.active`, id).Scan(&cases)
 	if e != nil {
 		unavailable(w)
 		return
