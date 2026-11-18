@@ -93,16 +93,16 @@ $effect(() => {
   <div class="map-actions">
     <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={showRegion}>Show all counties</button>
     <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={() => onselect(selected)}>Locate selected county</button>
+    <div class="source">Boundaries: U.S. Census Bureau · Display only</div>
   </div>
-  <div class="source">Boundaries: U.S. Census Bureau · Display only</div>
   {#if failed}<p class="failure" role="status">Map unavailable. Open County coverage to select a county.</p>{/if}
 </div>
 <style>
 .map-frame { position: relative; height: 100%; min-height: 380px; }
 .canvas { position: absolute; inset: 0; }
-.map-actions { position: absolute; bottom: 100px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
-.failure, .source { position: absolute; background: var(--surface); padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; pointer-events: none; }
-.source { bottom: 10px; left: 12px; font-size: 10px; }
-.failure { bottom: 155px; left: 12px; right: 12px; }
+.map-actions { position: absolute; bottom: 12px; left: 12px; right: 150px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.failure, .source { background: var(--surface); padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; pointer-events: none; }
+.source { font-size: 10px; }
+.failure { position: absolute; bottom: 155px; left: 12px; right: 12px; }
 :global(.county-map-label) { color: #f0f2f5; background: #24272be8; border: 1px solid #727b88; border-radius: 4px; padding: 4px 7px; font-size: 11px; line-height: 1.3; white-space: pre; cursor: pointer; }
 </style>

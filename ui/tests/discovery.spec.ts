@@ -44,6 +44,21 @@ test('clicking Union opens filters and preserves panel preferences across zoom l
   await expect(page.getByRole('heading', { name: 'Filter Union parcels' })).toBeVisible();
 });
 
+test('map navigation remains clickable with both county panels open', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Inspect Union, NC', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Parcel filters' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Matching parcels' })).toBeVisible();
+  await page.getByRole('button', { name: 'Locate selected county', exact: true }).click();
+  await page.getByRole('button', { name: 'Show all counties', exact: true }).click();
+  await expect(page.getByRole('searchbox')).toHaveCount(0);
+  await expect(page.locator('.county-map-label:visible')).toHaveCount(9);
+  await page.getByRole('button', { name: 'Locate selected county', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Parcel filters' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Matching parcels' })).toBeVisible();
+  await page.screenshot({ path: `test-results/${test.info().project.name}-open-panel-navigation.png` });
+});
+
 test('zoom and map movement change detail without changing the selected county', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Inspect Union, NC', exact: true }).click();
