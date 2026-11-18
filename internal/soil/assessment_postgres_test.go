@@ -832,3 +832,41 @@ func TestPostgresMetadataPreservesLegacySurveyDate(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresFullSoilWriterRetainsSurveyDateOnlyForSameMapUnit(t *testing.T) {
+	f := newAssessmentFixture(t)
+	parcelID := f.parcel("full-writer-date", f.box(0, 0, 100, 100), true)
+	polygon := f.polygon("full-writer", "115341", 0, 100)
+	f.store([]Polygon{polygon})
+	legacyDate := time.Date(2025, 7, 8, 0, 0, 0, 0, time.UTC)
+	if _, err := f.db.Exec(f.ctx, `UPDATE soil_polygons SET survey_saved_on=$2 WHERE source_name=$1 AND object_id='full-writer'`, f.source, legacyDate); err != nil {
+		t.Fatal(err)
+	}
+	// The full writer must handle a repeated polygon even when no new USDA date arrives.
+	f.store([]Polygon{polygon})
+	var date *time.Time
+	if err := f.db.QueryRow(f.ctx, `SELECT survey_saved_on FROM soil_polygons WHERE source_name=$1 AND object_id='full-writer'`, f.source).Scan(&date); err != nil || date == nil || !date.Equal(legacyDate) {
+		t.Fatalf("same-key date = %v: %v", date, err)
+	}
+	// A named target unit does not need a USDA name request and supplies no new date.
+	var name *string
+	if err := f.db.QueryRow(f.ctx, `SELECT map_unit_name FROM soil_map_units WHERE map_unit_key='115330'`).Scan(&name); err != nil || name == nil {
+		t.Fatalf("target map unit must already have its name: %v %v", name, err)
+	}
+	polygon.MapUnitKey = "115330"
+	f.store([]Polygon{polygon})
+	if err := f.db.QueryRow(f.ctx, `SELECT survey_saved_on FROM soil_polygons WHERE source_name=$1 AND object_id='full-writer'`, f.source).Scan(&date); err != nil || date != nil {
+		t.Fatalf("changed-key date = %v: %v", date, err)
+	}
+	f.screen([]Polygon{polygon})
+	assessment := f.read(parcelID)
+	for _, use := range assessment.Uses {
+		for _, unit := range use.MapUnits {
+			for _, evidence := range unit.Polygons {
+				if evidence.SurveySavedOn != nil {
+					t.Fatalf("old map unit date leaked into current assessment: %+v", evidence)
+				}
+			}
+		}
+	}
+}

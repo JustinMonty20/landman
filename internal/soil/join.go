@@ -200,7 +200,7 @@ func storePolygons(ctx context.Context, tx pgx.Tx, countyID county.ID, source st
   ) VALUES ($1,$2,$3,$4,$5,$6,ST_GeomFromEWKB($7),$8)
   ON CONFLICT (county_id, source_name, object_id) DO UPDATE SET
    map_unit_key=EXCLUDED.map_unit_key, spatial_version=EXCLUDED.spatial_version,
-   survey_saved_on=COALESCE(EXCLUDED.survey_saved_on, soil_polygons.survey_saved_on),
+   survey_saved_on=CASE WHEN soil_polygons.map_unit_key=EXCLUDED.map_unit_key THEN COALESCE(EXCLUDED.survey_saved_on, soil_polygons.survey_saved_on) ELSE EXCLUDED.survey_saved_on END,
    shape=EXCLUDED.shape, fetched_at=EXCLUDED.fetched_at`, countyID.String(), source, polygon.ObjectID, polygon.MapUnitKey, polygon.SpatialVersion, survey, shape, now); err != nil {
 			return "", err
 		}

@@ -496,3 +496,16 @@ func TestScheduledQualificationDoesNotRefreshSoil(t *testing.T) {
 		t.Fatalf("scheduled qualification: outcome %s error %v soil refreshes %d", outcome, err, called)
 	}
 }
+
+func TestRepairDispatchOpensScreeningStoreOnlyWhenNeeded(t *testing.T) {
+	for _, mode := range []string{"reprocess", parcelJobID, soilJobID, screeningJobID, "screening-replay", "soil-replay", "schedule", "all"} {
+		if !needsSoilArtifacts(mode) {
+			t.Errorf("%s needs a screening artifact store", mode)
+		}
+	}
+	for _, mode := range []string{zoningJobID, roadsJobID, taxJobID, "tax-replay", qualificationJobID, "replay"} {
+		if needsSoilArtifacts(mode) {
+			t.Errorf("%s must not open a screening artifact store", mode)
+		}
+	}
+}

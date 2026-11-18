@@ -171,6 +171,15 @@ func main() {
 	}
 }
 
+func needsSoilArtifacts(mode string) bool {
+	switch mode {
+	case taxJobID, "tax-replay", qualificationJobID, "replay", zoningJobID, roadsJobID:
+		return false
+	default:
+		return true
+	}
+}
+
 func run(ctx context.Context) error {
 	mode, err := command(os.Args[1:])
 	if err != nil {
@@ -242,7 +251,7 @@ func run(ctx context.Context) error {
 		artifactRoot = home + "/.local/share/landman/parcel-evidence"
 	}
 	var soilArtifacts taxartifact.Store
-	if mode != taxJobID && mode != "tax-replay" && mode != qualificationJobID && mode != "replay" && mode != "reprocess" {
+	if needsSoilArtifacts(mode) {
 		soilArtifacts, err = taxartifact.NewLocal(artifactRoot)
 		if err != nil {
 			return err
