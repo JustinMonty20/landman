@@ -26,7 +26,7 @@ func (s Store) recordRefreshFailure(group string, started time.Time, err error) 
 	_, _ = s.Pool.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,failed_at,error)
 SELECT $1,$2,$3 WHERE NOT EXISTS (
 SELECT 1 FROM qualification_heads h JOIN qualification_generations g ON g.id=h.generation_id
-WHERE h.source_group=$1 AND g.fetched_at>$2)
+WHERE h.source_group=$1 AND g.started_at>$2)
 ON CONFLICT(source_group) DO UPDATE SET failed_at=excluded.failed_at,error=excluded.error
 WHERE qualification_refresh_failures.failed_at<=excluded.failed_at`, group, started, err.Error())
 }
@@ -68,7 +68,7 @@ func (s Store) refresh(ctx context.Context, source *union.GISSource, group strin
 		}
 	}()
 	var gen string
-	if err = s.Pool.QueryRow(ctx, `INSERT INTO qualification_generations(source_group) VALUES($1) RETURNING id::text`, group).Scan(&gen); err != nil {
+	if err = s.Pool.QueryRow(ctx, `INSERT INTO qualification_generations(source_group,started_at) VALUES($1,$2) RETURNING id::text`, group, started).Scan(&gen); err != nil {
 		return 0, err
 	}
 	for _, id := range union.QualificationLayers(group) {

@@ -281,4 +281,14 @@ func TestOlderSuccessfulPublicationKeepsNewerFailure(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT error FROM qualification_refresh_failures WHERE source_group='roads'`).Scan(&failure); err != nil || failure != "newer failure" {
 		t.Fatalf("older failure replaced newer status: %q %v", failure, err)
 	}
+	if _, err := pool.Exec(ctx, `DELETE FROM qualification_refresh_failures WHERE source_group='roads'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE qualification_generations SET started_at=now()-interval '1 minute' WHERE id=$1`, generations[1]); err != nil {
+		t.Fatal(err)
+	}
+	store.recordRefreshFailure(union.QualificationRoads, time.Now().Add(-30*time.Second), errors.New("failed waiter after older holder"))
+	if err := pool.QueryRow(ctx, `SELECT error FROM qualification_refresh_failures WHERE source_group='roads'`).Scan(&failure); err != nil || failure != "failed waiter after older holder" {
+		t.Fatalf("older holder's later generation suppressed failed waiter: %q %v", failure, err)
+	}
 }
