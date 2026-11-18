@@ -724,7 +724,7 @@ func (h *Handler) sources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var soilPublished []byte
-	e = tx.QueryRow(r.Context(), `SELECT jsonb_build_object('soil_set_id',s.set_id,'run_id',h.run_id,'fresh_until',r.fresh_until,'refresh_failed_at',COALESCE(h.refresh_failed_at,rs.failed_at)) FROM soil_screening_heads h LEFT JOIN soil_polygon_set_heads s ON s.county_id=h.county_id AND s.source_name=h.source_name LEFT JOIN soil_screening_runs r ON r.id=h.run_id LEFT JOIN soil_screening_refresh_status rs ON rs.county_id=h.county_id AND rs.source_name=h.source_name WHERE h.county_id=$1 AND h.source_name=$2`, countyID, parcelSource).Scan(&soilPublished)
+	e = tx.QueryRow(r.Context(), `SELECT jsonb_build_object('soil_set_id',r.soil_set_id,'current_soil_set_id',s.set_id,'run_id',h.run_id,'fresh_until',r.fresh_until,'refresh_failed_at',COALESCE(h.refresh_failed_at,rs.failed_at),'geometry_set_changed',r.soil_set_id IS DISTINCT FROM s.set_id) FROM soil_screening_heads h LEFT JOIN soil_polygon_set_heads s ON s.county_id=h.county_id AND s.source_name=h.source_name LEFT JOIN soil_screening_runs r ON r.id=h.run_id LEFT JOIN soil_screening_refresh_status rs ON rs.county_id=h.county_id AND rs.source_name=h.source_name WHERE h.county_id=$1 AND h.source_name=$2`, countyID, parcelSource).Scan(&soilPublished)
 	if errors.Is(e, pgx.ErrNoRows) {
 		soilPublished = []byte("null")
 	} else if e != nil {
@@ -732,7 +732,7 @@ func (h *Handler) sources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var successes []byte
-	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('job_id',job_id,'outcome',outcome,'started_at',started_at,'finished_at',finished_at) ORDER BY job_id),'[]'::jsonb) FROM (SELECT DISTINCT ON (job_id) job_id,outcome,started_at,finished_at FROM job_attempts WHERE job_id IN ('union.gis.parcels','union.gis.soil','union.soil.screening','union.tax') AND outcome='success' ORDER BY job_id,started_at DESC) last_success`).Scan(&successes)
+	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('job_id',job_id,'outcome',outcome,'started_at',started_at,'finished_at',finished_at) ORDER BY job_id),'[]'::jsonb) FROM (SELECT DISTINCT ON (job_id) job_id,outcome,started_at,finished_at FROM job_attempts WHERE job_id IN ('union.gis.parcels','union.gis.soil','union.soil.screening','union.tax') AND outcome='success' AND (job_id <> 'union.gis.parcels' OR attempt_kind='full_scan') ORDER BY job_id,started_at DESC) last_success`).Scan(&successes)
 	if e != nil {
 		unavailable(w)
 		return
