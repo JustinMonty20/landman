@@ -124,7 +124,16 @@ func TestQualificationGroupPublicationAndRetirement(t *testing.T) {
 		t.Fatalf("retained old generation: %d %v", count, e)
 	}
 	e = pool.QueryRow(ctx, `SELECT count(*) FROM qualification_refresh_failures WHERE source_group='roads'`).Scan(&count)
-	if e != nil || count != 0 {
-		t.Fatalf("failure not cleared: %d %v", count, e)
+	if e != nil || count != 1 {
+		t.Fatalf("failure observation not retained: %d %v", count, e)
+	}
+	readTx, e := pool.Begin(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer readTx.Rollback(ctx)
+	fresh, e := unavailable(ctx, readTx, union.QualificationRoads)
+	if e != nil || fresh.RefreshFailedAt != nil {
+		t.Fatalf("superseded failure still active: %+v %v", fresh, e)
 	}
 }

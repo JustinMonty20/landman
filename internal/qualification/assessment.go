@@ -108,10 +108,12 @@ func current(ctx context.Context, tx pgx.Tx, parcelID, group, method string) (cu
  FROM qualification_assessments a JOIN parcels p ON p.id=a.parcel_id
  LEFT JOIN qualification_heads h ON h.source_group=a.source_group
  LEFT JOIN qualification_generations g ON g.id=a.generation_id
- LEFT JOIN qualification_refresh_failures f ON f.source_group=a.source_group
+ LEFT JOIN qualification_generations hg ON hg.id=h.generation_id
+ LEFT JOIN qualification_refresh_failures f ON f.source_group=a.source_group AND (hg.started_at IS NULL OR f.failed_at>=hg.started_at)
  LEFT JOIN qualification_heads zh ON zh.source_group='zoning'
  LEFT JOIN qualification_generations zg ON zg.id=a.boundary_generation_id
- LEFT JOIN qualification_refresh_failures zf ON zf.source_group='zoning'
+ LEFT JOIN qualification_generations zheadg ON zheadg.id=zh.generation_id
+ LEFT JOIN qualification_refresh_failures zf ON zf.source_group='zoning' AND (zheadg.started_at IS NULL OR zf.failed_at>=zheadg.started_at)
  WHERE a.parcel_id=$1 AND a.source_group=$2`, parcelID, group).Scan(&row.id, &row.geometry, &row.version, &row.calculated, &row.total, &head, &actual, &fetched, &row.fresh.RefreshFailedAt, &row.fresh.RefreshError, &row.boundary, &headBoundary, &boundaryFetched, &boundaryFailed)
 	if err != nil {
 		return row, err
@@ -281,7 +283,7 @@ func CurrentRoads(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Roa
 func unavailable(ctx context.Context, tx pgx.Tx, group string) (Freshness, error) {
 	result := Freshness{Stale: true, Reasons: []string{"not_assessed"}}
 	var head *string
-	err := tx.QueryRow(ctx, `SELECT h.generation_id::text,g.fetched_at,f.failed_at,f.error FROM (SELECT $1::text source_group) input LEFT JOIN qualification_heads h ON h.source_group=input.source_group LEFT JOIN qualification_generations g ON g.id=h.generation_id LEFT JOIN qualification_refresh_failures f ON f.source_group=input.source_group`, group).Scan(&head, &result.SourceFetchedAt, &result.RefreshFailedAt, &result.RefreshError)
+	err := tx.QueryRow(ctx, `SELECT h.generation_id::text,g.fetched_at,f.failed_at,f.error FROM (SELECT $1::text source_group) input LEFT JOIN qualification_heads h ON h.source_group=input.source_group LEFT JOIN qualification_generations g ON g.id=h.generation_id LEFT JOIN qualification_refresh_failures f ON f.source_group=input.source_group AND (g.started_at IS NULL OR f.failed_at>=g.started_at)`, group).Scan(&head, &result.SourceFetchedAt, &result.RefreshFailedAt, &result.RefreshError)
 	if err != nil {
 		return result, err
 	}

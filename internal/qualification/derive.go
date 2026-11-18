@@ -10,50 +10,69 @@ func (s Store) reconcileZoning(ctx context.Context, tx pgx.Tx, gen, method strin
 		sql  string
 		args []any
 	}{
-		{`CREATE TEMP TABLE qualification_zone_shapes ON COMMIT DROP AS
+		{`CREATE TEMP TABLE qualification_zone_sources ON COMMIT DROP AS
  SELECT p.id parcel_id,z.layer_id,z.source_id,z.jurisdiction,z.district_code,
- ST_CollectionExtract(ST_Intersection(p.shape,z.shape),3) geom
+ ST_ReducePrecision(z.shape,0.000001) geom,
+ ST_Area(ST_CollectionExtract(ST_Intersection(p.shape,z.shape),3)) original_area
  FROM qualification_zones z CROSS JOIN LATERAL
  (SELECT id,shape,geom FROM qualification_targets WHERE shape && z.shape AND geom IS NOT NULL AND ST_Intersects(shape,z.shape) OFFSET 0) p
  WHERE z.generation_id=$1`, []any{gen}},
+		{`DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_zone_sources WHERE original_area>0 AND ST_Area(geom)=0) THEN
+ RAISE EXCEPTION 'analysis precision collapsed a required zone'; END IF; END $$`, nil},
+		{`CREATE TEMP TABLE qualification_zone_shapes ON COMMIT DROP AS
+ SELECT s.parcel_id,s.layer_id,s.source_id,s.jurisdiction,s.district_code,
+ ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,0.000001),3) geom
+ FROM qualification_zone_sources s JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
+		{`DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_zone_sources s WHERE s.original_area>0 AND NOT EXISTS (SELECT 1 FROM qualification_zone_shapes h WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND ST_Area(h.geom)>0)) THEN RAISE EXCEPTION 'analysis precision collapsed a required zone hit'; END IF; END $$`, nil},
 		{`DELETE FROM qualification_zone_shapes WHERE ST_Area(geom)=0`, nil},
 		{`CREATE INDEX ON qualification_zone_shapes(parcel_id)`, nil},
 		{`ANALYZE qualification_zone_shapes`, nil},
 		{`CREATE TEMP TABLE qualification_coverage ON COMMIT DROP AS
- SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom)) geom FROM qualification_zone_shapes GROUP BY parcel_id`, nil},
+ SELECT s.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_UnaryUnion(ST_Collect(s.geom),0.000001),0.000001),3) geom
+ FROM qualification_zone_sources s JOIN qualification_targets p ON p.id=s.parcel_id GROUP BY s.parcel_id,p.analysis_geom`, nil},
 		{`CREATE TEMP TABLE qualification_ambiguity ON COMMIT DROP AS
- SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom)) geom FROM (
- SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(a.geom,b.geom),3) geom
- FROM qualification_zone_shapes a JOIN qualification_zone_shapes b ON a.parcel_id=b.parcel_id AND
+ SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom),0.000001) geom FROM (
+ SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_Intersection(a.geom,b.geom,0.000001),0.000001),3) geom
+ FROM qualification_zone_sources a JOIN qualification_zone_sources b ON a.parcel_id=b.parcel_id
+ JOIN qualification_targets p ON p.id=a.parcel_id AND
  (a.layer_id,a.source_id)<(b.layer_id,b.source_id)
  WHERE (a.jurisdiction,a.district_code) IS DISTINCT FROM (b.jurisdiction,b.district_code)
  AND a.geom && b.geom AND ST_Intersects(a.geom,b.geom)
  UNION ALL SELECT parcel_id,geom FROM qualification_zone_shapes WHERE district_code IS NULL
  ) conflicts WHERE ST_Area(geom)>0 GROUP BY parcel_id`, nil},
-		{`CREATE TEMP TABLE qualification_jurisdiction_shapes ON COMMIT DROP AS
-SELECT p.id parcel_id,j.layer_id,j.source_id,j.name,
-ST_CollectionExtract(ST_Intersection(p.shape,j.shape),3) geom
+		{`CREATE TEMP TABLE qualification_jurisdiction_sources ON COMMIT DROP AS
+SELECT p.id parcel_id,j.layer_id,j.source_id,j.name,ST_ReducePrecision(j.shape,0.000001) geom,
+ST_Area(ST_CollectionExtract(ST_Intersection(p.shape,j.shape),3)) original_area
 FROM qualification_jurisdictions j CROSS JOIN LATERAL
 (SELECT id,shape,geom FROM qualification_targets WHERE shape && j.shape AND geom IS NOT NULL AND ST_Intersects(shape,j.shape) OFFSET 0) p
 WHERE j.generation_id=$1`, []any{gen}},
+		{`DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_jurisdiction_sources WHERE original_area>0 AND ST_Area(geom)=0) THEN
+ RAISE EXCEPTION 'analysis precision collapsed a required jurisdiction'; END IF; END $$`, nil},
+		{`CREATE TEMP TABLE qualification_jurisdiction_shapes ON COMMIT DROP AS
+SELECT s.parcel_id,s.layer_id,s.source_id,s.name,
+ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,0.000001),3) geom
+FROM qualification_jurisdiction_sources s JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
+		{`DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_jurisdiction_sources s WHERE s.original_area>0 AND NOT EXISTS (SELECT 1 FROM qualification_jurisdiction_shapes h WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND ST_Area(h.geom)>0)) THEN RAISE EXCEPTION 'analysis precision collapsed a required jurisdiction hit'; END IF; END $$`, nil},
 		{`DELETE FROM qualification_jurisdiction_shapes WHERE ST_Area(geom)=0`, nil},
 		{`CREATE INDEX ON qualification_jurisdiction_shapes(parcel_id)`, nil},
 		{`ANALYZE qualification_jurisdiction_shapes`, nil},
 		{`CREATE TEMP TABLE qualification_jurisdiction_coverage ON COMMIT DROP AS
-SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom)) geom FROM qualification_jurisdiction_shapes GROUP BY parcel_id`, nil},
+SELECT s.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_UnaryUnion(ST_Collect(s.geom),0.000001),0.000001),3) geom
+ FROM qualification_jurisdiction_sources s JOIN qualification_targets p ON p.id=s.parcel_id GROUP BY s.parcel_id,p.analysis_geom`, nil},
 		{`CREATE TEMP TABLE qualification_jurisdiction_conflicts ON COMMIT DROP AS
-SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom)) geom FROM (
-SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(a.geom,b.geom),3) geom
-FROM qualification_jurisdiction_shapes a JOIN qualification_jurisdiction_shapes b ON a.parcel_id=b.parcel_id AND
+SELECT parcel_id,ST_UnaryUnion(ST_Collect(geom),0.000001) geom FROM (
+SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_Intersection(a.geom,b.geom,0.000001),0.000001),3) geom
+FROM qualification_jurisdiction_sources a JOIN qualification_jurisdiction_sources b ON a.parcel_id=b.parcel_id
+JOIN qualification_targets p ON p.id=a.parcel_id AND
 (a.layer_id,a.source_id)<(b.layer_id,b.source_id) AND (a.layer_id,a.name) IS DISTINCT FROM (b.layer_id,b.name)
 WHERE a.geom && b.geom AND ST_Intersects(a.geom,b.geom)
 UNION ALL SELECT parcel_id,geom FROM qualification_jurisdiction_shapes WHERE name IS NULL OR name=''
 ) pairs WHERE ST_Area(geom)>0 GROUP BY parcel_id`, nil},
 		{`INSERT INTO qualification_assessments(parcel_id,source_group,generation_id,geometry_fingerprint,method_version,total_acres,unmapped_acres,ambiguous_acres,jurisdiction_unmapped_acres,jurisdiction_ambiguous_acres,has_zone_conflict)
  SELECT p.id,'zoning',$1,p.fingerprint,$2,NULLIF(ST_Area(p.geom)/43560,0),
- CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(CASE WHEN c.geom IS NULL THEN p.shape ELSE ST_Difference(p.shape,c.geom) END,0),10),2264))/43560 END,
+ CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(CASE WHEN c.geom IS NULL THEN p.analysis_geom ELSE ST_Difference(p.analysis_geom,c.geom,0.000001) END,0),10),2264))/43560 END,
  COALESCE(ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(a.geom,0),10),2264))/43560,0),
- CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(CASE WHEN jc.geom IS NULL THEN p.shape ELSE ST_Difference(p.shape,jc.geom) END,0),10),2264))/43560 END,
+ CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(CASE WHEN jc.geom IS NULL THEN p.analysis_geom ELSE ST_Difference(p.analysis_geom,jc.geom,0.000001) END,0),10),2264))/43560 END,
  COALESCE(ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ja.geom,0),10),2264))/43560,0),a.geom IS NOT NULL
  FROM qualification_targets p LEFT JOIN qualification_coverage c ON c.parcel_id=p.id
  LEFT JOIN qualification_ambiguity a ON a.parcel_id=p.id
@@ -68,12 +87,19 @@ UNION ALL SELECT parcel_id,geom FROM qualification_jurisdiction_shapes WHERE nam
 		{`DELETE FROM qualification_jurisdiction_hits WHERE parcel_id IN (SELECT id FROM qualification_targets)`, nil},
 		{`INSERT INTO qualification_zone_hits(parcel_id,layer_id,source_id,jurisdiction,district_code,acres,share)
  SELECT h.parcel_id,h.layer_id,h.source_id,h.jurisdiction,h.district_code,
- ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/43560,ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/ST_Area(p.geom)
- FROM qualification_zone_shapes h JOIN qualification_targets p ON p.id=h.parcel_id WHERE ST_Area(p.geom)>0`, nil},
+ m.area_ft2/43560,m.area_ft2/ST_Area(p.geom)
+ FROM qualification_zone_shapes h JOIN qualification_targets p ON p.id=h.parcel_id
+ CROSS JOIN LATERAL (SELECT CASE WHEN ST_Area(h.geom)*2<=ST_Area(p.analysis_geom)
+ THEN ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))
+ ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,0.000001),0),10),2264)) END area_ft2) m
+ WHERE ST_Area(p.geom)>0`, nil},
 		{`INSERT INTO qualification_jurisdiction_hits(parcel_id,layer_id,source_id,name,acres,share)
-SELECT h.parcel_id,h.layer_id,h.source_id,h.name,ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/43560,
-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))/ST_Area(p.geom)
-FROM qualification_jurisdiction_shapes h JOIN qualification_targets p ON p.id=h.parcel_id WHERE ST_Area(p.geom)>0`, nil},
+SELECT h.parcel_id,h.layer_id,h.source_id,h.name,m.area_ft2/43560,m.area_ft2/ST_Area(p.geom)
+FROM qualification_jurisdiction_shapes h JOIN qualification_targets p ON p.id=h.parcel_id
+CROSS JOIN LATERAL (SELECT CASE WHEN ST_Area(h.geom)*2<=ST_Area(p.analysis_geom)
+THEN ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))
+ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,0.000001),0),10),2264)) END area_ft2) m
+WHERE ST_Area(p.geom)>0`, nil},
 	}
 	for _, step := range statements {
 		if _, err := tx.Exec(ctx, step.sql, step.args...); err != nil {

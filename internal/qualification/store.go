@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	ZoningMethod = "stored-overlay-measured/3; EPSG:2264; acres=ftUS^2/43560"
+	ZoningMethod = "stored-overlay-measured/4; EPSG:3857 grid=0.000001m; EPSG:2264 acres=ftUS^2/43560"
 	RoadsMethod  = "stored-nearest-measured/3; EPSG:2264; radius=5280ft; ties<=0.01ft"
 	maxSourceAge = 90 * 24 * time.Hour
 )
@@ -20,29 +20,22 @@ const (
 // Store owns retained qualification generations and typed parcel evidence.
 type Store struct{ Pool *pgxpool.Pool }
 
-func (s Store) recordRefreshFailure(group string, started time.Time, err error) {
+// failed_at orders attempts by their original start, not the time the error was written.
+// Publication owns only the head; freshness compares this observation with its started_at.
+func (s Store) recordRefreshFailure(group string, started time.Time, cause error) error {
 	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	tx, e := s.Pool.Begin(c)
-	if e != nil {
-		return
-	}
-	defer tx.Rollback(context.Background())
-	if e = lockQualificationPublication(c, tx, group); e != nil {
-		return
-	}
-	if _, e = tx.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,failed_at,error)
-SELECT $1,$2,$3 WHERE NOT EXISTS (
-SELECT 1 FROM qualification_heads h JOIN qualification_generations g ON g.id=h.generation_id
-WHERE h.source_group=$1 AND g.started_at>$2)
+	_, err := s.Pool.Exec(c, `INSERT INTO qualification_refresh_failures(source_group,failed_at,error)
+VALUES($1,$2,$3)
 ON CONFLICT(source_group) DO UPDATE SET failed_at=excluded.failed_at,error=excluded.error
-WHERE qualification_refresh_failures.failed_at<=excluded.failed_at`, group, started, err.Error()); e == nil {
-		_ = tx.Commit(c)
+WHERE qualification_refresh_failures.failed_at<=excluded.failed_at`, group, started, cause.Error())
+	if err != nil {
+		return fmt.Errorf("record qualification %s refresh failure: %w", group, err)
 	}
+	return nil
 }
 
-// The transaction lock makes the publication head check and failure write
-// observe the preceding committed attempt under READ COMMITTED isolation.
+// Publication remains serialized per group; failure observations do not take this lock.
 func lockQualificationPublication(ctx context.Context, tx pgx.Tx, group string) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('qualification-publication'),hashtext($1))`, group)
 	return err
@@ -55,18 +48,14 @@ func (s Store) RefreshWithGate(ctx context.Context, source *union.GISSource, gro
 		return 0, fmt.Errorf("invalid qualification group %s", group)
 	}
 	started := time.Now().UTC()
-	entered := false
 	var refreshErr error
 	err = gate(ctx, func(work context.Context) error {
-		entered = true
 		processed, refreshErr = s.refresh(work, source, group, started)
 		return refreshErr
 	})
-	if err != nil && !entered {
-		s.recordRefreshFailure(group, started, err)
-	} else if err != nil && refreshErr == nil {
-		// The source published, but the host gate itself failed after the callback.
-		s.recordRefreshFailure(group, time.Now().UTC(), err)
+	if err != nil && (refreshErr == nil || !errors.Is(err, refreshErr)) {
+		// The host gate can fail after the callback; its attempt still began at started.
+		err = errors.Join(err, s.recordRefreshFailure(group, started, err))
 	}
 	return processed, err
 }
@@ -81,7 +70,7 @@ func (s Store) Refresh(ctx context.Context, source *union.GISSource, group strin
 func (s Store) refresh(ctx context.Context, source *union.GISSource, group string, started time.Time) (processed int, err error) {
 	defer func() {
 		if err != nil {
-			s.recordRefreshFailure(group, started, err)
+			err = errors.Join(err, s.recordRefreshFailure(group, started, err))
 		}
 	}()
 	var gen string
@@ -121,9 +110,6 @@ func (s Store) refresh(ctx context.Context, source *union.GISSource, group strin
 		return processed, e
 	}
 	if _, e = tx.Exec(ctx, `INSERT INTO qualification_heads(source_group,generation_id) VALUES($1,$2) ON CONFLICT(source_group) DO UPDATE SET generation_id=excluded.generation_id`, group, gen); e != nil {
-		return processed, e
-	}
-	if _, e = tx.Exec(ctx, `DELETE FROM qualification_refresh_failures WHERE source_group=$1 AND failed_at<=$2`, group, started); e != nil {
 		return processed, e
 	}
 	if e = tx.Commit(ctx); e != nil {
@@ -246,7 +232,7 @@ func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Segmentize(ST_Simplify(shape,0),10),2264),3) END geom FROM parcels WHERE id=ANY($1::uuid[])`, ids); err != nil {
+	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Segmentize(ST_Simplify(shape,0),10),2264),3) END geom,CASE WHEN $2='zoning' AND shape IS NOT NULL AND ST_IsValid(shape) THEN ST_ReducePrecision(shape,0.000001) END analysis_geom FROM parcels WHERE id=ANY($1::uuid[])`, ids, group); err != nil {
 		return 0, err
 	}
 	for _, sql := range []string{`CREATE UNIQUE INDEX ON qualification_targets(id)`, `CREATE INDEX ON qualification_targets USING GIST(shape)`, `ANALYZE qualification_targets`} {
@@ -255,6 +241,9 @@ func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen
 		}
 	}
 	if group == union.QualificationZoning {
+		if _, err = tx.Exec(ctx, `DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_targets WHERE shape IS NOT NULL AND ST_Area(shape)>0 AND ST_Area(analysis_geom)=0) THEN RAISE EXCEPTION 'analysis precision collapsed a required parcel'; END IF; END $$`); err != nil {
+			return 0, err
+		}
 		err = s.reconcileZoning(ctx, tx, gen, method)
 	} else {
 		err = s.reconcileRoads(ctx, tx, gen, method)

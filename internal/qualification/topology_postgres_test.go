@@ -38,12 +38,16 @@ func TestStoredTopologyMeasuredEvidence(t *testing.T) {
 		{"exact-cover-extra-bottom", rect(0, 0, 1000, 100), []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+500, y, x+1000, y, x+1000, y+100, x, y+100, x, y)}, []string{"A"}, false, false, false, 1},
 		{"exact-cover-extra-top", rect(0, 0, 1000, 100), []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+1000, y, x+1000, y+100, x+500, y+100, x, y+100, x, y)}, []string{"A"}, false, false, false, 1},
 		{"thin-valid-strip", rect(0, 0, 1000, 100), []string{rect(500, 0, 500.001, 100)}, []string{"A"}, true, false, false, 1},
+		{"collapsed-below-grid", rect(0, 0, 1000, 100), []string{rect(500, 0, 500.0000002, 100)}, []string{"A"}, true, false, false, 0},
 		{"positive-tiny-conflict", rect(0, 0, 1000, 100), []string{rect(0, 0, 1000, 100), rect(500, 50, 500.01, 50.01)}, []string{"A", "B"}, false, true, false, 2},
 		{"duplicate-district", rect(0, 0, 1000, 100), []string{rect(0, 0, 1000, 100), rect(0, 0, 1000, 100)}, []string{"A", "A"}, false, false, false, 2},
 		{"exact-cover-hole", withHole, []string{withHole}, []string{"A"}, false, false, false, 1},
 		{"near-full-notch", outer, []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+1000, y, x+1000, y+100, x+500.5, y+100, x+500, y+99, x+499.5, y+100, x, y+100, x, y)}, []string{"A"}, true, false, false, 1},
 		{"filled-notch", outer, []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+1000, y, x+1000, y+100, x+500.5, y+100, x+500, y+99, x+499.5, y+100, x, y+100, x, y), fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g))", x+499.5, y+100, x+500, y+99, x+500.5, y+100, x+499.5, y+100)}, []string{"A", "B"}, false, false, true, 2},
 		{"unnamed-jurisdiction", rect(0, 0, 1000, 100), []string{rect(0, 0, 1000, 100)}, []string{"A"}, false, false, false, 1},
+		{"ten-mm-by-one-mm-notch", outer, []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+504.165, y, x+504.17, y+0.001, x+504.175, y, x+1000, y, x+1000, y+100, x, y+100, x, y)}, []string{"A"}, true, false, false, 1},
+		{"diagonal-split", rect(0, 0, 1000, 200), []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g))", x-7, y-100, x+1001, y-100, x+1001, y+145, x-7, y+1, x-7, y-100), fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x-7, y+1, x+490, y+72, x+1001, y+145, x+1001, y+301, x-7, y+301, x-7, y+1)}, []string{"A", "B"}, false, false, true, 2},
+		{"oblique-parcel-vertical-split", fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+1000, y+9, x+1000, y+100, x, y+113, x, y), []string{rect(-1000, -1000, 44, 1000), rect(44, -1000, 2000, 1000)}, []string{"A", "B"}, false, false, true, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,7 +86,7 @@ func TestStoredTopologyMeasuredEvidence(t *testing.T) {
 			}
 			for i, wkt := range tc.zones {
 				name := jurisdictionName
-				if tc.name == "positive-tiny-conflict" && i == 1 {
+				if (tc.name == "positive-tiny-conflict" || tc.name == "diagonal-split" || tc.name == "oblique-parcel-vertical-split") && i == 1 {
 					name = "Other town"
 				}
 				_, err := pool.Exec(ctx, `INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2,name) SELECT $1,195,$2,3857,g,g,'original',0,$3 FROM (SELECT ST_Multi(ST_GeomFromText($4,3857)) g) s`, gen, i+1, name, wkt)
@@ -90,7 +94,12 @@ func TestStoredTopologyMeasuredEvidence(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := store.reconcileOne(ctx, union.QualificationZoning, ZoningMethod); err != nil {
+			if _, err := store.reconcileOne(ctx, union.QualificationZoning, ZoningMethod); tc.name == "collapsed-below-grid" {
+				if err == nil || !strings.Contains(err.Error(), "analysis precision collapsed a required zone") {
+					t.Fatalf("lost required thin source: %v", err)
+				}
+				return
+			} else if err != nil {
 				t.Fatal(err)
 			}
 			z, err := CurrentZoning(ctx, pool, parcel)
@@ -107,13 +116,13 @@ func TestStoredTopologyMeasuredEvidence(t *testing.T) {
 			} else if (z.JurisdictionUnmappedAcres > 0) != tc.wantGap || (z.JurisdictionAmbiguousAcres > 0) != tc.wantAmb {
 				t.Fatalf("jurisdiction evidence %+v", z)
 			}
-			if tc.name == "near-full-notch" || tc.name == "filled-notch" {
+			if tc.name == "near-full-notch" || tc.name == "filled-notch" || tc.name == "ten-mm-by-one-mm-notch" {
 				var fine float64
 				if err := pool.QueryRow(ctx, `SELECT ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Intersection(p.shape,h.shape),0),1),2264)) / ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(p.shape,0),1),2264)) FROM parcels p, qualification_zones h WHERE p.id=$1 AND h.generation_id=$2 AND h.source_id=1`, parcel, gen).Scan(&fine); err != nil {
 					t.Fatal(err)
 				}
 				for _, hit := range []Area{z.Zones[0].Area, z.Jurisdictions[0].Area} {
-					if math.Abs(hit.Share-0.999995) > 1e-7 || math.Abs(hit.Share-fine) > 1e-7 {
+					if (tc.name != "ten-mm-by-one-mm-notch" && math.Abs(hit.Share-0.999995) > 1e-7) || math.Abs(hit.Share-fine) > 1e-7 || (tc.name == "ten-mm-by-one-mm-notch" && math.Abs(hit.Share-fine) > 2e-10) || hit.Acres > *z.TotalAcres || hit.Share > 1 {
 						t.Fatalf("notched district share %+v; 1m reference %.11f", z, fine)
 					}
 				}
@@ -308,71 +317,75 @@ func TestOlderSuccessfulPublicationKeepsNewerFailure(t *testing.T) {
 	if _, err := pool.Exec(ctx, `DELETE FROM qualification_refresh_failures WHERE source_group='roads'`); err != nil {
 		t.Fatal(err)
 	}
-	barrier, err := pool.Acquire(ctx)
+	// A later success supersedes the older failure at read time, not by deleting it.
+	if err := store.recordRefreshFailure(union.QualificationRoads, time.Now().UTC(), errors.New("older failure")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Refresh(ctx, source, union.QualificationRoads); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT generation_id::text FROM qualification_heads WHERE source_group='roads'`).Scan(&failure); err != nil {
+		t.Fatal(err)
+	}
+	generations = append(generations, failure)
+	readTx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer barrier.Release()
-	const key = 753982511
-	if _, err := barrier.Exec(ctx, `SELECT pg_advisory_lock($1)`, key); err != nil {
+	defer readTx.Rollback(ctx)
+	fresh, err := unavailable(ctx, readTx, union.QualificationRoads)
+	if err != nil || fresh.RefreshFailedAt != nil {
+		t.Fatalf("old failure visible after new head: %+v %v", fresh, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT error FROM qualification_refresh_failures WHERE source_group='roads'`).Scan(&failure); err != nil || failure != "older failure" {
+		t.Fatalf("failure observation lost: %q %v", failure, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM qualification_refresh_failures WHERE source_group='roads'`); err != nil {
 		t.Fatal(err)
 	}
-	defer barrier.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
-	if _, err := pool.Exec(ctx, `CREATE FUNCTION qualification_failure_barrier() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(753982511); RETURN NEW; END $$; CREATE TRIGGER qualification_failure_barrier BEFORE INSERT ON qualification_refresh_failures FOR EACH ROW EXECUTE FUNCTION qualification_failure_barrier()`); err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS qualification_failure_barrier ON qualification_refresh_failures; DROP FUNCTION IF EXISTS qualification_failure_barrier()`)
-	oldDone := make(chan struct{})
+	callbackDone := make(chan struct{})
+	releaseGate := make(chan struct{})
+	gateDone := make(chan error, 1)
 	go func() {
-		store.recordRefreshFailure(union.QualificationRoads, time.Now(), errors.New("older paused failure"))
-		close(oldDone)
+		_, e := store.RefreshWithGate(ctx, source, union.QualificationRoads, func(work context.Context, callback func(context.Context) error) error {
+			e := callback(work)
+			close(callbackDone)
+			<-releaseGate
+			if e != nil {
+				return e
+			}
+			return errors.New("old postcallback gate failed")
+		})
+		gateDone <- e
 	}()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		var waiting bool
-		if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND objid=753982511)`).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("older failure never reached insert barrier")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	published := make(chan error, 1)
-	go func() {
-		_, err := store.Refresh(ctx, source, union.QualificationRoads)
-		published <- err
-	}()
-	for {
-		var waiting int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted`).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting >= 2 {
-			break
-		}
-		if time.Now().After(deadline.Add(3 * time.Second)) {
-			t.Fatal("publication did not wait behind paused failure")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	select {
-	case err := <-published:
-		t.Fatalf("publication overtook paused older failure: %v", err)
-	default:
-	}
-	if _, err := barrier.Exec(ctx, `SELECT pg_advisory_unlock($1)`, key); err != nil {
+	<-callbackDone
+	if err := pool.QueryRow(ctx, `SELECT generation_id::text FROM qualification_heads WHERE source_group='roads'`).Scan(&failure); err != nil {
 		t.Fatal(err)
 	}
-	<-oldDone
-	if err := <-published; err != nil {
+	generations = append(generations, failure)
+	if _, err := store.Refresh(ctx, source, union.QualificationRoads); err != nil {
 		t.Fatal(err)
 	}
-	var failures int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM qualification_refresh_failures WHERE source_group='roads'`).Scan(&failures); err != nil || failures != 0 {
-		t.Fatalf("older failure survived newer publication: %d %v", failures, err)
+	if err := pool.QueryRow(ctx, `SELECT generation_id::text FROM qualification_heads WHERE source_group='roads'`).Scan(&failure); err != nil {
+		t.Fatal(err)
+	}
+	generations = append(generations, failure)
+	close(releaseGate)
+	if err := <-gateDone; err == nil || !strings.Contains(err.Error(), "old postcallback gate failed") {
+		t.Fatalf("old gate result: %v", err)
+	}
+	readTx.Rollback(ctx)
+	readTx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readTx.Rollback(ctx)
+	fresh, err = unavailable(ctx, readTx, union.QualificationRoads)
+	if err != nil || fresh.RefreshFailedAt != nil {
+		t.Fatalf("old postcallback gate outdates newer head: %+v %v", fresh, err)
+	}
+	var precedes bool
+	if err := pool.QueryRow(ctx, `SELECT f.failed_at<g.started_at FROM qualification_refresh_failures f JOIN qualification_heads h USING(source_group) JOIN qualification_generations g ON g.id=h.generation_id WHERE f.source_group='roads'`).Scan(&precedes); err != nil || !precedes {
+		t.Fatalf("attempt start ordering: %v %v", precedes, err)
 	}
 }
