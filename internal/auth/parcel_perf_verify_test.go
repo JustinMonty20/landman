@@ -88,6 +88,12 @@ func verifyCopiedResponse(t *testing.T, pool *pgxpool.Pool, label, path string, 
 			ParcelID  string `json:"parcel_id"`
 			RunID     string `json:"interpretation_set_revision"`
 			Available bool   `json:"available"`
+			Uses      []struct {
+				Use      string `json:"use"`
+				MapUnits []struct {
+					MapUnitKey string `json:"map_unit_key"`
+				} `json:"map_units"`
+			} `json:"uses"`
 		}
 		if err := json.Unmarshal(body, &got); err != nil {
 			t.Fatal(err)
@@ -95,6 +101,42 @@ func verifyCopiedResponse(t *testing.T, pool *pgxpool.Pool, label, path string, 
 		var runID string
 		if err := pool.QueryRow(context.Background(), `SELECT a.run_id::text FROM soil_parcel_assessments a JOIN soil_screening_heads h ON h.run_id=a.run_id JOIN parcels p ON p.id=a.parcel_id AND p.county_id=h.county_id AND p.source_name=h.source_name WHERE a.parcel_id=$1`, got.ParcelID).Scan(&runID); err != nil || !got.Available || got.RunID != runID {
 			t.Fatalf("published soil run mismatch: %v", err)
+		}
+		rows, err := pool.Query(context.Background(), `SELECT r.provenance->>'use',m.map_unit_key FROM soil_assessment_map_units m JOIN soil_screening_ratings r ON r.run_id=m.run_id AND r.map_unit_key=m.map_unit_key WHERE m.run_id=$1 AND m.parcel_id=$2`, runID, got.ParcelID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := map[string][]string{}
+		for rows.Next() {
+			var use, key string
+			if err := rows.Scan(&use, &key); err != nil {
+				t.Fatal(err)
+			}
+			expected[use] = append(expected[use], key)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		rows.Close()
+		if len(got.Uses) != 3 {
+			t.Fatalf("soil uses=%d expected=3", len(got.Uses))
+		}
+		for _, use := range got.Uses {
+			keys := expected[use.Use]
+			if len(keys) != len(use.MapUnits) {
+				t.Fatalf("soil use=%s units=%d expected=%d", use.Use, len(use.MapUnits), len(keys))
+			}
+			sort.Strings(keys)
+			actual := make([]string, 0, len(use.MapUnits))
+			for _, unit := range use.MapUnits {
+				actual = append(actual, unit.MapUnitKey)
+			}
+			sort.Strings(actual)
+			for i := range keys {
+				if keys[i] != actual[i] {
+					t.Fatalf("soil use=%s unit mismatch", use.Use)
+				}
+			}
 		}
 	case strings.HasPrefix(label, "list-"):
 		var got struct {
