@@ -57,6 +57,18 @@ func NewBillingFile(path, sourceURL string, store taxartifact.Store) (*BillingFi
 	return &BillingFile{path: path, sourceURL: sourceURL, store: store}, nil
 }
 
+// ReadRetained parses verified capture bytes without opening an operator input path.
+func (s *BillingFile) ReadRetained(ctx context.Context, artifact taxartifact.Artifact, yield func(BillRow) error) (int, error) {
+	if !artifact.Verified() || yield == nil {
+		return 0, errors.New("verified tax capture and yield required")
+	}
+	if artifact.Size() > billingLimit {
+		return 0, fmt.Errorf("retained tax file exceeds %d-byte size limit", billingLimit)
+	}
+	pp, err := s.scan(ctx, artifact, yield)
+	return pp, err
+}
+
 // Read validates the complete entry before it yields a bill and returns retained-file evidence.
 func (s *BillingFile) Read(ctx context.Context, yield func(BillRow) error) (taxsource.Meta, error) {
 	if yield == nil {

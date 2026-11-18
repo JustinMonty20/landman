@@ -129,6 +129,46 @@ func publishStagedRows[T any, R any](ctx context.Context, pool *pgxpool.Pool, in
 	return result, nil
 }
 
+// PublishStagedInTx applies a validated row stream within the ingestion engine's
+// transaction, including omission cleanup and import activation.
+func PublishStagedInTx[T any, R any](ctx context.Context, tx pgx.Tx, input io.Reader, write func([]T) (R, error), finish func() (R, error), add func(*R, R)) (result R, err error) {
+	if input == nil {
+		return result, errors.New("tax publication requires a complete row stream")
+	}
+	decoder := gob.NewDecoder(input)
+	for {
+		rows := make([]T, 0, 512)
+		for len(rows) < cap(rows) {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			var row T
+			decodeErr := decoder.Decode(&row)
+			if decodeErr == io.EOF {
+				break
+			}
+			if decodeErr != nil {
+				return result, fmt.Errorf("read staged tax rows: %w", decodeErr)
+			}
+			rows = append(rows, row)
+		}
+		if len(rows) == 0 {
+			break
+		}
+		batch, err := write(rows)
+		if err != nil {
+			return result, err
+		}
+		add(&result, batch)
+	}
+	last, err := finish()
+	if err != nil {
+		return result, err
+	}
+	add(&result, last)
+	return result, nil
+}
+
 // ActivateImport publishes a validated import in the caller's typed-row transaction.
 // On any error, the caller must roll back that transaction to retain the prior active import.
 func ActivateImport(ctx context.Context, tx pgx.Tx, id string) error {

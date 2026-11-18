@@ -34,6 +34,11 @@ func TestRunRejectsMissingInputsBeforeWriting(t *testing.T) {
 		t.Fatalf("directory as input: %v", err)
 	}
 	cfg.PipelinePath = file
+	cfg.BillingSourceURL = "http://example.org/billing"
+	if _, err := Run(context.Background(), nil, cfg); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("insecure declared URL accepted: %v", err)
+	}
+	cfg.BillingSourceURL = "https://example.org/billing"
 	if err := os.Chmod(file, 0000); err != nil {
 		t.Fatal(err)
 	}

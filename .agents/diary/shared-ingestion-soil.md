@@ -1,0 +1,1 @@
+- [Skipped refactor] `soil.StoreWithSet` and its legacy network-backed store path remain for existing typed soil regression coverage. This retry removed the replaced production `ScreenStored`/`Screening` entry points; their integration fixtures now use test-only helpers while shared-path PostGIS coverage remains in `soiljob`.

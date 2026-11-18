@@ -84,35 +84,35 @@ type ParcelAssessment struct {
 // Reconciliation tolerance covers overlay roundoff, not omitted slivers.
 func areaTolerance(total float64) float64 { return math.Max(1e-7, total*1e-8) }
 
-func assessParcels(ctx context.Context, tx pgx.Tx, runID, setID string, countyID county.ID, source string) error {
+func assessParcels(ctx context.Context, tx pgx.Tx, runID, setID string, countyID county.ID, source string) (bool, error) {
 	if _, err := tx.Exec(ctx, `INSERT INTO soil_assessment_keys(parcel_id) SELECT id FROM parcels WHERE county_id=$1 AND source_name=$2 ON CONFLICT DO NOTHING`, countyID.String(), source); err != nil {
-		return err
+		return false, err
 	}
 	copied, err := copyUnchangedAssessment(ctx, tx, runID, setID, countyID, source)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !copied {
 		if err := assessChangedParcels(ctx, tx, runID, setID, countyID, source); err != nil {
-			return err
+			return false, err
 		}
 	}
 	var invalid int
 	err = tx.QueryRow(ctx, `SELECT count(*) FROM soil_parcel_assessments a WHERE run_id=$1 AND total_acres IS NOT NULL AND abs(total_acres-uncovered_acres-ambiguous_acres-COALESCE((SELECT sum(exclusive_acres) FROM soil_assessment_map_units m WHERE m.run_id=a.run_id AND m.parcel_id=a.parcel_id),0))>greatest(1e-7,total_acres*1e-8)`, runID).Scan(&invalid)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if invalid != 0 {
-		return fmt.Errorf("soil: %d parcel area partitions failed reconciliation", invalid)
+		return false, fmt.Errorf("soil: %d parcel area partitions failed reconciliation", invalid)
 	}
 	err = tx.QueryRow(ctx, `SELECT count(*) FROM soil_assessment_map_units m WHERE m.run_id=$1 AND (SELECT count(*) FROM soil_screening_ratings r WHERE r.run_id=m.run_id AND r.map_unit_key=m.map_unit_key)<>3`, runID).Scan(&invalid)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if invalid != 0 {
-		return errors.New("soil: incomplete interpretation coverage")
+		return false, errors.New("soil: incomplete interpretation coverage")
 	}
-	return nil
+	return copied, nil
 }
 
 // Copy only when every current parcel and the complete soil geometry set are unchanged.
@@ -125,7 +125,16 @@ func copyUnchangedAssessment(ctx context.Context, tx pgx.Tx, runID, setID string
  JOIN soil_polygon_sets old_set ON old_set.id=prev.soil_set_id
  JOIN soil_polygon_sets new_set ON new_set.id=$3
  WHERE h.county_id=$1 AND h.source_name=$2
- AND prev.assessment_method=$4 AND old_set.fingerprint=new_set.fingerprint
+ AND prev.assessment_method=$4
+ AND (SELECT count(*) FROM soil_polygon_set_members WHERE set_id=old_set.id) =
+     (SELECT count(*) FROM soil_polygon_set_members WHERE set_id=new_set.id)
+ AND NOT EXISTS (
+   SELECT 1 FROM soil_polygon_set_members old_member
+   LEFT JOIN soil_polygon_set_members new_member ON new_member.set_id=new_set.id AND new_member.polygon_id=old_member.polygon_id
+   WHERE old_member.set_id=old_set.id AND (new_member.polygon_id IS NULL
+     OR old_member.map_unit_key IS DISTINCT FROM new_member.map_unit_key
+     OR ST_AsEWKB(old_member.shape) IS DISTINCT FROM ST_AsEWKB(new_member.shape))
+ )
  AND (SELECT count(*) FROM soil_parcel_assessments a WHERE a.run_id=prev.id) =
      (SELECT count(*) FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2)
  AND NOT EXISTS (
@@ -214,7 +223,7 @@ func CurrentAssessment(ctx context.Context, pool *pgxpool.Pool, countyID county.
 	rows, err := tx.Query(ctx, `SELECT m.map_unit_key,m.exclusive_acres,m.mapped_acres,r.provenance,r.interpretation_id::text,
  (SELECT COALESCE(jsonb_agg(jsonb_build_object('sequence',c.sequence,'key',c.component_key,'name',c.name,'percent',c.percent,'availability',c.availability,'original_rating',c.original_rating,'rating',c.rating,'reason_key',c.reason_key,'reason_name',c.reason_name,'reason',c.reason,'severity',c.severity) ORDER BY c.component_key,c.sequence),'[]'::jsonb) FROM soil_component_facts c WHERE c.run_id=r.run_id AND c.interpretation_id=r.interpretation_id),
  (SELECT COALESCE(jsonb_agg(x.payload ORDER BY x.component_key,x.kind,x.position),'[]'::jsonb) FROM soil_measurements x WHERE x.run_id=r.run_id AND x.interpretation_id=r.interpretation_id),
- (SELECT jsonb_agg(jsonb_build_object('id',sm.polygon_id,'spatial_version',sm.spatial_version,'survey_saved_on',sm.survey_saved_on::timestamp AT TIME ZONE 'UTC') ORDER BY sm.polygon_id) FROM soil_polygon_set_members sm WHERE sm.set_id=$3 AND sm.polygon_id=ANY(m.polygon_ids))
+ (SELECT jsonb_agg(jsonb_build_object('id',sm.polygon_id,'spatial_version',sm.spatial_version,'survey_saved_on',COALESCE(sd.survey_saved_on,sm.survey_saved_on)::timestamp AT TIME ZONE 'UTC') ORDER BY sm.polygon_id) FROM soil_polygon_set_members sm LEFT JOIN soil_screening_survey_dates sd ON sd.run_id=$1 AND sd.polygon_id=sm.polygon_id WHERE sm.set_id=$3 AND sm.polygon_id=ANY(m.polygon_ids))
  FROM soil_assessment_map_units m JOIN soil_screening_ratings r ON r.run_id=m.run_id AND r.map_unit_key=m.map_unit_key
  WHERE m.run_id=$1 AND m.parcel_id=$2 ORDER BY m.map_unit_key,r.rule_key`, result.InterpretationSetRevision, parcelID, result.SoilSetID)
 	if err != nil {

@@ -54,6 +54,29 @@ func NewPipelineList(path, sourceURL string, store taxartifact.Store) (*Pipeline
 	return &PipelineList{path, sourceURL, store}, nil
 }
 
+// ReadRetained parses verified capture bytes without opening an operator input path.
+func (s *PipelineList) ReadRetained(ctx context.Context, artifact taxartifact.Artifact, yield func(PipelineProperty) error) (int, error) {
+	if !artifact.Verified() || yield == nil {
+		return 0, errors.New("verified tax capture and yield required")
+	}
+	if artifact.Size() > pipelineLimit {
+		return 0, fmt.Errorf("retained tax file exceeds %d-byte size limit", pipelineLimit)
+	}
+	rows, skipped, err := s.parse(ctx, artifact)
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if err := yield(row); err != nil {
+			return 0, err
+		}
+	}
+	return skipped, nil
+}
+
 // Read retains exact operator-supplied bytes and validates the whole file before yielding.
 func (s *PipelineList) Read(ctx context.Context, yield func(PipelineProperty) error) (taxsource.Meta, error) {
 	if yield == nil {

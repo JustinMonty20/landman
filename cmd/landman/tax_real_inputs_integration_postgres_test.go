@@ -198,7 +198,16 @@ func testGoldenUnionTaxJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if _, err := pool.Exec(context.Background(), `DELETE FROM tax_foreclosure_cases; DELETE FROM tax_file_imports; DELETE FROM job_attempts WHERE job_id='union.tax'; DELETE FROM parcels`); err != nil {
+		if _, err := pool.Exec(context.Background(), `
+DELETE FROM tax_foreclosure_cases;
+DELETE FROM tax_file_imports;
+DELETE FROM parcels;
+DELETE FROM tax_ingest_history WHERE source_name IN ('union_delinquent','union_billing','union_foreclosure','union_foreclosure_pipeline');
+DELETE FROM tax_latest_observations WHERE source_name IN ('union_delinquent','union_billing','union_foreclosure','union_foreclosure_pipeline');
+DELETE FROM tax_ingest_publications WHERE source_name IN ('union_delinquent','union_billing','union_foreclosure','union_foreclosure_pipeline');
+DELETE FROM ingest_replay_attempts WHERE capture_id IN (SELECT c.id FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE a.job_id='union.tax') OR attempt_id IN (SELECT id FROM job_attempts WHERE job_id='union.tax');
+DELETE FROM ingest_captures WHERE attempt_id IN (SELECT id FROM job_attempts WHERE job_id='union.tax');
+DELETE FROM job_attempts WHERE job_id='union.tax'`); err != nil {
 			t.Errorf("clean golden test rows: %v", err)
 		}
 		pool.Close()

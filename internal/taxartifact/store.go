@@ -43,11 +43,34 @@ func Reference(key string, size int64, digest [32]byte) (Artifact, error) {
 	return a, a.Valid()
 }
 
+// ReferenceForSource validates a saved reference belongs to the capture source.
+func ReferenceForSource(source, key string, size int64, digest [32]byte) (Artifact, error) {
+	artifact, err := Reference(key, size, digest)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if !validSource(source) || artifact.key != artifactKey(source, digest) {
+		return Artifact{}, errors.New("artifact source differs from capture")
+	}
+	return artifact, nil
+}
+
 // Store has one selected backend per run. Both backends retain immutable versions.
 type Store interface {
 	Put(context.Context, string, io.Reader) (Artifact, error)
 	Get(context.Context, Artifact) (io.ReadCloser, error)
 	Mode() string
+}
+
+// VerifiedReference checks stored bytes before granting a reconstructed reference
+// the same publication authority as a fresh Put result.
+func VerifiedReference(ctx context.Context, store Store, artifact Artifact) (Artifact, error) {
+	if err := Verify(ctx, store, artifact); err != nil {
+		return Artifact{}, err
+	}
+	artifact.mode = store.Mode()
+	artifact.verified = true
+	return artifact, nil
 }
 
 // Verify reads all bytes and checks their length and SHA-256 before publication.

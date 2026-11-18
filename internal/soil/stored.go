@@ -4,39 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"time"
 
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twpayne/go-geom/encoding/ewkb"
 )
 
 // ErrNoStoredSet distinguishes a missing prerequisite from an ingested empty set.
 var ErrNoStoredSet = errors.New("soil screening pending: no stored soil set; run soil ingestion")
 
-// ScreenStored refreshes overlaps and USDA screening without fetching county soil
-// or changing soil fetch timestamps. Replaced set heads cannot be published.
-func ScreenStored(ctx context.Context, dsn string, countyID county.ID, source string, interval time.Duration) (int, error) {
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return 0, err
-	}
-	defer pool.Close()
-	return screenStored(ctx, pool, http.DefaultClient, soilDataAccessURL, countyID, source, interval)
+type setReader interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
-func screenStored(ctx context.Context, pool *pgxpool.Pool, client *http.Client, endpoint string, countyID county.ID, source string, interval time.Duration) (int, error) {
-	setID, polygons, units, err := storedSet(ctx, pool, countyID, source)
-	if err != nil {
-		return 0, err
-	}
-	err = screen(ctx, pool, client, endpoint, countyID, source, polygons, units, ScreeningOptions{SoilSetID: setID, FreshnessInterval: interval})
-	return len(polygons), err
-}
-
-func storedSet(ctx context.Context, pool *pgxpool.Pool, countyID county.ID, source string) (string, []Polygon, []MapUnit, error) {
+// StoredSet loads the immutable current geometry generation for screening.
+func StoredSet(ctx context.Context, pool setReader, countyID county.ID, source string) (string, []Polygon, []MapUnit, error) {
 	var setID string
 	if err := pool.QueryRow(ctx, `SELECT set_id::text FROM soil_polygon_set_heads WHERE county_id=$1 AND source_name=$2`, countyID.String(), source).Scan(&setID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

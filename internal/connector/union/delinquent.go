@@ -45,6 +45,15 @@ func NewDelinquentList(path string, store taxartifact.Store) (*DelinquentList, e
 	return &DelinquentList{path: path, store: store}, nil
 }
 
+// ReadRetained parses verified capture bytes without opening an operator input path.
+func (s *DelinquentList) ReadRetained(ctx context.Context, artifact taxartifact.Artifact, yield func(DelinquentRow) error) (int, int, error) {
+	if !artifact.Verified() || yield == nil {
+		return 0, 0, errors.New("verified tax capture and yield required")
+	}
+	counts, err := s.scan(ctx, artifact, yield)
+	return counts.pp, counts.rr, err
+}
+
 // Read checks the whole file before it yields a row. It returns verified file evidence even on a parse error.
 func (s *DelinquentList) Read(ctx context.Context, yield func(DelinquentRow) error) (taxsource.Meta, error) {
 	if yield == nil {

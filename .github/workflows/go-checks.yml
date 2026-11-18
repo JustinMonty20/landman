@@ -73,9 +73,26 @@ jobs:
       - name: Apply migrations
         run: |
           "$(go env GOPATH)/bin/goose" -dir db/migrations postgres "$DATABASE_URL" up
-      # These packages share one database; run them in sequence for stable row counts.
+      - name: Create isolated PostGIS package databases
+        run: |
+          for name in landman_parceljob_test_ci landman_parcelstore_test_ci landman_taxstore_test_ci landman_qualification_test_ci landman_soil_test_ci soil_test_ci taxworker_ci; do
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE $name"
+            "$(go env GOPATH)/bin/goose" -dir db/migrations postgres "${DATABASE_URL/landman_test/$name}" up
+          done
       - name: Race tests with PostgreSQL
-        run: go test -p 1 -race -tags postgres ./cmd/landman ./internal/connector/union/parceljob/ ./internal/parcelstore/ ./internal/taxstore/ ./internal/qualification/ -count=1
+        run: |
+          go test -race -tags postgres ./cmd/landman -count=1
+          for entry in \
+            'landman_parceljob_test_ci ./internal/connector/union/parceljob/' \
+            'landman_parcelstore_test_ci ./internal/parcelstore/' \
+            'landman_taxstore_test_ci ./internal/taxstore/' \
+            'landman_qualification_test_ci ./internal/qualification/' \
+            'landman_soil_test_ci ./internal/soil/'; do
+            read -r name package <<< "$entry"
+            DATABASE_URL="${DATABASE_URL/landman_test/$name}" go test -race -tags postgres "$package" -count=1
+          done
+          SOIL_TEST_DATABASE_URL="${DATABASE_URL/landman_test/soil_test_ci}" go test -race -tags postgres ./internal/connector/union/soiljob/ -count=1
+          TAX_SHARED_TEST_DSN="${DATABASE_URL/landman_test/taxworker_ci}" TAX_SHARED_TEST_DISPOSABLE=1 go test -race -tags postgres ./internal/connector/union/taxjob/ -count=1
       - name: Create and migrate authentication test database
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE landman_auth_test_ci'

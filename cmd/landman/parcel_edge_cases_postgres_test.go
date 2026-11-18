@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/parcelevidence"
 )
@@ -117,7 +116,7 @@ func TestFailedRepairReplayKeepsUnselectedAndReobservedEvidence(t *testing.T) {
 		t.Fatal("repair did not fail")
 	}
 	var id string
-	if err := pool.QueryRow(ctx, `SELECT artifact_id FROM parcel_evidence_captures WHERE attempt_kind='reprocess'`).Scan(&id); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM ingest_captures WHERE attempt_kind='reprocess'`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `ALTER TABLE parcels DROP CONSTRAINT fail_repair`); err != nil {
@@ -151,7 +150,7 @@ func TestFailedFullScanReplayKeepsLaterQuarantineOccurrence(t *testing.T) {
 		t.Fatal("full scan did not fail")
 	}
 	var id string
-	if err := pool.QueryRow(ctx, `SELECT c.artifact_id FROM parcel_evidence_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.attempt_kind='full_scan' AND a.outcome='failed'`).Scan(&id); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT c.id::text FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.attempt_kind='full_scan' AND a.outcome='failed'`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `ALTER TABLE parcels DROP CONSTRAINT fail_full_retry`); err != nil {
@@ -173,18 +172,8 @@ func TestFailedFullScanReplayKeepsLaterQuarantineOccurrence(t *testing.T) {
 func TestDerivedAcknowledgementRequiresPreworkRequestGeneration(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	f := &parcelHTTPFixture{features: []map[string]interface{}{feature(1, "A", "owner", true, 0)}}
-	snapshot, err := parcelevidence.New(os.Getenv("PARCEL_EVIDENCE_DIR"), "full_scan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	n, err := f.source(t, 1).CaptureParcelPages(ctx, snapshot.Save, func([]connector.RawRecord) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = snapshot.Complete(n); err != nil {
-		t.Fatal(err)
-	}
-	_, err = pool.Exec(ctx, fmt.Sprintf(`CREATE TABLE derived_seen(n int);
+	id, _ := recordOfflineParcelCapture(t, ctx, pool, f.source(t, 1))
+	_, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TABLE derived_seen(n int);
  CREATE FUNCTION pause_derived() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
  IF NEW.job_id='%s' AND NEW.outcome='success' THEN
  INSERT INTO derived_seen SELECT count(*) FROM parcels;
@@ -212,7 +201,7 @@ func TestDerivedAcknowledgementRequiresPreworkRequestGeneration(t *testing.T) {
 	}
 	runner, _ := jobs.NewRunner(pool)
 	replay := make(chan error, 1)
-	go func() { _, _, e := replayFollowup(t, ctx, dsn, runner, pool, snapshot.Manifest.ID); replay <- e }()
+	go func() { _, _, e := replayFollowup(t, ctx, dsn, runner, pool, id); replay <- e }()
 	wait := func(want int) {
 		t.Helper()
 		for i := 0; i < 200; i++ {

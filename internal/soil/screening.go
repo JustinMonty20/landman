@@ -41,6 +41,11 @@ var screeningRules = []rule{
 
 const screeningMethod = "USDA Dominant Condition; tie break 1; no component cutoff"
 
+// USDAEndpoint is the source identity for retained interpretation requests.
+const USDAEndpoint = soilDataAccessURL
+
+const DefaultFreshnessInterval = 30 * 24 * time.Hour
+
 type Availability string
 
 const (
@@ -223,6 +228,32 @@ func parseTable(data []byte, columns int) ([][]any, error) {
 // FetchInterpretations validates every requested map unit and all three uses before
 // returning any evidence. Requests scale with distinct keys in batches of 50.
 func FetchInterpretations(ctx context.Context, client *http.Client, endpoint string, keys []string) ([]Interpretation, error) {
+	return CaptureInterpretations(ctx, client, endpoint, keys, nil)
+}
+
+// CaptureInterpretations retains each response before parsing or requesting the next.
+func CaptureInterpretations(ctx context.Context, client *http.Client, endpoint string, keys []string, save func(string, []byte) error) ([]Interpretation, error) {
+	limiter := rate.NewLimiter(rate.Every(time.Second), 1)
+	return ParseInterpretations(ctx, endpoint, keys, func(ctx context.Context, sql string) ([]byte, error) {
+		if err := limiter.Wait(ctx); err != nil {
+			return nil, err
+		}
+		raw, err := usdaQuery(ctx, client, endpoint, sql)
+		if err != nil {
+			return nil, err
+		}
+		if save != nil {
+			if err := save(sql, raw); err != nil {
+				return nil, err
+			}
+		}
+		return raw, nil
+	})
+}
+
+// ParseInterpretations checks all required USDA responses using a supplied response
+// reader. A capture reader must verify the generated SQL against every receipt.
+func ParseInterpretations(ctx context.Context, endpoint string, keys []string, read func(context.Context, string) ([]byte, error)) ([]Interpretation, error) {
 	unique := map[string]bool{}
 	for _, key := range keys {
 		if key == "" {
@@ -238,12 +269,8 @@ func FetchInterpretations(ctx context.Context, client *http.Client, endpoint str
 	if len(keys) == 0 {
 		return []Interpretation{}, nil
 	}
-	limiter := rate.NewLimiter(rate.Every(time.Second), 1)
 	query := func(sql string, columns int) ([][]any, error) {
-		if err := limiter.Wait(ctx); err != nil {
-			return nil, err
-		}
-		raw, err := usdaQuery(ctx, client, endpoint, sql)
+		raw, err := read(ctx, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -523,65 +550,12 @@ func FetchInterpretations(ctx context.Context, client *http.Client, endpoint str
 	return results, nil
 }
 
-// ScreeningOptions binds screening to a committed soil set and limits evidence age.
-// Every explicit Screening invocation refreshes evidence.
-type ScreeningOptions struct {
-	FreshnessInterval time.Duration
-	SoilSetID         string
-}
-
-const DefaultFreshnessInterval = 30 * 24 * time.Hour
-
-// Screening publishes interpretations and assessments for the set returned by
-// StoreWithSet. A replaced set or required fetch failure preserves the prior head.
-func Screening(ctx context.Context, connectionString string, countyID county.ID, source string, polygons []Polygon, units []MapUnit, options ...ScreeningOptions) error {
-	pool, err := pgxpool.New(ctx, connectionString)
-	if err != nil {
-		return err
+// PublishScreeningTx publishes a complete generation in the caller-owned evidence transaction.
+func PublishScreeningTx(ctx context.Context, tx pgx.Tx, countyID county.ID, source, expectedSetID string, polygons []Polygon, values []Interpretation, endpoint string, interval time.Duration, observedAt time.Time) error {
+	var err error
+	if expectedSetID == "" || interval <= 0 {
+		return errors.New("soil: screening requires set and positive freshness interval")
 	}
-	defer pool.Close()
-	return screen(ctx, pool, http.DefaultClient, soilDataAccessURL, countyID, source, polygons, units, options...)
-}
-
-func screen(ctx context.Context, pool *pgxpool.Pool, client *http.Client, endpoint string, countyID county.ID, source string, polygons []Polygon, units []MapUnit, options ...ScreeningOptions) (runErr error) {
-	var previousHead string
-	defer func() {
-		if runErr != nil {
-			failureCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			failureErr := recordScreeningFailure(failureCtx, pool, countyID, source, previousHead, runErr)
-			runErr = errors.Join(runErr, failureErr)
-		}
-	}()
-	if err := pool.QueryRow(ctx, `SELECT COALESCE((SELECT run_id::text FROM soil_screening_heads WHERE county_id=$1 AND source_name=$2),'')`, countyID.String(), source).Scan(&previousHead); err != nil {
-		return err
-	}
-	if err := validateMembership(countyID, source, polygons, units); err != nil {
-		return err
-	}
-	interval := DefaultFreshnessInterval
-	if len(options) != 1 || options[0].SoilSetID == "" {
-		return errors.New("soil: screening requires the committed soil set ID")
-	}
-	if options[0].FreshnessInterval != 0 {
-		interval = options[0].FreshnessInterval
-	}
-	if interval <= 0 {
-		return errors.New("soil: freshness interval must be positive")
-	}
-	keys := make([]string, 0, len(polygons))
-	for _, polygon := range polygons {
-		keys = append(keys, polygon.MapUnitKey)
-	}
-	values, err := FetchInterpretations(ctx, client, endpoint, keys)
-	if err != nil {
-		return err
-	}
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(context.Background())
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "soil:"+countyID.String()+":"+source); err != nil {
 		return err
 	}
@@ -589,7 +563,7 @@ func screen(ctx context.Context, pool *pgxpool.Pool, client *http.Client, endpoi
 	if err = tx.QueryRow(ctx, `SELECT set_id FROM soil_polygon_set_heads WHERE county_id=$1 AND source_name=$2`, countyID.String(), source).Scan(&setID); err != nil {
 		return fmt.Errorf("soil: no committed polygon set: %w", err)
 	}
-	if setID != options[0].SoilSetID {
+	if setID != expectedSetID {
 		return errors.New("soil: a newer polygon set replaced the source import")
 	}
 	var count int
@@ -600,7 +574,7 @@ func screen(ctx context.Context, pool *pgxpool.Pool, client *http.Client, endpoi
 		return errors.New("soil: screening membership differs from committed set")
 	}
 	var runID string
-	err = tx.QueryRow(ctx, `INSERT INTO soil_screening_runs(county_id,source_name,source_url,method,soil_set_id,assessment_method,fresh_until) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, countyID.String(), source, endpoint, screeningMethod, setID, assessmentMethod, time.Now().UTC().Add(interval)).Scan(&runID)
+	err = tx.QueryRow(ctx, `INSERT INTO soil_screening_runs(county_id,source_name,source_url,method,soil_set_id,assessment_method,fresh_until) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, countyID.String(), source, endpoint, screeningMethod, setID, assessmentMethod, observedAt.Add(interval)).Scan(&runID)
 	if err != nil {
 		return err
 	}
@@ -638,8 +612,11 @@ SELECT $1,m.polygon_id FROM soil_polygon_set_members m JOIN soil_polygons p ON p
 		if v.Availability == Rated {
 			rated = v.Rating
 		}
+		if _, e = tx.Exec(ctx, `INSERT INTO soil_interpretation_keys(map_unit_key,rule_key,aggregation,survey_version,rule_version) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, v.MapUnitKey, v.RuleKey, v.Aggregation, v.Revision.SurveyVersion, v.Revision.RuleVersion); e != nil {
+			return e
+		}
 		var interpretationID string
-		if e = tx.QueryRow(ctx, `INSERT INTO soil_interpretation_keys(map_unit_key,rule_key,aggregation,survey_version,rule_version) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (map_unit_key,rule_key,aggregation,survey_version,rule_version) DO UPDATE SET map_unit_key=excluded.map_unit_key RETURNING id`, v.MapUnitKey, v.RuleKey, v.Aggregation, v.Revision.SurveyVersion, v.Revision.RuleVersion).Scan(&interpretationID); e != nil {
+		if e = tx.QueryRow(ctx, `SELECT id FROM soil_interpretation_keys WHERE map_unit_key=$1 AND rule_key=$2 AND aggregation=$3 AND survey_version IS NOT DISTINCT FROM $4 AND rule_version IS NOT DISTINCT FROM $5`, v.MapUnitKey, v.RuleKey, v.Aggregation, v.Revision.SurveyVersion, v.Revision.RuleVersion).Scan(&interpretationID); e != nil {
 			return e
 		}
 		if _, e = tx.Exec(ctx, `INSERT INTO soil_screening_ratings(run_id,map_unit_key,rule_key,aggregation,rating,availability,components,evidence,source_query,fetched_at,provenance,interpretation_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, runID, v.MapUnitKey, v.RuleKey, v.Aggregation, rated, v.Availability, components, evidence, v.SourceQuery, v.FetchedAt, provenance, interpretationID); e != nil {
@@ -672,11 +649,14 @@ SELECT $1,m.polygon_id FROM soil_polygon_set_members m JOIN soil_polygons p ON p
 	if _, err = tx.Exec(ctx, `LOCK TABLE parcels IN SHARE MODE`); err != nil {
 		return fmt.Errorf("soil assessment parcel lock: %w", err)
 	}
-	if _, err = tx.Exec(ctx, overlapInsert, countyID.String(), source, setID); err != nil {
+	copied, err := assessParcels(ctx, tx, runID, setID, countyID, source)
+	if err != nil {
 		return err
 	}
-	if err = assessParcels(ctx, tx, runID, setID, countyID, source); err != nil {
-		return err
+	if !copied {
+		if _, err = tx.Exec(ctx, overlapInsert, countyID.String(), source, setID); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO soil_screening_heads(county_id,source_name,run_id) VALUES ($1,$2,$3) ON CONFLICT(county_id,source_name) DO UPDATE SET run_id=excluded.run_id,refresh_failed_at=NULL,refresh_error=NULL`, countyID.String(), source, runID); err != nil {
 		return err
@@ -684,11 +664,12 @@ SELECT $1,m.polygon_id FROM soil_polygon_set_members m JOIN soil_polygons p ON p
 	if _, err = tx.Exec(ctx, `DELETE FROM soil_screening_refresh_status WHERE county_id=$1 AND source_name=$2`, countyID.String(), source); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
-// A late failure must not mark a newer successful screening run as failed.
-func recordScreeningFailure(ctx context.Context, pool *pgxpool.Pool, countyID county.ID, source, previousHead string, failure error) error {
+// RecordScreeningFailure preserves the published head and ignores failures
+// from a refresh superseded by a newer successful generation.
+func RecordScreeningFailure(ctx context.Context, pool *pgxpool.Pool, countyID county.ID, source, previousHead string, failure error) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err

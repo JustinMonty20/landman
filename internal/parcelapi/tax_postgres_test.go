@@ -75,10 +75,17 @@ func TestTaxActiveFeedIdentity(t *testing.T) {
 	}
 	f = file(3)
 	var caseID string
-	if err = tx.QueryRow(ctx, `INSERT INTO tax_foreclosure_cases(county_id,source_name,case_number,parcel_set_sha256,legal_sha256,status,redeemed,bidding_closed,source_url,file_sha256,fetched_at) VALUES('union',$1,'CASE',decode(repeat('01',32),'hex'),decode(repeat('02',32),'hex'),'closed',true,true,$2,decode($3,'hex'),'2026-01-02') RETURNING id::text`, f[0], f[1], f[2]).Scan(&caseID); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO tax_foreclosure_cases(county_id,source_name,case_number,parcel_set_sha256,legal_sha256,status,redeemed,bidding_closed,source_url,file_sha256,fetched_at,active) VALUES('union',$1,'CASE',decode(repeat('01',32),'hex'),decode(repeat('02',32),'hex'),'closed',true,true,$2,decode($3,'hex'),'2026-01-02',true) RETURNING id::text`, f[0], f[1], f[2]).Scan(&caseID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO tax_foreclosure_parcels(case_id,parcel_id) VALUES($1,$2)`, caseID, parcel); err != nil {
+		t.Fatal(err)
+	}
+	var omittedID string
+	if err = tx.QueryRow(ctx, `INSERT INTO tax_foreclosure_cases(county_id,source_name,case_number,parcel_set_sha256,legal_sha256,source_url,file_sha256,fetched_at) VALUES('union',$1,NULL,decode(repeat('03',32),'hex'),decode(repeat('04',32),'hex'),$2,decode(repeat('05',32),'hex'),'2026-01-01') RETURNING id::text`, f[0], f[1]).Scan(&omittedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO tax_foreclosure_parcels(case_id,parcel_id) VALUES($1,$2)`, omittedID, parcel); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -86,7 +93,7 @@ func TestTaxActiveFeedIdentity(t *testing.T) {
 	}
 	defer func() {
 		pool.Exec(context.Background(), "DELETE FROM tax_file_imports WHERE source_name=ANY($1)", names)
-		pool.Exec(context.Background(), "DELETE FROM tax_foreclosure_cases WHERE id=$1", caseID)
+		pool.Exec(context.Background(), "DELETE FROM tax_foreclosure_cases WHERE id=$1 OR id=$2", caseID, omittedID)
 	}()
 	get := func(id string) map[string]any {
 		t.Helper()
@@ -117,6 +124,9 @@ func TestTaxActiveFeedIdentity(t *testing.T) {
 			}
 		}
 	}
+	if len(tax["foreclosure_cases"].([]any)) != 1 {
+		t.Fatal("retained omitted case was served as current")
+	}
 	if tax["pipeline"].([]any)[0].(map[string]any)["redeemed"] != true || tax["foreclosure_cases"].([]any)[0].(map[string]any)["bidding_closed"] != true {
 		t.Fatal("foreclosure status lost")
 	}
@@ -126,4 +136,49 @@ func TestTaxActiveFeedIdentity(t *testing.T) {
 	if get(empty)["reported_delinquent_total"] != nil {
 		t.Fatal("missing evidence became zero")
 	}
+
+	// A new active file does not rewrite unchanged typed rows or their provenance.
+	for _, name := range names {
+		if _, err := pool.Exec(ctx, `UPDATE tax_file_imports SET active=false WHERE source_name=$1`, name); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO tax_file_imports(county_id,source_name,source_url,fetched_at,byte_size,file_sha256,artifact_key,storage_mode,validation_result,active)
+SELECT county_id,source_name,source_url,'2026-01-03',byte_size,decode(repeat('ab',32),'hex'),
+ 'tax/'||source_name||'/sha256/'||repeat('ab',32),storage_mode,validation_result,true
+FROM tax_file_imports WHERE source_name=$1 AND fetched_at='2026-01-02'`, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unchanged := get(parcel)
+	for _, key := range []string{"bills", "delinquent_balances", "pipeline", "foreclosure_cases"} {
+		if len(unchanged[key].([]any)) == 0 {
+			t.Fatalf("new active file hid unchanged %s", key)
+		}
+		if unchanged[key].([]any)[0].(map[string]any)["sha256"] == strings.Repeat("ab", 32) {
+			t.Fatalf("%s provenance replaced without business update", key)
+		}
+	}
+	if unchanged["reported_delinquent_total"] != "69.12" {
+		t.Fatalf("active balance disappeared: %v", unchanged)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE tax_delinquent_balances SET balance_due=70 WHERE parcel_id=$1 AND tax_year=2025`, parcel); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(parcel); got["reported_delinquent_total"] != "82.34" || len(got["delinquent_balances"].([]any)) != 3 {
+		t.Fatalf("partial change hid unchanged balances: %v", got)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM tax_foreclosure_cases WHERE id=$1`, caseID); err != nil {
+		t.Fatal(err)
+	}
+	if len(get(parcel)["foreclosure_cases"].([]any)) != 0 {
+		t.Fatal("omitted foreclosure case still visible")
+	}
+	for _, route := range []string{"/api/v1/parcels?delinquent=true", "/api/v1/parcels/map?bbox=-79.8,33.2,-79.799,33.201&zoom=14&delinquent=true"} {
+		w := httptest.NewRecorder()
+		New(pool).ServeHTTP(w, httptest.NewRequest("GET", route, nil))
+		if w.Code != 200 || !strings.Contains(w.Body.String(), parcel) {
+			t.Fatalf("active delinquency missing from %s: %d %s", route, w.Code, w.Body.String())
+		}
+	}
+
 }

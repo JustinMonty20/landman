@@ -46,6 +46,21 @@ func PublishBillFile(ctx context.Context, pool *pgxpool.Pool, input io.Reader, m
 		}, add)
 }
 
+// PublishBillInTx publishes a complete staged source in the engine transaction.
+func PublishBillInTx(ctx context.Context, tx pgx.Tx, input io.Reader, meta taxsource.Meta, skippedPP int) (BillResult, error) {
+	return PublishStagedInTx[union.BillRow, BillResult](ctx, tx, input,
+		func(rows []union.BillRow) (BillResult, error) {
+			return saveBillBatch(ctx, tx, rows, meta, skippedPP, false)
+		},
+		func() (BillResult, error) { return saveBillBatch(ctx, tx, nil, meta, skippedPP, true) },
+		func(total *BillResult, batch BillResult) {
+			total.Saved += batch.Saved
+			total.Deleted += batch.Deleted
+			total.Unmatched += batch.Unmatched
+			total.SkippedPP = batch.SkippedPP
+		})
+}
+
 func saveBillBatch(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta taxsource.Meta, skippedPP int, complete bool) (BillResult, error) {
 	var result BillResult
 	if meta.Name != "union_billing" || meta.URL == "" || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedPP < 0 {
@@ -57,6 +72,9 @@ func saveBillBatch(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta ta
 		return result, err
 	}
 	digest := meta.Artifact.SHA256()
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE IF NOT EXISTS billing_seen (parcel_id uuid, tax_year smallint, PRIMARY KEY (parcel_id,tax_year)) ON COMMIT DROP`); err != nil {
+		return result, err
+	}
 	for _, row := range rows {
 		if row.ParcelKey == "" || row.Year < 1900 || row.Year > 2200 || row.TotalTaxes < 0 || row.TotalTaxes > 99999999999999 {
 			return result, errors.New("invalid billing row")
@@ -69,6 +87,9 @@ func saveBillBatch(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta ta
 		}
 		if err != nil {
 			return result, fmt.Errorf("lookup billed parcel: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO billing_seen(parcel_id,tax_year) VALUES ($1,$2) ON CONFLICT DO NOTHING`, parcelID, row.Year); err != nil {
+			return result, err
 		}
 		amount := fmt.Sprintf("%d.%02d", row.TotalTaxes/100, row.TotalTaxes%100)
 		_, err = tx.Exec(ctx, `
@@ -89,7 +110,8 @@ DO UPDATE SET
   source_url = EXCLUDED.source_url,
   file_sha256 = EXCLUDED.file_sha256,
   fetched_at = EXCLUDED.fetched_at,
-  updated_at = now()`, county.Union, meta.Name, parcelID, row.Year, amount,
+  updated_at = now()
+WHERE (tax_bills.total_taxes, tax_bills.property_address, tax_bills.taxpayer_name, tax_bills.mailing_line, tax_bills.mailing_city, tax_bills.mailing_state, tax_bills.mailing_postal_code) IS DISTINCT FROM (EXCLUDED.total_taxes, EXCLUDED.property_address, EXCLUDED.taxpayer_name, EXCLUDED.mailing_line, EXCLUDED.mailing_city, EXCLUDED.mailing_state, EXCLUDED.mailing_postal_code)`, county.Union, meta.Name, parcelID, row.Year, amount,
 			billingNullable(row.PropertyAddress), billingNullable(row.TaxpayerName), billingNullable(row.MailingLine),
 			billingNullable(row.MailingCity), billingNullable(row.MailingState), billingNullable(row.MailingPostalCode),
 			meta.URL, digest[:], meta.FetchedAt)
@@ -102,7 +124,7 @@ DO UPDATE SET
 		return result, nil
 	}
 	deleted, err := tx.Exec(ctx, `DELETE FROM tax_bills
-WHERE county_id = $1 AND source_name = $2 AND file_sha256 <> $3`, county.Union, meta.Name, digest[:])
+WHERE county_id = $1 AND source_name = $2 AND NOT EXISTS (SELECT 1 FROM billing_seen seen WHERE seen.parcel_id=tax_bills.parcel_id AND seen.tax_year=tax_bills.tax_year)`, county.Union, meta.Name)
 	if err != nil {
 		return result, fmt.Errorf("remove bills absent from billing file: %w", err)
 	}

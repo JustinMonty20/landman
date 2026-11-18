@@ -13,6 +13,12 @@ const soilPageSize = 2000
 
 // FetchSoilPolygons reads layer 197 on the same rate-limited client as parcel queries.
 func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []soil.MapUnit, error) {
+	return s.CaptureSoilPolygons(ctx, nil)
+}
+
+// CaptureSoilPolygons retains each exact count and page response before parsing it.
+// The sink must return only after durable retention succeeds.
+func (s *GISSource) CaptureSoilPolygons(ctx context.Context, save func(string, []byte, int) error) ([]soil.Polygon, []soil.MapUnit, error) {
 	countParams := ArcGISParams{Where: "1=1", ReturnCountOnly: true, Format: "json"}
 	countURL, err := s.soilURL(countParams)
 	if err != nil {
@@ -24,6 +30,11 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 	body, err := s.get(ctx, countURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("soil count request: %w", err)
+	}
+	if save != nil {
+		if err := save(countURL, body, 0); err != nil {
+			return nil, nil, err
+		}
 	}
 	if arcErr := gjson.GetBytes(body, "error"); arcErr.Exists() {
 		return nil, nil, fmt.Errorf("soil count ArcGIS error: %s", arcErr.Raw)
@@ -53,6 +64,15 @@ func (s *GISSource) FetchSoilPolygons(ctx context.Context) ([]soil.Polygon, []so
 		body, err := s.get(ctx, pageURL)
 		if err != nil {
 			return nil, nil, fmt.Errorf("soil page at offset %d: %w", offset, err)
+		}
+		if save != nil {
+			crs, err := ParcelResponseCRS(body)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := save(pageURL, body, crs); err != nil {
+				return nil, nil, err
+			}
 		}
 		pagePolygons, pageUnits, err := ParseSoilFeatures(body)
 		if err != nil {

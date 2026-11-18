@@ -49,6 +49,24 @@ func testContract(t *testing.T, store Store) {
 	if err := Verify(ctx, store, a); err != nil {
 		t.Fatal(err)
 	}
+	untrusted, err := Reference(a.Key(), a.Size(), a.SHA256())
+	if err != nil || untrusted.Verified() {
+		t.Fatalf("reference unexpectedly trusted: %v", err)
+	}
+	owned, err := ReferenceForSource("union_delinquent", a.Key(), a.Size(), a.SHA256())
+	if err != nil || owned != untrusted {
+		t.Fatalf("saved source reference rejected: %+v %v", owned, err)
+	}
+	if _, err := ReferenceForSource("union_billing", a.Key(), a.Size(), a.SHA256()); err == nil {
+		t.Fatal("accepted another source's artifact")
+	}
+	trusted, err := VerifiedReference(ctx, store, untrusted)
+	if err != nil || trusted != a {
+		t.Fatalf("verified reference differs from retained artifact: %+v %v", trusted, err)
+	}
+	if _, err := VerifiedReference(ctx, store, Artifact{key: a.Key(), size: a.Size() + 1, sha256: a.SHA256()}); err == nil {
+		t.Fatal("accepted mismatched retained artifact size")
+	}
 	retry, err := store.Put(ctx, "union_delinquent", bytes.NewReader(one))
 	if err != nil || retry != a {
 		t.Fatalf("identical retry: %+v %v", retry, err)

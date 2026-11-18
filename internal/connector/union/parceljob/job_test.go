@@ -8,14 +8,14 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
 )
 
-func TestPublicJobRejectsIncompleteSnapshotAndUnboundedRepair(t *testing.T) {
+func TestPublicJobRejectsUnregisteredCaptureAndUnboundedRepair(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}
 	job := parceljob.Job{Root: root}
 	if _, err := job.Replay(context.Background(), "00000000000000000000000000000000"); err == nil {
-		t.Fatal("incomplete snapshot accepted")
+		t.Fatal("unregistered capture accepted")
 	}
 	for _, limit := range []string{"0", "101", "broken"} {
 		if _, err := parceljob.ReprocessLimit(limit); err == nil {

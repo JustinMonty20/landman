@@ -59,6 +59,33 @@ func NewForeclosureList(path string, store taxartifact.Store) (*ForeclosureList,
 	return &ForeclosureList{path: path, store: store}, nil
 }
 
+// ReadRetained parses verified capture bytes without opening an operator input path.
+func (s *ForeclosureList) ReadRetained(ctx context.Context, artifact taxartifact.Artifact, yield func(ForeclosureCase) error) (int, error) {
+	if !artifact.Verified() || yield == nil {
+		return 0, errors.New("verified tax capture and yield required")
+	}
+	if artifact.Size() > foreclosureLimit {
+		return 0, fmt.Errorf("retained tax file exceeds %d-byte size limit", foreclosureLimit)
+	}
+	text, err := s.extract(ctx, artifact)
+	if err != nil {
+		return 0, err
+	}
+	cases, skipped, err := parseForeclosure(ctx, text)
+	if err != nil {
+		return 0, err
+	}
+	for _, sale := range cases {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if err := yield(sale); err != nil {
+			return 0, err
+		}
+	}
+	return skipped, nil
+}
+
 // Read verifies the whole PDF and all amounts before yielding any case.
 func (s *ForeclosureList) Read(ctx context.Context, yield func(ForeclosureCase) error) (taxsource.Meta, error) {
 	if yield == nil {

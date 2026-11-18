@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"io"
 	"net/http"
 	"net/url"
@@ -49,17 +50,28 @@ func fetchNames(ctx context.Context, client *http.Client, endpoint string, keys 
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	quoted := make([]string, len(keys))
-	for i, key := range keys {
-		quoted[i] = "'" + strings.ReplaceAll(key, "'", "''") + "'"
-	}
-	query := fmt.Sprintf(`SELECT m.mukey, m.musym, m.muname, l.areasymbol, s.areaname, s.saverest FROM mapunit AS m JOIN legend AS l ON m.lkey = l.lkey LEFT JOIN sacatalog AS s ON l.areasymbol = s.areasymbol WHERE m.mukey IN (%s)`, strings.Join(quoted, ","))
+	query := NameQuery(keys)
 	lookupCtx, cancel := context.WithTimeout(ctx, nameLookupTimeout)
 	defer cancel()
 	raw, err := usdaQuery(lookupCtx, client, endpoint, query)
 	if err != nil {
 		return nil, err
 	}
+	return ParseNameResponse(raw)
+}
+
+// NameQuery identifies the optional USDA map-unit-name response.
+func NameQuery(keys []string) string {
+	quoted := make([]string, len(keys))
+	for i, key := range keys {
+		quoted[i] = "'" + strings.ReplaceAll(key, "'", "''") + "'"
+	}
+	query := fmt.Sprintf(`SELECT m.mukey, m.musym, m.muname, l.areasymbol, s.areaname, s.saverest FROM mapunit AS m JOIN legend AS l ON m.lkey = l.lkey LEFT JOIN sacatalog AS s ON l.areasymbol = s.areasymbol WHERE m.mukey IN (%s)`, strings.Join(quoted, ","))
+	return query
+}
+
+// ParseNameResponse validates the retained USDA response before publication.
+func ParseNameResponse(raw []byte) (map[string]nameResult, error) {
 	var data struct {
 		Table [][]any `json:"Table"`
 	}
@@ -95,4 +107,76 @@ func fetchNames(ctx context.Context, client *http.Client, endpoint string, keys 
 		results[fields[0]] = nameResult{fields[0], fields[1], fields[2], fields[3], fields[4], date}
 	}
 	return results, nil
+}
+
+// CaptureNames keeps optional map-unit labels within the same evidence boundary.
+func CaptureNames(ctx context.Context, client *http.Client, endpoint string, keys []string, save func(string, []byte) error) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	query := NameQuery(keys)
+	lookupCtx, cancel := context.WithTimeout(ctx, nameLookupTimeout)
+	defer cancel()
+	raw, err := usdaQuery(lookupCtx, client, endpoint, query)
+	if err != nil {
+		return err
+	}
+	if save != nil {
+		if err := save(query, raw); err != nil {
+			return err
+		}
+	}
+	_, err = ParseNameResponse(raw)
+	return err
+}
+
+// CapturedSurveyDates returns USDA dates keyed by map unit from verified name bytes.
+func CapturedSurveyDates(raw []byte) (map[string]time.Time, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	names, err := ParseNameResponse(raw)
+	if err != nil {
+		return nil, err
+	}
+	dates := make(map[string]time.Time)
+	for key, name := range names {
+		if name.surveyDate != nil {
+			dates[key] = *name.surveyDate
+		}
+	}
+	return dates, nil
+}
+
+// StoreCapturedSurveyDatesTx binds saved USDA dates to the new screening run.
+func StoreCapturedSurveyDatesTx(ctx context.Context, tx pgx.Tx, dates map[string]time.Time, runID, setID string) error {
+	for key, date := range dates {
+		if _, err := tx.Exec(ctx, `INSERT INTO soil_screening_survey_dates(run_id,polygon_id,survey_saved_on)
+SELECT $1::uuid,polygon_id,$3::date FROM soil_polygon_set_members WHERE set_id=$2::uuid AND map_unit_key=$4`, runID, setID, date.Format("2006-01-02"), key); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO soil_screening_survey_dates(run_id,polygon_id,survey_saved_on)
+SELECT $1::uuid, m.polygon_id, old.survey_saved_on FROM soil_polygon_set_members m
+CROSS JOIN LATERAL (SELECT d.survey_saved_on FROM soil_screening_survey_dates d
+JOIN soil_screening_runs r ON r.id=d.run_id
+JOIN soil_polygon_set_members prior ON prior.set_id=r.soil_set_id AND prior.polygon_id=m.polygon_id AND prior.map_unit_key=m.map_unit_key
+WHERE d.polygon_id=m.polygon_id AND d.run_id<>$1::uuid
+ORDER BY r.created_at DESC, r.id DESC LIMIT 1) old
+WHERE m.set_id=$2::uuid ON CONFLICT DO NOTHING`, runID, setID)
+	return err
+}
+
+// StoreCapturedNamesTx applies optional labels only after their bytes are verified.
+func StoreCapturedNamesTx(ctx context.Context, tx pgx.Tx, raw []byte, observedAt time.Time) error {
+	names, err := ParseNameResponse(raw)
+	if err != nil {
+		return err
+	}
+	for key, name := range names {
+		if _, err := tx.Exec(ctx, `UPDATE soil_map_units SET map_unit_name=NULLIF($2,''),map_unit_symbol=$3,area_symbol=$4,area_name=NULLIF($5,''),fetched_at=$6 WHERE map_unit_key=$1 AND (map_unit_name IS DISTINCT FROM NULLIF($2,'') OR map_unit_symbol IS DISTINCT FROM $3 OR area_symbol IS DISTINCT FROM $4 OR area_name IS DISTINCT FROM NULLIF($5,''))`, key, name.name, name.symbol, name.areaSymbol, name.areaName, observedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }

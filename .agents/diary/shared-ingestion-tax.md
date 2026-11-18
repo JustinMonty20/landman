@@ -1,0 +1,2 @@
+- [skipped refactor] The existing exported `taxstore.PublishBillFile` and `PublishDelinquentFile` helpers remain for existing callers and tests; the tax job no longer calls them. Removing those non-runtime APIs is separate from replacing the runtime publication path.
+- [scope tangent] `taxstore.Latest` reads dates from matched typed rows, not the active file-import evidence. A valid file with no matched parcel reports no typed-row date; changing that existing read contract needs separate review.

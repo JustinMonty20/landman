@@ -3,14 +3,22 @@ package soil
 import (
 	"context"
 	"github.com/JustinMonty20/landman/internal/county"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // NeedsScreenStored checks persisted dependencies, not the last parcel job's
 // transient changed count. Failed, expired, missing and stale work stays due.
 func NeedsScreenStored(ctx context.Context, pool *pgxpool.Pool, countyID county.ID, source string) (bool, error) {
+	return NeedsScreenTx(ctx, pool, countyID, source)
+}
+
+// NeedsScreenTx checks the stored inputs after the caller locks parcel geometry.
+func NeedsScreenTx(ctx context.Context, tx interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, countyID county.ID, source string) (bool, error) {
 	var due bool
-	err := pool.QueryRow(ctx, `SELECT NOT EXISTS (
+	err := tx.QueryRow(ctx, `SELECT NOT EXISTS (
  SELECT 1 FROM soil_screening_heads h JOIN soil_screening_runs r ON r.id=h.run_id
  JOIN soil_polygon_set_heads sh ON sh.county_id=h.county_id AND sh.source_name=h.source_name
 

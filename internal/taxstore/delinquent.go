@@ -48,6 +48,24 @@ func PublishDelinquentFile(ctx context.Context, pool *pgxpool.Pool, input io.Rea
 		}, add)
 }
 
+// PublishDelinquentInTx publishes a complete staged source in the engine transaction.
+func PublishDelinquentInTx(ctx context.Context, tx pgx.Tx, input io.Reader, meta taxsource.Meta, skippedPP, skippedRR int) (DelinquentResult, error) {
+	return PublishStagedInTx[union.DelinquentRow, DelinquentResult](ctx, tx, input,
+		func(rows []union.DelinquentRow) (DelinquentResult, error) {
+			return saveDelinquentBatch(ctx, tx, rows, meta, skippedPP, skippedRR, false)
+		},
+		func() (DelinquentResult, error) {
+			return saveDelinquentBatch(ctx, tx, nil, meta, skippedPP, skippedRR, true)
+		},
+		func(total *DelinquentResult, batch DelinquentResult) {
+			total.Saved += batch.Saved
+			total.Deleted += batch.Deleted
+			total.Unmatched += batch.Unmatched
+			total.SkippedPP = batch.SkippedPP
+			total.SkippedRR = batch.SkippedRR
+		})
+}
+
 func saveDelinquentBatch(ctx context.Context, tx pgx.Tx, rows []union.DelinquentRow, meta taxsource.Meta, skippedPP, skippedRR int, complete bool) (DelinquentResult, error) {
 	var result DelinquentResult
 	if meta.Name != "union_delinquent" || meta.URL == "" || meta.FetchedAt.IsZero() || !meta.Artifact.Verified() || meta.SHA256 != meta.Artifact.SHA256() || skippedPP < 0 || skippedRR < 0 {
@@ -59,6 +77,9 @@ func saveDelinquentBatch(ctx context.Context, tx pgx.Tx, rows []union.Delinquent
 		return result, err
 	}
 	digest := meta.Artifact.SHA256()
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE IF NOT EXISTS delinquent_seen (parcel_id uuid, tax_year smallint, PRIMARY KEY (parcel_id,tax_year)) ON COMMIT DROP`); err != nil {
+		return result, err
+	}
 	for _, row := range rows {
 		if row.ParcelKey == "" || row.Year < 1900 || row.Year > 2200 || row.Balance < 0 || row.PrimarySource != "RE" {
 			return result, errors.New("invalid delinquent row")
@@ -71,6 +92,9 @@ func saveDelinquentBatch(ctx context.Context, tx pgx.Tx, rows []union.Delinquent
 		}
 		if err != nil {
 			return result, fmt.Errorf("lookup delinquent parcel: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO delinquent_seen(parcel_id,tax_year) VALUES ($1,$2) ON CONFLICT DO NOTHING`, parcelID, row.Year); err != nil {
+			return result, err
 		}
 		balance := fmt.Sprintf("%d.%02d", row.Balance/100, row.Balance%100)
 		_, err = tx.Exec(ctx, `
@@ -85,7 +109,8 @@ DO UPDATE SET
   source_url = EXCLUDED.source_url,
   file_sha256 = EXCLUDED.file_sha256,
   fetched_at = EXCLUDED.fetched_at,
-  updated_at = now()`, county.Union, meta.Name, parcelID, row.Year, balance,
+  updated_at = now()
+WHERE (tax_delinquent_balances.balance_due, tax_delinquent_balances.primary_source) IS DISTINCT FROM (EXCLUDED.balance_due, EXCLUDED.primary_source)`, county.Union, meta.Name, parcelID, row.Year, balance,
 			row.PrimarySource, meta.URL, digest[:], meta.FetchedAt)
 		if err != nil {
 			return result, fmt.Errorf("save delinquent balance: %w", err)
@@ -96,7 +121,7 @@ DO UPDATE SET
 		return result, nil
 	}
 	deleted, err := tx.Exec(ctx, `DELETE FROM tax_delinquent_balances
-WHERE county_id = $1 AND source_name = $2 AND file_sha256 <> $3`, county.Union, meta.Name, digest[:])
+WHERE county_id = $1 AND source_name = $2 AND NOT EXISTS (SELECT 1 FROM delinquent_seen seen WHERE seen.parcel_id=tax_delinquent_balances.parcel_id AND seen.tax_year=tax_delinquent_balances.tax_year)`, county.Union, meta.Name)
 	if err != nil {
 		return result, fmt.Errorf("remove balances absent from delinquent file: %w", err)
 	}

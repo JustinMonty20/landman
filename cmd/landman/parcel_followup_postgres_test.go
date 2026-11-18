@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustinMonty20/landman/internal/connector"
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
+	"github.com/JustinMonty20/landman/internal/ingest"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/parcelevidence"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -38,24 +38,23 @@ func TestRegisteredCaptureMismatchRejectedOnEmptyStore(t *testing.T) {
 		t.Fatalf("failed initial capture: %s %v", out, err)
 	}
 	var id string
-	if err := pool.QueryRow(ctx, `SELECT artifact_id FROM parcel_evidence_captures`).Scan(&id); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM ingest_captures`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(os.Getenv("PARCEL_EVIDENCE_DIR"), id, "manifest.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
+	var data []byte
+	if err := pool.QueryRow(ctx, `SELECT manifest FROM ingest_captures WHERE id=$1::uuid`, id).Scan(&data); err != nil {
 		t.Fatal(err)
 	}
-	var manifest parcelevidence.Manifest
+	var manifest ingest.Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	manifest.CreatedAt = manifest.CreatedAt.Add(time.Second)
-	data, err = json.Marshal(manifest)
+	manifest.ObservedAt = manifest.ObservedAt.Add(time.Second)
+	altered, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE ingest_captures SET manifest=$2 WHERE id=$1::uuid`, id, altered); err != nil {
 		t.Fatal(err)
 	}
 	runner, _ := jobs.NewRunner(pool)
@@ -82,7 +81,7 @@ func TestRegisteredMixedRetryPreservesNewerPID(t *testing.T) {
 		t.Fatalf("expected registered failure: %s %v", out, err)
 	}
 	var id string
-	if err := pool.QueryRow(ctx, `SELECT c.artifact_id FROM parcel_evidence_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE a.outcome='failed'`).Scan(&id); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT c.id::text FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE a.outcome='failed'`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `ALTER TABLE parcels DROP CONSTRAINT fail_followup`); err != nil {
@@ -175,7 +174,7 @@ func TestFailedRegisteredRepairReplayKeepsUnverifiableIdentityPending(t *testing
 		t.Fatalf("expected registered repair publication failure: %s %v", out, err)
 	}
 	var id string
-	if err := pool.QueryRow(ctx, `SELECT c.artifact_id FROM parcel_evidence_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.attempt_kind='reprocess' AND a.outcome='failed'`).Scan(&id); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT c.id::text FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE c.attempt_kind='reprocess' AND a.outcome='failed'`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `ALTER TABLE parcels DROP CONSTRAINT reject_followup_repair`); err != nil {
@@ -308,32 +307,52 @@ func TestHashVersionTransitionDoesNotWriteBusinessHistory(t *testing.T) {
 	}
 }
 
+func TestLiveParcelPublicationRequestsDerivedHandoff(t *testing.T) {
+	ctx, dsn, pool := parcelFixtureDB(t)
+	fixture := &parcelHTTPFixture{features: []map[string]interface{}{feature(1, "A", "owner", true, 0)}}
+	source := fixture.source(t, 1)
+	if out, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || out != jobs.OutcomeSuccess {
+		t.Fatalf("initial parcel import: %s %v", out, err)
+	}
+	var generation int64
+	var screen, qualification bool
+	if err := pool.QueryRow(ctx, `SELECT request_generation,screening_pending,qualification_pending FROM parcel_derived_handoff`).Scan(&generation, &screen, &qualification); err != nil || !screen || !qualification {
+		t.Fatalf("live geometry did not request both derived jobs: %d %t %t %v", generation, screen, qualification, err)
+	}
+	if out, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || out != jobs.OutcomeSuccess {
+		t.Fatalf("repeat parcel import: %s %v", out, err)
+	}
+	var after int64
+	if err := pool.QueryRow(ctx, `SELECT request_generation FROM parcel_derived_handoff`).Scan(&after); err != nil || after != generation {
+		t.Fatalf("unchanged parcel advanced derived generation: %d -> %d (%v)", generation, after, err)
+	}
+	fixture.features = []map[string]interface{}{feature(1, "A", "new owner", true, 0)}
+	if out, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || out != jobs.OutcomeSuccess {
+		t.Fatalf("ownership-only import: %s %v", out, err)
+	}
+	if countRows(t, ctx, pool, "parcel_evidence_history") != 2 || countRows(t, ctx, pool, "parcel_derived_handoff") != 1 {
+		t.Fatal("ownership-only import lost history or enqueued derived work")
+	}
+	if err := pool.QueryRow(ctx, `SELECT request_generation FROM parcel_derived_handoff`).Scan(&after); err != nil || after != generation {
+		t.Fatalf("ownership-only import advanced derived generation: %d -> %d (%v)", generation, after, err)
+	}
+}
+
 func TestReplayDerivedHandoffPersistsAcrossPendingScreening(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	f := &parcelHTTPFixture{features: []map[string]interface{}{feature(1, "A", "owner", true, 0)}}
-	root := os.Getenv("PARCEL_EVIDENCE_DIR")
-	snapshot, err := parcelevidence.New(root, "full_scan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := f.source(t, 1)
-	n, err := source.CaptureParcelPages(ctx, snapshot.Save, func([]connector.RawRecord) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := snapshot.Complete(n); err != nil {
-		t.Fatal(err)
-	}
+	id, _ := recordOfflineParcelCapture(t, ctx, pool, f.source(t, 1))
 	runner, _ := jobs.NewRunner(pool)
-	out, result, err := replayFollowup(t, ctx, dsn, runner, pool, snapshot.Manifest.ID)
+	out, result, err := replayFollowup(t, ctx, dsn, runner, pool, id)
 	if err != nil || out != jobs.OutcomeSuccess || result.Processed != 1 {
 		t.Fatalf("offline rebuild: %s %+v %v", out, result, err)
 	}
 	var screen, qualification bool
-	if err := pool.QueryRow(ctx, `SELECT screening_pending,qualification_pending FROM parcel_derived_handoff WHERE artifact_id=$1`, snapshot.Manifest.ID).Scan(&screen, &qualification); err != nil || !screen || !qualification {
+	var generation int64
+	if err := pool.QueryRow(ctx, `SELECT screening_pending,qualification_pending,request_generation FROM parcel_derived_handoff WHERE artifact_id=$1`, id).Scan(&screen, &qualification, &generation); err != nil || !screen || !qualification {
 		t.Fatalf("missing durable derived request: %t %t %v", screen, qualification, err)
 	}
-	out, result, err = replayFollowup(t, ctx, dsn, runner, pool, snapshot.Manifest.ID)
+	out, result, err = replayFollowup(t, ctx, dsn, runner, pool, id)
 	if err != nil || out != jobs.OutcomeSuccess || result.Processed != 1 {
 		t.Fatalf("repeat current replay: %s %+v %v", out, result, err)
 	}
@@ -341,14 +360,23 @@ func TestReplayDerivedHandoffPersistsAcrossPendingScreening(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM parcel_derived_handoff`).Scan(&requests); err != nil || requests != 1 {
 		t.Fatalf("duplicate handoff %d %v", requests, err)
 	}
+	var after int64
+	if err := pool.QueryRow(ctx, `SELECT request_generation FROM parcel_derived_handoff WHERE artifact_id=$1`, id).Scan(&after); err != nil || after != generation {
+		t.Fatalf("unchanged current replay advanced derived generation: %d -> %d (%v)", generation, after, err)
+	}
 	t.Setenv("DATABASE_URL", dsn)
+	blockedRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedRoot, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PARCEL_EVIDENCE_DIR", filepath.Join(blockedRoot, "soil"))
 	args := os.Args
 	defer func() { os.Args = args }()
 	os.Args = []string{"landman", "run", qualificationJobID}
 	if err := run(ctx); err != nil {
 		t.Fatalf("stored-input qualification recovery: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT screening_pending,qualification_pending FROM parcel_derived_handoff WHERE artifact_id=$1`, snapshot.Manifest.ID).Scan(&screen, &qualification); err != nil || !screen || qualification {
+	if err := pool.QueryRow(ctx, `SELECT screening_pending,qualification_pending FROM parcel_derived_handoff WHERE artifact_id=$1`, id).Scan(&screen, &qualification); err != nil || !screen || qualification {
 		t.Fatalf("qualification recovery cleared wrong handoff: screening=%t qualification=%t err=%v", screen, qualification, err)
 	}
 }

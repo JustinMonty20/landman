@@ -3,9 +3,11 @@
 package main
 
 import (
+	"encoding/json"
+	"github.com/JustinMonty20/landman/internal/ingest"
 	"github.com/JustinMonty20/landman/internal/jobs"
-	"github.com/JustinMonty20/landman/internal/parcelevidence"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -30,19 +32,20 @@ func TestParcelLargeInvalidFeatureUsesCompleteFileEvidence(t *testing.T) {
 	if payloadSize >= 64*1024 {
 		t.Fatalf("unbounded quarantine payload %d", payloadSize)
 	}
-	dir, err := os.Getenv("PARCEL_EVIDENCE_DIR"), nil
-	if err != nil {
+	var saved []byte
+	if err := pool.QueryRow(ctx, `SELECT manifest FROM ingest_captures WHERE id=$1::uuid`, snapshotID).Scan(&saved); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := parcelevidence.Open(dir, snapshotID)
-	if err != nil {
+	var manifest ingest.Manifest
+	if err := json.Unmarshal(saved, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	wantReference := snapshotID + "/" + snapshot.Manifest.Receipts[1].Path + "@" + snapshot.Manifest.Receipts[1].SHA256 + "#0"
+	receipt := manifest.Receipts[1]
+	wantReference := receipt.ArtifactKey + "@" + receipt.SHA256 + "#0"
 	if reference != wantReference {
 		t.Fatalf("invalid evidence reference %s; want %s", reference, wantReference)
 	}
-	body, err := snapshot.Read(1)
+	body, err := os.ReadFile(filepath.Join(os.Getenv("PARCEL_EVIDENCE_DIR"), filepath.FromSlash(receipt.ArtifactKey)))
 	if err != nil || !strings.Contains(string(body), strings.Repeat("x", 70*1024)) {
 		t.Fatal("original source feature missing", err)
 	}

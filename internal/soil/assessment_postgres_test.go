@@ -18,21 +18,23 @@ import (
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/models"
 	"github.com/JustinMonty20/landman/internal/parcelstore"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/ewkb"
 )
 
 type assessmentFixture struct {
-	t      *testing.T
-	ctx    context.Context
-	db     *pgxpool.Pool
-	source string
-	setID  string
-	server *httptest.Server
-	mode   atomic.Int32
-	calls  atomic.Int32
-	units  []MapUnit
+	t               *testing.T
+	ctx             context.Context
+	db              *pgxpool.Pool
+	source          string
+	setID           string
+	server          *httptest.Server
+	mode            atomic.Int32
+	calls           atomic.Int32
+	units           []MapUnit
+	ownedMapUnitKey string
 }
 
 func newAssessmentFixture(t *testing.T) *assessmentFixture {
@@ -136,6 +138,16 @@ func newAssessmentFixture(t *testing.T) *assessmentFixture {
 		} {
 			if _, err := db.Exec(context.Background(), sql, f.source); err != nil {
 				t.Errorf("cleanup: %v", err)
+			}
+		}
+		if f.ownedMapUnitKey != "" {
+			for _, query := range []string{
+				`DELETE FROM soil_interpretation_keys WHERE map_unit_key=$1`,
+				`DELETE FROM soil_map_units WHERE map_unit_key=$1`,
+			} {
+				if _, err := db.Exec(context.Background(), query, f.ownedMapUnitKey); err != nil {
+					t.Errorf("cleanup map unit: %v", err)
+				}
 			}
 		}
 		db.Close()
@@ -703,7 +715,7 @@ func TestPostgresLateFailureDoesNotStaleNewHead(t *testing.T) {
 	if oldHead == newHead {
 		t.Fatal("fixture did not publish a new head")
 	}
-	if err := recordScreeningFailure(f.ctx, f.db, county.Union, f.source, oldHead, fmt.Errorf("late failure")); err != nil {
+	if err := RecordScreeningFailure(f.ctx, f.db, county.Union, f.source, oldHead, fmt.Errorf("late failure")); err != nil {
 		t.Fatal(err)
 	}
 	if current := f.read(id); current.Freshness.Stale || current.InterpretationSetRevision != newHead {
@@ -789,5 +801,106 @@ func TestPostgresAssessmentFailedRefreshAndCancellationAreAtomic(t *testing.T) {
 	}
 	if f.calls.Load() != calls {
 		t.Fatal("duplicate membership reached USDA")
+	}
+}
+
+func TestPostgresMetadataPreservesLegacySurveyDate(t *testing.T) {
+	f := newAssessmentFixture(t)
+	parcelID := f.parcel("legacy-date", f.box(0, 0, 100, 100), true)
+	polygon := f.polygon("legacy", "115341", 0, 100)
+	f.store([]Polygon{polygon})
+	legacyDate := time.Date(2025, 7, 8, 0, 0, 0, 0, time.UTC)
+	if _, err := f.db.Exec(f.ctx, `UPDATE soil_polygons SET survey_saved_on=$2 WHERE source_name=$1 AND object_id='legacy'`, f.source, legacyDate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(f.ctx, `UPDATE soil_map_units SET map_unit_name='Retained name' WHERE map_unit_key=$1`, polygon.MapUnitKey); err != nil {
+		t.Fatal(err)
+	}
+	version := 6.0
+	polygon.SpatialVersion = &version
+	polygon.SurveySavedOn = nil
+	tx, err := f.db.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(f.ctx)
+	setID, err := StoreMetadataWithSetTx(f.ctx, tx, county.Union, f.source, []Polygon{polygon}, f.units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.setID = setID
+	f.screen([]Polygon{polygon})
+	assessment := f.read(parcelID)
+	for _, use := range assessment.Uses {
+		for _, unit := range use.MapUnits {
+			for _, evidence := range unit.Polygons {
+				if evidence.SurveySavedOn == nil || evidence.SurveySavedOn.Format("2006-01-02") != "2025-07-08" {
+					t.Fatalf("legacy survey date lost on metadata refresh: %+v", evidence)
+				}
+			}
+		}
+	}
+}
+
+func TestPostgresFullSoilWriterRetainsSurveyDateOnlyForSameMapUnit(t *testing.T) {
+	f := newAssessmentFixture(t)
+	var inserted string
+	err := f.db.QueryRow(f.ctx, `INSERT INTO soil_map_units(map_unit_key,map_unit_name)
+VALUES ('115330','Appling sandy loam') ON CONFLICT DO NOTHING RETURNING map_unit_key`).Scan(&inserted)
+	if err != nil && err != pgx.ErrNoRows {
+		t.Fatal(err)
+	}
+	if err == nil {
+		f.ownedMapUnitKey = inserted
+	} else {
+		const fixtureName = "Appling sandy loam (survey date fixture)"
+		tag, err := f.db.Exec(f.ctx, `UPDATE soil_map_units SET map_unit_name=$1 WHERE map_unit_key='115330' AND map_unit_name IS NULL`, fixtureName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tag.RowsAffected() != 0 {
+			t.Cleanup(func() {
+				if _, err := f.db.Exec(f.ctx, `UPDATE soil_map_units SET map_unit_name=NULL WHERE map_unit_key='115330' AND map_unit_name=$1`, fixtureName); err != nil {
+					t.Errorf("restore map unit name: %v", err)
+				}
+			})
+		}
+	}
+	parcelID := f.parcel("full-writer-date", f.box(0, 0, 100, 100), true)
+	polygon := f.polygon("full-writer", "115341", 0, 100)
+	f.store([]Polygon{polygon})
+	legacyDate := time.Date(2025, 7, 8, 0, 0, 0, 0, time.UTC)
+	if _, err := f.db.Exec(f.ctx, `UPDATE soil_polygons SET survey_saved_on=$2 WHERE source_name=$1 AND object_id='full-writer'`, f.source, legacyDate); err != nil {
+		t.Fatal(err)
+	}
+	// The full writer must handle a repeated polygon even when no new USDA date arrives.
+	f.store([]Polygon{polygon})
+	var date *time.Time
+	if err := f.db.QueryRow(f.ctx, `SELECT survey_saved_on FROM soil_polygons WHERE source_name=$1 AND object_id='full-writer'`, f.source).Scan(&date); err != nil || date == nil || !date.Equal(legacyDate) {
+		t.Fatalf("same-key date = %v: %v", date, err)
+	}
+	// The target is already named, so the full writer receives no new USDA date.
+	var name *string
+	if err := f.db.QueryRow(f.ctx, `SELECT map_unit_name FROM soil_map_units WHERE map_unit_key='115330'`).Scan(&name); err != nil || name == nil {
+		t.Fatalf("target map unit must have a name: %v %v", name, err)
+	}
+	polygon.MapUnitKey = "115330"
+	f.store([]Polygon{polygon})
+	if err := f.db.QueryRow(f.ctx, `SELECT survey_saved_on FROM soil_polygons WHERE source_name=$1 AND object_id='full-writer'`, f.source).Scan(&date); err != nil || date != nil {
+		t.Fatalf("changed-key date = %v: %v", date, err)
+	}
+	f.screen([]Polygon{polygon})
+	assessment := f.read(parcelID)
+	for _, use := range assessment.Uses {
+		for _, unit := range use.MapUnits {
+			for _, evidence := range unit.Polygons {
+				if evidence.SurveySavedOn != nil {
+					t.Fatalf("old map unit date leaked into current assessment: %+v", evidence)
+				}
+			}
+		}
 	}
 }
