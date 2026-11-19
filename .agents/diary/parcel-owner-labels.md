@@ -1,3 +1,5 @@
 # Parcel owner labels — deferred classification insights
 
 - **Scope tangent worth pursuing later:** Additional GIS-only signals to evaluate separately: mailing-versus-situs address mismatch (incomplete situs address limits confidence), tax-versus-current owner name difference (January 1 snapshot may legitimately lag), valuation/building/acreage changes, and owner-name trust/estate markers for review. Cluster parcels by normalized current owner plus mailing address to estimate portfolios, but expect homonyms, shared mailing agents, and multiple owners; do not equate a shared mailbox with one legal owner. Measure false positives on real records before promoting any to alerts or definitive ownership categories.
+- **Out-of-scope decision.** The FEMA worktree owns migration 000036, which is absent from this checkout. This work uses 000037; deploy 000036 first so Goose does not skip the lower version after 000037 advances the database.
+- **Out-of-scope decision.** The browser remains unchanged. The authenticated parcel API exposes labels and filters, but browser controls and source-record manual review require a separate release window and approved source access.

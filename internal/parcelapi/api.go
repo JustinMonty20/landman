@@ -31,13 +31,16 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 
 type Bounds struct{ West, South, East, North float64 }
 type Filters struct {
-	AcresMin     *float64
-	AcresMax     *float64
-	LikelyVacant *bool
-	Delinquent   *bool
-	Bounds       *Bounds
-	PageSize     int
-	After        string
+	AcresMin               *float64
+	AcresMax               *float64
+	LikelyVacant           *bool
+	Delinquent             *bool
+	OutOfStateMailing      *string
+	EntityNameIndicator    *string
+	CorporateNameIndicator *string
+	Bounds                 *Bounds
+	PageSize               int
+	After                  string
 }
 type cursor struct {
 	After  string `json:"after"`
@@ -109,9 +112,9 @@ func parseFilters(q url.Values) (Filters, error) {
 
 func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	f := Filters{PageSize: 50}
-	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "bbox", "page_size", "cursor"}
+	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor"}
 	if mapQuery {
-		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "bbox", "zoom"}
+		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom"}
 	}
 	if err := parse(q, allowed...); err != nil {
 		return f, err
@@ -145,6 +148,28 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 			*item.target = &v
 		}
 	}
+	for _, item := range []struct {
+		key    string
+		target **string
+		valid  []string
+	}{
+		{"out_of_state_mailing", &f.OutOfStateMailing, []string{"yes", "no", "unknown"}},
+		{"entity_name_indicator", &f.EntityNameIndicator, []string{"matched", "not_detected", "unknown"}},
+		{"corporate_name_indicator", &f.CorporateNameIndicator, []string{"matched", "not_detected", "unknown"}},
+	} {
+		if v, ok := q[item.key]; ok {
+			good := false
+			for _, allowed := range item.valid {
+				if v[0] == allowed {
+					good = true
+				}
+			}
+			if !good {
+				return f, errors.New("invalid owner label filter")
+			}
+			*item.target = &v[0]
+		}
+	}
 	if raw, ok := q["bbox"]; ok {
 		var e error
 		f.Bounds, e = parseBounds(raw[0])
@@ -168,7 +193,7 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	return f, nil
 }
 func (f Filters) active() bool {
-	return f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil
+	return f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil
 }
 func (f Filters) digest() string {
 	copy := f
@@ -202,6 +227,12 @@ func optBool(p *bool) any {
 	}
 	return *p
 }
+func optString(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
 func (f Filters) args() []any {
 	a := []any{countyID, parcelSource, optFloat(f.AcresMin), optFloat(f.AcresMax), optBool(f.LikelyVacant), optBool(f.Delinquent), nil, nil, nil, nil}
 	if f.Bounds != nil {
@@ -210,6 +241,7 @@ func (f Filters) args() []any {
 		a[8] = f.Bounds.East
 		a[9] = f.Bounds.North
 	}
+	a = append(a, optString(f.OutOfStateMailing), optString(f.EntityNameIndicator), optString(f.CorporateNameIndicator))
 	return a
 }
 
@@ -218,7 +250,10 @@ const predicate = `p.county_id=$1 AND p.source_name=$2
  AND ($4::float8 IS NULL OR p.mapped_acres <= $4)
  AND ($5::boolean IS NULL OR p.likely_vacant=$5)
  AND ($6::boolean IS NULL OR EXISTS (SELECT 1 FROM tax_delinquent_balances d WHERE d.parcel_id=p.id AND d.balance_due>0 AND EXISTS (SELECT 1 FROM tax_file_imports i WHERE i.active AND i.county_id=d.county_id AND i.source_name=d.source_name) )=$6)
- AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857))))`
+ AND ($11::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.out_of_state_mailing=$11))
+AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.entity_name_indicator=$12))
+AND ($13::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.corporate_name_indicator=$13))
+AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857))))`
 const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,p.likely_vacant,p.updated_at`
 
 func scanParcel(row pgx.Row) (Parcel, error) {
@@ -317,7 +352,11 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	} else if err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads)))
+	var labelRevision int64
+	if err := tx.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&labelRevision); err != nil {
+		return "", err
+	}
+	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision)))
 	return hex.EncodeToString(h[:]), nil
 }
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +395,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a := append(f.args(), after, f.PageSize+1)
-		rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$11::uuid ORDER BY p.id LIMIT $12`, a...)
+		rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$14::uuid ORDER BY p.id LIMIT $15`, a...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -476,6 +515,15 @@ func (f Filters) mapMatch(args *[]any) string {
 		*args = append(*args, *f.Delinquent)
 		parts = append(parts, fmt.Sprintf(`EXISTS (SELECT 1 FROM tax_delinquent_balances d JOIN tax_file_imports i ON i.active AND i.county_id=d.county_id AND i.source_name=d.source_name WHERE d.parcel_id=p.id AND d.balance_due>0) = $%d`, len(*args)))
 	}
+	for _, item := range []struct {
+		status *string
+		column string
+	}{{f.OutOfStateMailing, "out_of_state_mailing"}, {f.EntityNameIndicator, "entity_name_indicator"}, {f.CorporateNameIndicator, "corporate_name_indicator"}} {
+		if item.status != nil {
+			*args = append(*args, *item.status)
+			parts = append(parts, fmt.Sprintf("EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.%s=$%d)", item.column, len(*args)))
+		}
+	}
 	if len(parts) == 0 {
 		return "false"
 	}
@@ -484,7 +532,7 @@ func (f Filters) mapMatch(args *[]any) string {
 
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent"); e != nil {
+	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator"); e != nil {
 		bad(w, e)
 		return
 	}
@@ -655,6 +703,14 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
+	var labels []byte
+	e = tx.QueryRow(r.Context(), `SELECT jsonb_build_object('out_of_state_mailing',out_of_state_mailing,'entity_name_indicator',entity_name_indicator,'corporate_name_indicator',corporate_name_indicator,'mailing_state',mailing_state,'matched_suffix',matched_suffix,'matched_owner_line',matched_owner_line,'classified_at',classified_at) FROM parcel_owner_labels WHERE parcel_id=$1`, id).Scan(&labels)
+	if errors.Is(e, pgx.ErrNoRows) {
+		labels = []byte("null")
+	} else if e != nil {
+		unavailable(w)
+		return
+	}
 	var sales []byte
 	e = tx.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('date',sale_date,'amount',amount::text,'deed_book',deed_book,'deed_page',deed_page) ORDER BY sequence),'[]'::jsonb) FROM parcel_sales WHERE parcel_id=$1`, id).Scan(&sales)
 	if e != nil {
@@ -670,7 +726,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
-	respond(w, map[string]any{"parcel": p, "county": countyID, "source": parcelSource, "source_parcel_id": sourceID, "location": json.RawMessage(location), "sales": json.RawMessage(sales), "source_stamp": s})
+	respond(w, map[string]any{"parcel": p, "county": countyID, "source": parcelSource, "source_parcel_id": sourceID, "location": json.RawMessage(location), "sales": json.RawMessage(sales), "owner_labels": json.RawMessage(labels), "source_stamp": s})
 }
 func (h *Handler) soil(w http.ResponseWriter, r *http.Request, id string) {
 	// CurrentAssessment owns its own read-only snapshot and freshness logic.

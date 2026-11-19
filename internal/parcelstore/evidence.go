@@ -304,6 +304,15 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 		}
 	}
 	if unchanged {
+		var missingID models.ParcelID
+		err = w.tx.QueryRow(ctx, `SELECT p.id FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=$1 AND NOT EXISTS (SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id)`, pid).Scan(&missingID)
+		if err == nil {
+			if err = saveOwnerLabels(ctx, w.tx, missingID, last.Owner, last.Mailing); err != nil {
+				return 0, err
+			}
+		} else if err != pgx.ErrNoRows {
+			return 0, err
+		}
 		if !correction || publicationKind == "offline_retry" || *oldHashVersion != parcelevidence.NormalizedHashVersion {
 			if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 				return 0, err
