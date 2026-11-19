@@ -107,13 +107,16 @@ func (p *publisher) prepareAssessmentRanges(ctx context.Context, capture ingest.
 			return errors.New("assessment partition page count mismatch")
 		}
 		for _, feature := range page.Features {
-			oid := gjson.GetBytes(feature, "attributes.OBJECTID")
-			if oid.Type != gjson.Number || oid.Raw != strconv.FormatInt(oid.Int(), 10) || oid.Int() < lo || oid.Int() > hi {
+			oid, err := union.AssessmentObjectID(feature)
+			if err != nil || oid < lo || oid > hi {
 				return errors.New("assessment row outside partition")
 			}
 			row, err := parseAssessment(feature)
 			if err != nil {
 				return err
+			}
+			if row.ObjectID != strconv.FormatInt(oid, 10) {
+				return errors.New("assessment published OBJECTID differs from partition identity")
 			}
 			p.assessments = append(p.assessments, row)
 		}

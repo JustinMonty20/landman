@@ -86,8 +86,8 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			return errors.New("assessment page incomplete")
 		}
 		for _, feature := range features.Array() {
-			oid := feature.Get("attributes.OBJECTID")
-			if oid.Type != gjson.Number || oid.Raw != strconv.FormatInt(oid.Int(), 10) || oid.Int() < lo || oid.Int() > hi {
+			oid, err := AssessmentObjectID([]byte(feature.Raw))
+			if err != nil || oid < lo || oid > hi {
 				return errors.New("assessment page outside partition")
 			}
 		}

@@ -65,8 +65,17 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 			if right && !left {
 				oid = math.MaxInt64
 			}
-			if mode == "wrong OID" && right && !left && i == 0 {
-				oid = 1
+			if right && !left && i == 0 {
+				switch mode {
+				case "wrong OID":
+					oid = 1
+				case "duplicate OID":
+					fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d,"\u004fBJECTID":1,"parcel_number":"001"}}`, oid)
+					continue
+				case "duplicate envelope":
+					fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d},"\u0061ttributes":{"OBJECTID":1,"parcel_number":"001"}}`, oid)
+					continue
+				}
 			}
 			fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d,"parcel_number":"001","assess_category":"AV","market_building":0}}`, oid)
 		}
@@ -115,6 +124,18 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 		change func(int, string, []byte) (string, []byte, bool)
 	}{
 		{"missing later page", func(i int, u string, b []byte) (string, []byte, bool) { return u, b, i != 7 }},
+		{"duplicate identity replay", func(i int, u string, b []byte) (string, []byte, bool) {
+			if i == 7 {
+				b = []byte(strings.Replace(string(b), `"OBJECTID":9223372036854775807`, `"OBJECTID":9223372036854775807,"\u004fBJECTID":1`, 1))
+			}
+			return u, b, true
+		}},
+		{"duplicate envelope replay", func(i int, u string, b []byte) (string, []byte, bool) {
+			if i == 7 {
+				b = []byte(strings.Replace(string(b), `{"attributes":{"OBJECTID":9223372036854775807,"parcel_number":"001","assess_category":"AV","market_building":0}}`, `{"attributes":{"OBJECTID":9223372036854775807,"parcel_number":"001"},"\u0061ttributes":{"OBJECTID":1,"parcel_number":"001"}}`, 1))
+			}
+			return u, b, true
+		}},
 		{"changed partition count", func(i int, u string, b []byte) (string, []byte, bool) {
 			if i == 6 {
 				b = []byte(`{"count":1000}`)
@@ -174,8 +195,9 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 			}
 		})
 	}
-	mode = "wrong OID"
-	if _, err := capture(); err == nil {
-		t.Fatal("out of range row accepted")
+	for _, mode = range []string{"wrong OID", "duplicate OID", "duplicate envelope"} {
+		if _, err := capture(); err == nil {
+			t.Fatalf("%s accepted during capture", mode)
+		}
 	}
 }

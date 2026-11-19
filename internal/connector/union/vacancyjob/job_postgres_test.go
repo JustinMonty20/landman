@@ -263,6 +263,9 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 4 {
 		t.Fatalf("offline retry did not publish: %v", err)
 	}
+	if query(`SELECT count(*) FROM vacancy_live_generations WHERE capture_id='`+retryID+`'::uuid AND validation_note='bounded numeric-range assessment observation; county snapshot, query support, coverage and effective year unverified'`) != 1 {
+		t.Fatal("offline retry lost partition provenance")
+	}
 	var acceptedAfterRetry string
 	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&acceptedAfterRetry); err != nil {
 		t.Fatal(err)

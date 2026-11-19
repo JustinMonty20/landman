@@ -57,6 +57,7 @@ func TestAssessmentRangesAtomicAndOffline(t *testing.T) {
 	}
 	requests := 0
 	failLater := false
+	duplicateIdentity := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		q := r.URL.Query()
@@ -90,6 +91,10 @@ func TestAssessmentRangesAtomicAndOffline(t *testing.T) {
 			oid := int64(1)
 			if right && !left {
 				oid = math.MaxInt64
+			}
+			if duplicateIdentity && right && !left && i == 0 {
+				fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d,"\u004fBJECTID":1,"parcel_number":"001"}}`, oid)
+				continue
 			}
 			fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d,"parcel_number":"001","assess_category":"AV","market_building":0}}`, oid)
 		}
@@ -129,6 +134,25 @@ func TestAssessmentRangesAtomicAndOffline(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&accepted); err != nil || accepted != original {
 		t.Fatalf("failed capture changed cursor: %v", err)
 	}
+	failLater = false
+	duplicateIdentity = true
+	if err := run(); err == nil {
+		t.Fatal("duplicate identity published")
+	}
+	check(2002)
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&accepted); err != nil || accepted != original {
+		t.Fatalf("duplicate identity advanced cursor: %v", err)
+	}
+	var rejected string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM ingest_captures WHERE source_name='union_assessed_value_0' ORDER BY observed_at DESC LIMIT 1`).Scan(&rejected); err != nil {
+		t.Fatal(err)
+	}
+	beforeRejectedReplay := requests
+	if err := job.Replay(ctx, rejected); err == nil || requests != beforeRejectedReplay {
+		t.Fatalf("ambiguous capture replay accepted or contacted source: %v", err)
+	}
+	check(2002)
+	duplicateIdentity = false
 	before := requests
 	if err := job.Replay(ctx, original); err != nil || requests != before {
 		t.Fatalf("offline replay: %v requests=%d", err, requests-before)

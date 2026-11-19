@@ -111,10 +111,13 @@ type publisher struct {
 	count            int
 	sourceURL        string
 	legacyStructures bool
+	legacyAssessment bool
 }
 
 func (p *publisher) validationNote() string {
 	switch {
+	case p.legacyAssessment:
+		return "bounded single-page assessment observation; county snapshot, partition membership, coverage and effective year unverified"
 	case p.layer == union.AssessedValueLayer:
 		return "bounded numeric-range assessment observation; county snapshot, query support, coverage and effective year unverified"
 	case p.legacyStructures:
@@ -142,6 +145,7 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 	pageIndex := 0
 	legacyStructures := structure && len(m.Receipts) == 2
 	p.legacyStructures = legacyStructures
+	p.legacyAssessment = !structure
 	var aggregateBytes int64
 	seenLegacy := make(map[string]bool)
 	for i, r := range m.Receipts {
