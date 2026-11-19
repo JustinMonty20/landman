@@ -332,3 +332,133 @@ func TestStructureMultiPageCaptureAndReplayValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyStructureCaptureReplayProtocol(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := taxartifact.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "https://example.test/server/rest/services/OperationalLayers/MapServer/171/query?"
+	for _, tc := range []struct {
+		name, count, page string
+		status            int
+		valid             bool
+	}{
+		{"bounded", `{"count":1}`, `{"spatialReference":{"wkid":3857},"features":[{"attributes":{"OBJECTID":7},"geometry":{"rings":[[]]}}]}`, 200, true},
+		{"duplicate", `{"count":2}`, `{"spatialReference":{"wkid":3857},"features":[{"attributes":{"OBJECTID":7},"geometry":{"rings":[[]]}},{"attributes":{"OBJECTID":7},"geometry":{"rings":[[]]}}]}`, 200, false},
+		{"oversized legacy count", `{"count":2001}`, `{"spatialReference":{"wkid":3857},"features":[]}`, 200, false},
+		{"refusal", `{"count":1}`, `{"spatialReference":{"wkid":3857},"features":[{"attributes":{"OBJECTID":7},"geometry":{"rings":[[]]}}]}`, 403, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := ingest.NewRecorder(store, "union_structures_171", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = r.RecordHTTP(ctx, base+"f=json&returnCountOnly=true&where=1%3D1", "", 0, 200, true, strings.NewReader(tc.count)); err != nil {
+				t.Fatal(err)
+			}
+			if err = r.RecordHTTP(ctx, base+"f=json&outFields=%2A&outSR=3857&resultRecordCount=2000&returnGeometry=true&where=1%3D1", "", 3857, tc.status, true, strings.NewReader(tc.page)); err != nil {
+				t.Fatal(err)
+			}
+			if err = r.BindAttempt(StructuresID, "00000000-0000-0000-0000-000000000001", "full_scan", 0); err != nil {
+				t.Fatal(err)
+			}
+			v, err := r.Verify(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := &publisher{layer: union.StructuresLayer}
+			err = p.Prepare(ctx, v)
+			if (err == nil) != tc.valid {
+				t.Fatalf("prepare: %v", err)
+			}
+			if tc.valid && (p.validationNote() != "bounded single-page structures observation; source ID membership and county coverage unverified" || len(p.structures) != 1) {
+				t.Fatalf("legacy provenance or rows: %+v", p)
+			}
+		})
+	}
+}
+
+func TestStructureReplayAggregateLimit(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := taxartifact.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ingest.NewRecorder(store, "union_structures_171", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "https://example.test/server/rest/services/OperationalLayers/MapServer/171/query?"
+	add := func(query, body string, crs int) {
+		t.Helper()
+		if err := r.RecordHTTP(ctx, base+query, "", crs, 200, true, strings.NewReader(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("f=json&returnCountOnly=true&where=1%3D1", `{"count":18000}`, 0)
+	var ids strings.Builder
+	ids.WriteString(`{"objectIdFieldName":"OBJECTID","objectIds":[`)
+	for i := 1; i <= 18000; i++ {
+		if i > 1 {
+			ids.WriteByte(',')
+		}
+		fmt.Fprint(&ids, i)
+	}
+	ids.WriteString(`]}`)
+	add("f=json&returnIdsOnly=true&where=1%3D1", ids.String(), 0)
+	padding := strings.Repeat(" ", 29<<20)
+	for offset := 0; offset < 18000; offset += 2000 {
+		var page strings.Builder
+		page.WriteString(`{"spatialReference":{"wkid":3857},"features":[`)
+		for i := offset + 1; i <= offset+2000; i++ {
+			if i > offset+1 {
+				page.WriteByte(',')
+			}
+			fmt.Fprintf(&page, `{"attributes":{"OBJECTID":%d},"geometry":{"rings":[[]]}}`, i)
+		}
+		page.WriteString(`]}`)
+		page.WriteString(padding)
+		add(fmt.Sprintf("f=json&outFields=%%2A&orderByFields=OBJECTID+ASC&outSR=3857&resultOffset=%d&resultRecordCount=2000&returnGeometry=true&where=1%%3D1", offset), page.String(), 3857)
+	}
+	add("f=json&returnIdsOnly=true&where=1%3D1", ids.String(), 0)
+	add("f=json&returnCountOnly=true&where=1%3D1", `{"count":18000}`, 0)
+	if err := r.BindAttempt(StructuresID, "00000000-0000-0000-0000-000000000001", "full_scan", 0); err != nil {
+		t.Fatal(err)
+	}
+	capture, err := r.Verify(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = (&publisher{layer: union.StructuresLayer}).Prepare(ctx, capture); err == nil || !strings.Contains(err.Error(), "aggregate byte limit") {
+		t.Fatalf("replay accepted oversized capture: %v", err)
+	}
+}
+
+func TestStructureFingerprintIndependentOfPageSplit(t *testing.T) {
+	rows := []structure{{ObjectID: "1", Geometry: json.RawMessage(`{"rings":[[]]}`), CRS: 3857}, {ObjectID: "2", Geometry: json.RawMessage(`{"rings":[[]]}`), CRS: 3857}, {ObjectID: "3", Geometry: json.RawMessage(`{"rings":[[]]}`), CRS: 3857}}
+	fingerprint := func(pages ...[]structure) string {
+		p := &publisher{layer: union.StructuresLayer}
+		for _, page := range pages {
+			p.structures = append(p.structures, page...)
+		}
+		p.count = len(p.structures)
+		hash, err := p.normalizedFingerprint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hash
+	}
+	if fingerprint(rows[:1], rows[1:]) != fingerprint(rows[:2], rows[2:]) {
+		t.Fatal("page split changed structure fingerprint")
+	}
+}

@@ -22,12 +22,22 @@ const (
 	AssessedValueLayer VacancyLayer = "assessed_value"
 )
 
-// CaptureVacancyLayer retains the complete response of a bounded single-page query.
-// Multi-page imports require a verified stable total ordering or snapshot cursor.
-// In particular, assessed-value OBJECTID is not a unique row identity.
-func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer, save func(string, []byte, int, int, bool) error) (int, error) {
-	if save == nil {
+// VacancyCaptureByteLimit bounds retained response bytes across one capture attempt.
+const VacancyCaptureByteLimit int64 = 256 << 20
+
+// CaptureVacancyLayer retains bounded responses. Structures pages reconcile source IDs;
+// assessed-value OBJECTID is not a unique row identity and cannot safely page.
+func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer, saveReceipt func(string, []byte, int, int, bool) error) (int, error) {
+	if saveReceipt == nil {
 		return 0, errors.New("capture callback required")
+	}
+	var aggregateBytes int64
+	save := func(request string, body []byte, crs, status int, complete bool) error {
+		aggregateBytes += int64(len(body))
+		if aggregateBytes > VacancyCaptureByteLimit {
+			return errors.New("vacancy capture exceeds aggregate byte limit")
+		}
+		return saveReceipt(request, body, crs, status, complete)
 	}
 	base, err := url.Parse(s.baseURL)
 	if err != nil {

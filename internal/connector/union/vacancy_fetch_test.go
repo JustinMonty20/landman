@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -94,5 +95,48 @@ func TestVacancyRejectedPageRetainedBeforeValidation(t *testing.T) {
 				t.Fatalf("rejected page not retained: %v; receipts %d", err, len(receipts))
 			}
 		})
+	}
+}
+
+func TestVacancyAggregateCaptureLimit(t *testing.T) {
+	padding := strings.Repeat(" ", 29<<20)
+	var calls, retained int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		q := r.URL.Query()
+		if q.Get("returnCountOnly") == "true" {
+			fmt.Fprint(w, `{"count":18000}`)
+			return
+		}
+		if q.Get("returnIdsOnly") == "true" {
+			fmt.Fprint(w, `{"objectIdFieldName":"OBJECTID","objectIds":[`)
+			for i := 1; i <= 18000; i++ {
+				if i > 1 {
+					fmt.Fprint(w, ",")
+				}
+				fmt.Fprint(w, i)
+			}
+			fmt.Fprint(w, `]}`)
+			return
+		}
+		offset, _ := strconv.Atoi(q.Get("resultOffset"))
+		fmt.Fprint(w, `{"spatialReference":{"wkid":3857},"features":[`)
+		for i := offset + 1; i <= offset+2000; i++ {
+			if i > offset+1 {
+				fmt.Fprint(w, ",")
+			}
+			fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d}}`, i)
+		}
+		fmt.Fprint(w, `]}`)
+		fmt.Fprint(w, padding)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.CaptureVacancyLayer(context.Background(), StructuresLayer, func(_ string, _ []byte, _ int, _ int, _ bool) error { retained++; return nil })
+	if err == nil || !strings.Contains(err.Error(), "aggregate byte limit") || retained != 10 || calls != 11 {
+		t.Fatalf("aggregate gate: %v; retained=%d requests=%d", err, retained, calls)
 	}
 }

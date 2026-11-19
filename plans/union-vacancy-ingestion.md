@@ -28,3 +28,8 @@ A point query for parcel `09336350` returned two identical `AV` rows and two ide
 - Use local HTTP fixtures and disposable PostGIS. Verify cancellation, malformed and partial captures, duplicate assessment rows, hash failure, identical repeats, and offline replay. Verify that an old replay preserves newer evidence.
 - Keep coverage, effective appraisal year, conflicting row selection, county-wide paging, and import duration as live verification checks. Do not claim that fixture tests pass these checks.
 - Add the satellite link in the [browser parcel plan](browser-parcel-ui.md). Do not embed imagery in this work.
+
+## Remaining county-scale measurement
+- Structures capture and offline replay reject more than 256 MiB of combined response bytes; each response also remains limited to 32 MiB. The 250,000-row count gate and job deadline still apply. The aggregate budget limits retained bytes, not peak heap or database publication time. An over-budget live capture is rejected, never downgraded to the older two-receipt protocol.
+- Before countywide use, measure actual county Structures count, aggregate response bytes, peak heap during normalization and fingerprinting, publication duration, deadline margin, ID reconciliation stability, and repeat-scan coverage under approved live access. Fixture tests do not establish these measurements. Assessment remains capped at 2,000 rows and cannot page without a supported complete partition.
+- Two-receipt historical Structures captures may replay offline with their original bounded single-page gates and HTTP audit checks. Their published provenance explicitly says source-ID membership was not reconciled. New live fetches always use paged, reconciled Structures capture.

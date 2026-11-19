@@ -105,11 +105,23 @@ type assessment struct {
 	Building, Land, Total            *string
 }
 type publisher struct {
-	layer       union.VacancyLayer
-	structures  []structure
-	assessments []assessment
-	count       int
-	sourceURL   string
+	layer            union.VacancyLayer
+	structures       []structure
+	assessments      []assessment
+	count            int
+	sourceURL        string
+	legacyStructures bool
+}
+
+func (p *publisher) validationNote() string {
+	switch {
+	case p.layer == union.AssessedValueLayer:
+		return "bounded assessment observation; paging, coverage and effective year unverified"
+	case p.legacyStructures:
+		return "bounded single-page structures observation; source ID membership and county coverage unverified"
+	default:
+		return "paged source-ID-reconciled structures observation; county snapshot and coverage unverified"
+	}
 }
 
 func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture) error {
@@ -125,6 +137,10 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 	var ids []int64
 	var count int
 	pageIndex := 0
+	legacyStructures := structure && len(m.Receipts) == 2
+	p.legacyStructures = legacyStructures
+	var aggregateBytes int64
+	seenLegacy := make(map[string]bool)
 	for i, r := range m.Receipts {
 		if r.HTTPStatus < 200 || r.HTTPStatus >= 300 || !r.ResponseComplete {
 			return errors.New("vacancy response lacks successful complete HTTP outcome")
@@ -163,6 +179,10 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 		if e = errors.Join(readErr, body.Close()); e != nil {
 			return e
 		}
+		aggregateBytes += int64(len(raw))
+		if aggregateBytes > union.VacancyCaptureByteLimit {
+			return errors.New("vacancy capture exceeds aggregate byte limit")
+		}
 		if len(raw) > 32<<20 || !gjson.ValidBytes(raw) || gjson.GetBytes(raw, "error").Exists() {
 			return errors.New("invalid vacancy response")
 		}
@@ -171,13 +191,13 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 				return errors.New("missing vacancy count request")
 			}
 			v := gjson.GetBytes(raw, "count")
-			if gjson.GetBytes(raw, "exceededTransferLimit").Bool() || v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > 250000 || !structure && v.Int() > 2000 {
+			if gjson.GetBytes(raw, "exceededTransferLimit").Bool() || v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > 250000 || (!structure || legacyStructures) && v.Int() > 2000 {
 				return errors.New("vacancy count exceeds safe gate")
 			}
 			count = int(v.Int())
 			continue
 		}
-		if structure && i == len(m.Receipts)-1 {
+		if structure && !legacyStructures && i == len(m.Receipts)-1 {
 			if len(q) != 3 || q.Get("returnCountOnly") != "true" || r.CRS != 0 {
 				return errors.New("unexpected final structure count request")
 			}
@@ -187,7 +207,7 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 			}
 			continue
 		}
-		if structure && (i == 1 || i == len(m.Receipts)-2) {
+		if structure && !legacyStructures && (i == 1 || i == len(m.Receipts)-2) {
 			if len(q) != 3 || q.Get("returnIdsOnly") != "true" || r.CRS != 0 {
 				return errors.New("unexpected structure ID request")
 			}
@@ -209,18 +229,21 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 			}
 			continue
 		}
-		if structure && (i < 2 || i >= len(m.Receipts)-2) {
+		if structure && !legacyStructures && (i < 2 || i >= len(m.Receipts)-2) {
 			return errors.New("invalid structure receipt sequence")
 		}
 		expectedParams := 5
 		if structure {
 			expectedParams = 8
+			if legacyStructures {
+				expectedParams = 6
+			}
 		}
 		if len(q) != expectedParams || q.Get("resultRecordCount") != "2000" || q.Get("outFields") != "*" || q.Get("returnGeometry") != strconv.FormatBool(structure) {
 			return errors.New("unexpected vacancy page request")
 		}
 		if structure {
-			if q.Get("outSR") != "3857" || q.Get("orderByFields") != "OBJECTID ASC" || q.Get("resultOffset") != strconv.Itoa(pageIndex*2000) || r.CRS != 3857 && r.CRS != 102100 {
+			if q.Get("outSR") != "3857" || (!legacyStructures && (q.Get("orderByFields") != "OBJECTID ASC" || q.Get("resultOffset") != strconv.Itoa(pageIndex*2000))) || r.CRS != 3857 && r.CRS != 102100 {
 				return errors.New("unsupported structure page request")
 			}
 			crs, e := union.ParcelResponseCRS(raw)
@@ -249,7 +272,12 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 				if e != nil {
 					return e
 				}
-				if v.ObjectID != strconv.FormatInt(ids[pageIndex*2000+n], 10) {
+				if legacyStructures {
+					if seenLegacy[v.ObjectID] {
+						return errors.New("duplicate structure OBJECTID")
+					}
+					seenLegacy[v.ObjectID] = true
+				} else if v.ObjectID != strconv.FormatInt(ids[pageIndex*2000+n], 10) {
 					return errors.New("structure page source ID membership drift")
 				}
 				p.structures = append(p.structures, v)
@@ -263,7 +291,7 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 		}
 		pageIndex++
 	}
-	if structure && (len(m.Receipts) != max(1, (count+1999)/2000)+4 || len(p.structures) != count) || !structure && (len(m.Receipts) != 2 || len(p.assessments) != count) {
+	if structure && !legacyStructures && (len(m.Receipts) != max(1, (count+1999)/2000)+4 || len(p.structures) != count) || structure && legacyStructures && (pageIndex != 1 || len(p.structures) != count) || !structure && (len(m.Receipts) != 2 || len(p.assessments) != count) {
 		return errors.New("incomplete vacancy capture")
 	}
 	p.count = count
@@ -405,8 +433,14 @@ func (p *publisher) normalizedFingerprint() (string, error) {
 		}
 	}
 	sort.Strings(rows)
-	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
-	return hex.EncodeToString(sum[:]), nil
+	h := sha256.New()
+	for i, row := range rows {
+		if i != 0 {
+			_, _ = h.Write([]byte("\n"))
+		}
+		_, _ = io.WriteString(h, row)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 const normalizerVersion = "vacancy-rows-v1"
@@ -455,9 +489,9 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count)
+		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4,validation_note=$5 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count, p.validationNote())
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version) VALUES($1,$2::uuid,$3,$4,$5,$6,$7) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, "bounded source-ID-reconciled observation; county snapshot, coverage and assessment paging unverified", fingerprint, normalizerVersion).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version) VALUES($1,$2::uuid,$3,$4,$5,$6,$7) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, p.validationNote(), fingerprint, normalizerVersion).Scan(&id)
 	}
 	if err != nil {
 		return err

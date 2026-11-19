@@ -13,8 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
+	"github.com/JustinMonty20/landman/internal/ingest"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -102,6 +104,9 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	}
 	if err := run(); err != nil {
 		t.Fatal(err)
+	}
+	if query(`SELECT count(*) FROM vacancy_live_generations WHERE validation_note='bounded assessment observation; paging, coverage and effective year unverified'`) != 1 {
+		t.Fatal("assessment provenance incorrect")
 	}
 	if query(`SELECT count(*) FROM vacancy_live_assessments`) != 2 {
 		t.Fatal("lost duplicate OIDs")
@@ -379,8 +384,8 @@ func TestStructurePagesAtomicAndOfflineReplay(t *testing.T) {
 	if err = run(); err != nil {
 		t.Fatal(err)
 	}
-	if count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 {
-		t.Fatal("missing structure page")
+	if count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 || count(`SELECT count(*) FROM vacancy_live_generations WHERE validation_note='paged source-ID-reconciled structures observation; county snapshot and coverage unverified'`) != 1 {
+		t.Fatal("missing structure page or paged provenance")
 	}
 	var good string
 	if err = pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_live_generations WHERE source_name='union_structures_171'`).Scan(&good); err != nil {
@@ -408,5 +413,81 @@ func TestStructurePagesAtomicAndOfflineReplay(t *testing.T) {
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: StructuresID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, good) }})
 	if err != nil || requests != before || count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 {
 		t.Fatalf("offline replay changed publication: %v", err)
+	}
+}
+
+func TestLegacyStructureOfflineReplayProvenance(t *testing.T) {
+	dsn := os.Getenv("API_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("API_TEST_DATABASE_URL missing")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var db string
+	if err = pool.QueryRow(ctx, `SELECT current_database()`).Scan(&db); err != nil || !strings.HasPrefix(db, "landman_api_test_") {
+		t.Fatal("refusing non-disposable database")
+	}
+	for _, stmt := range []string{`TRUNCATE vacancy_live_structures,vacancy_live_generations CASCADE`, `DELETE FROM vacancy_latest_observations WHERE source_name='union_structures_171'`, `DELETE FROM ingest_replay_attempts WHERE capture_id IN (SELECT id FROM ingest_captures WHERE source_name='union_structures_171')`, `DELETE FROM ingest_captures WHERE source_name='union_structures_171'`} {
+		if _, err = pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	if err = os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := taxartifact.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ingest.NewRecorder(store, "union_structures_171", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "https://example.test/server/rest/services/OperationalLayers/MapServer/171/query?"
+	for _, receipt := range []struct {
+		url, body string
+		crs       int
+	}{
+		{base + "f=json&returnCountOnly=true&where=1%3D1", `{"count":1}`, 0},
+		{base + "f=json&outFields=%2A&outSR=3857&resultRecordCount=2000&returnGeometry=true&where=1%3D1", `{"spatialReference":{"wkid":3857},"features":[{"attributes":{"OBJECTID":7},"geometry":{"rings":[[[0,0],[1,0],[0,0]]]}}]}`, 3857},
+	} {
+		if err = r.RecordHTTP(ctx, receipt.url, "", receipt.crs, 200, true, strings.NewReader(receipt.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := ingest.Engine{Pool: pool, Store: store}
+	runner, err := jobs.NewRunner(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: StructuresID, Run: func(ctx context.Context) (jobs.Result, error) {
+		attempt, ok := jobs.AttemptID(ctx)
+		if !ok {
+			return jobs.Result{}, fmt.Errorf("missing attempt")
+		}
+		if err := r.BindAttempt(StructuresID, attempt, "full_scan", 0); err != nil {
+			return jobs.Result{}, err
+		}
+		var err error
+		id, err = engine.Seal(ctx, r)
+		return jobs.Result{}, err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := Job{Pool: pool, Artifacts: store, Layer: union.StructuresLayer}
+	if err = job.Replay(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	var note string
+	var count int
+	if err = pool.QueryRow(ctx, `SELECT validation_note,observed_count FROM vacancy_live_generations WHERE capture_id=$1::uuid`, id).Scan(&note, &count); err != nil || note != "bounded single-page structures observation; source ID membership and county coverage unverified" || count != 1 {
+		t.Fatalf("legacy publication: note=%q count=%d err=%v", note, count, err)
 	}
 }
