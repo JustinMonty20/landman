@@ -36,9 +36,16 @@ func TestOwnerLabelsBackfillAcrossBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Exec(context.Background(), `DELETE FROM parcels WHERE source_parcel_id LIKE $1||'%'`, prefix)
+	var before, after int64
+	if err := pool.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
 	processed, total, err := parcelstore.BackfillOwnerLabels(ctx, pool)
 	if err != nil || processed != 501 || total < 501 {
 		t.Fatalf("batches: %d processed, %d total: %v", processed, total, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&after); err != nil || after != before+2 {
+		t.Fatalf("expected one revision per 500-row transaction: %d -> %d: %v", before, after, err)
 	}
 	var count int
 	err = pool.QueryRow(ctx, `SELECT count(*) FROM parcels p JOIN parcel_owner_labels l ON l.parcel_id=p.id WHERE p.source_parcel_id LIKE $1||'%' AND l.corporate_name_indicator='matched' AND l.out_of_state_mailing='yes'`, prefix).Scan(&count)

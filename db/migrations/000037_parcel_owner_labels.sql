@@ -15,9 +15,33 @@ CREATE TABLE parcel_owner_labels (
   OR (entity_name_indicator <> 'matched' AND corporate_name_indicator <> 'matched' AND matched_suffix IS NULL AND matched_owner_line IS NULL)
  )
 );
+CREATE TABLE parcel_owner_label_revision (
+id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+revision BIGINT NOT NULL DEFAULT 0,
+last_writer_xid BIGINT
+);
+INSERT INTO parcel_owner_label_revision(id) VALUES (true);
+-- A deferred row trigger acquires the shared revision lock only at commit, after
+-- parcel locks. One transaction increments once, including multi-row backfills.
+-- +goose StatementBegin
+CREATE FUNCTION advance_parcel_owner_label_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE parcel_owner_label_revision SET revision = revision + 1,
+    last_writer_xid = pg_current_xact_id()::text::bigint
+  WHERE id AND last_writer_xid IS DISTINCT FROM pg_current_xact_id()::text::bigint;
+  RETURN NULL;
+END;
+$$;
+-- +goose StatementEnd
+CREATE CONSTRAINT TRIGGER parcel_owner_label_revision_change
+AFTER INSERT OR UPDATE OR DELETE ON parcel_owner_labels
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+EXECUTE FUNCTION advance_parcel_owner_label_revision();
 CREATE INDEX parcel_owner_labels_classified_at ON parcel_owner_labels(classified_at DESC);
 CREATE INDEX parcel_owner_labels_mailing_yes ON parcel_owner_labels(parcel_id) WHERE out_of_state_mailing='yes';
 CREATE INDEX parcel_owner_labels_entity_matched ON parcel_owner_labels(parcel_id) WHERE entity_name_indicator='matched';
 CREATE INDEX parcel_owner_labels_corporate_matched ON parcel_owner_labels(parcel_id) WHERE corporate_name_indicator='matched';
 -- +goose Down
 DROP TABLE parcel_owner_labels;
+DROP FUNCTION advance_parcel_owner_label_revision();
+DROP TABLE parcel_owner_label_revision;

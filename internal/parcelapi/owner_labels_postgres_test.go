@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -71,6 +72,30 @@ func TestOwnerLabelsAPI(t *testing.T) {
 	defer pool.Exec(context.Background(), `DELETE FROM parcels WHERE id=$1`, secondID)
 	_, err = pool.Exec(ctx, `INSERT INTO parcel_owner_labels(parcel_id,out_of_state_mailing,entity_name_indicator,corporate_name_indicator,mailing_state,matched_suffix,matched_owner_line,classified_at) VALUES($1,'yes','matched','not_detected','SC','LLC',1,now())`, secondID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Rollback(context.Background())
+	var snapshotRevision, sameSnapshotRevision, committedRevision int64
+	if err := reader.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&snapshotRevision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE parcel_owner_labels SET classified_at=now()+interval '30 minutes' WHERE parcel_id=$1`, secondID); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&sameSnapshotRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&committedRevision); err != nil {
+		t.Fatal(err)
+	}
+	if sameSnapshotRevision != snapshotRevision || committedRevision != snapshotRevision+1 {
+		t.Fatalf("revision not snapshot-visible: %d %d %d", snapshotRevision, sameSnapshotRevision, committedRevision)
+	}
+	if err := reader.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
 	code, page := request("/api/v1/parcels?out_of_state_mailing=yes&page_size=1")

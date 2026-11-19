@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -125,21 +124,57 @@ func TestOwnerLabelsCanonicalPublicationReplayAndConcurrentBackfill(t *testing.T
 	if _, err := pool.Exec(ctx, `DELETE FROM parcel_owner_labels WHERE parcel_id=$1`, parcelID); err != nil {
 		t.Fatal(err)
 	}
-	var wg sync.WaitGroup
-	wg.Add(1)
+	anchor, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchor.Rollback(context.Background())
+	if _, err := anchor.Exec(ctx, `SELECT id FROM parcels WHERE id=$1 FOR UPDATE`, parcelID); err != nil {
+		t.Fatal(err)
+	}
+	waitForLock := func(fragment string) {
+		t.Helper()
+		deadline := time.Now().Add(12 * time.Second)
+		for time.Now().Before(deadline) {
+			var waiting bool
+			err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%'||$1||'%' AND ($1<>'source_parcel_id' OR query NOT LIKE '%FOR UPDATE OF p%') AND pid<>pg_backend_pid())`, fragment).Scan(&waiting)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if waiting {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("did not observe lock wait for %q", fragment)
+	}
 	backfillErr := make(chan error, 1)
-	started := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		close(started)
 		_, _, err := parcelstore.BackfillOwnerLabels(ctx, pool)
 		backfillErr <- err
 	}()
-	<-started
-	_ = publish("PERSON", "NC")
-	wg.Wait()
-	if err := <-backfillErr; err != nil {
+	waitForLock("FOR UPDATE OF p")
+	publicationDone := make(chan struct{})
+	go func() {
+		defer close(publicationDone)
+		_ = publish("PERSON", "NC")
+	}()
+	waitForLock("source_parcel_id")
+	if err := anchor.Commit(ctx); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-publicationDone:
+	case <-ctx.Done():
+		t.Fatal("publication timed out waiting for parcel lock", ctx.Err())
+	}
+	select {
+	case err := <-backfillErr:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("backfill timed out waiting for parcel lock", ctx.Err())
 	}
 	read()
 	if name != "PERSON" || state != "NC" || mailing != "no" || entity != "not_detected" {
