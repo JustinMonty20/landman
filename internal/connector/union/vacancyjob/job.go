@@ -118,10 +118,13 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 		return err
 	}
 	m := capture.Manifest()
-	if m.Source != source || m.Kind != "full_scan" || len(m.Receipts) != 2 {
+	if m.Source != source || m.Kind != "full_scan" || len(m.Receipts) < 2 {
 		return errors.New("invalid vacancy capture manifest")
 	}
+	structure := p.layer == union.StructuresLayer
+	var ids []int64
 	var count int
+	pageIndex := 0
 	for i, r := range m.Receipts {
 		if r.HTTPStatus < 200 || r.HTTPStatus >= 300 || !r.ResponseComplete {
 			return errors.New("vacancy response lacks successful complete HTTP outcome")
@@ -130,14 +133,14 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 		if e != nil || u.Scheme != "https" && u.Scheme != "http" || u.Host == "" {
 			return errors.New("invalid vacancy request")
 		}
-		if i == 1 && (u.Scheme+"://"+u.Host+u.Path != p.sourceURL) {
+		target := u.Scheme + "://" + u.Host + u.Path
+		if i == 0 {
+			p.sourceURL = target
+		} else if target != p.sourceURL {
 			return errors.New("vacancy requests target different layers")
 		}
-		if i == 0 {
-			p.sourceURL = u.Scheme + "://" + u.Host + u.Path
-		}
 		path := "/171/query"
-		if p.layer == union.AssessedValueLayer {
+		if !structure {
 			path = "/Property_Tax_Live/Assessed_Value/MapServer/0/query"
 		}
 		if !strings.HasSuffix(u.Path, path) {
@@ -149,70 +152,106 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 				return errors.New("ambiguous vacancy request parameter")
 			}
 		}
-		if q.Get("where") != "1=1" || q.Get("f") != "json" || len(q) != 3 && i == 0 || len(q) != 5 && i == 1 && p.layer == union.AssessedValueLayer || len(q) != 6 && i == 1 && p.layer == union.StructuresLayer {
+		if q.Get("where") != "1=1" || q.Get("f") != "json" {
 			return errors.New("unexpected vacancy query")
-		}
-		if i == 0 && (q.Get("returnCountOnly") != "true" || r.CRS != 0) {
-			return errors.New("missing vacancy count request")
-		}
-		if i == 1 && (q.Get("resultRecordCount") != "2000" || q.Get("outFields") != "*" || q.Get("returnGeometry") != strconv.FormatBool(p.layer == union.StructuresLayer)) {
-			return errors.New("unexpected vacancy page request")
-		}
-		if i == 1 && p.layer == union.StructuresLayer && (q.Get("outSR") != "3857" || r.CRS != 3857 && r.CRS != 102100) {
-			return errors.New("unsupported structure geometry CRS")
-		}
-		if i == 1 && p.layer == union.AssessedValueLayer && r.CRS != 0 {
-			return errors.New("unexpected assessment geometry")
 		}
 		body, e := capture.Open(ctx, i)
 		if e != nil {
 			return e
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(body, 32<<20+1))
-		e = errors.Join(readErr, body.Close())
-		if e != nil {
+		if e = errors.Join(readErr, body.Close()); e != nil {
 			return e
 		}
-		if len(raw) > 32<<20 {
-			return errors.New("vacancy response too large")
-		}
-		if !gjson.ValidBytes(raw) || gjson.GetBytes(raw, "error").Exists() {
+		if len(raw) > 32<<20 || !gjson.ValidBytes(raw) || gjson.GetBytes(raw, "error").Exists() {
 			return errors.New("invalid vacancy response")
 		}
 		if i == 0 {
+			if len(q) != 3 || q.Get("returnCountOnly") != "true" || r.CRS != 0 {
+				return errors.New("missing vacancy count request")
+			}
 			v := gjson.GetBytes(raw, "count")
-			if v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > 2000 {
-				return errors.New("vacancy count exceeds safe single-page gate")
+			if gjson.GetBytes(raw, "exceededTransferLimit").Bool() || v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > 250000 || !structure && v.Int() > 2000 {
+				return errors.New("vacancy count exceeds safe gate")
 			}
 			count = int(v.Int())
 			continue
 		}
-		if gjson.GetBytes(raw, "exceededTransferLimit").Bool() {
-			return errors.New("truncated vacancy page")
+		if structure && i == len(m.Receipts)-1 {
+			if len(q) != 3 || q.Get("returnCountOnly") != "true" || r.CRS != 0 {
+				return errors.New("unexpected final structure count request")
+			}
+			final := gjson.GetBytes(raw, "count")
+			if gjson.GetBytes(raw, "exceededTransferLimit").Bool() || final.Type != gjson.Number || final.Raw != strconv.Itoa(count) {
+				return errors.New("structure count drift")
+			}
+			continue
 		}
-		if p.layer == union.StructuresLayer {
+		if structure && (i == 1 || i == len(m.Receipts)-2) {
+			if len(q) != 3 || q.Get("returnIdsOnly") != "true" || r.CRS != 0 {
+				return errors.New("unexpected structure ID request")
+			}
+			list, e := union.StructureIDs(raw)
+			if e != nil || len(list) != count {
+				return errors.New("structure ID count or membership invalid")
+			}
+			if i == 1 {
+				ids = list
+			} else {
+				if pageIndex != max(1, (count+1999)/2000) {
+					return errors.New("structure page count mismatch")
+				}
+				for n := range ids {
+					if ids[n] != list[n] {
+						return errors.New("structure membership drift")
+					}
+				}
+			}
+			continue
+		}
+		if structure && (i < 2 || i >= len(m.Receipts)-2) {
+			return errors.New("invalid structure receipt sequence")
+		}
+		expectedParams := 5
+		if structure {
+			expectedParams = 8
+		}
+		if len(q) != expectedParams || q.Get("resultRecordCount") != "2000" || q.Get("outFields") != "*" || q.Get("returnGeometry") != strconv.FormatBool(structure) {
+			return errors.New("unexpected vacancy page request")
+		}
+		if structure {
+			if q.Get("outSR") != "3857" || q.Get("orderByFields") != "OBJECTID ASC" || q.Get("resultOffset") != strconv.Itoa(pageIndex*2000) || r.CRS != 3857 && r.CRS != 102100 {
+				return errors.New("unsupported structure page request")
+			}
 			crs, e := union.ParcelResponseCRS(raw)
 			if e != nil || crs != r.CRS {
 				return errors.New("structure response CRS mismatch")
 			}
+		} else if r.CRS != 0 || i != 1 {
+			return errors.New("unexpected assessment page")
+		}
+		if gjson.GetBytes(raw, "exceededTransferLimit").Bool() {
+			return errors.New("truncated vacancy page")
 		}
 		var page struct {
 			Features []json.RawMessage `json:"features"`
 		}
-		if e = json.Unmarshal(raw, &page); e != nil || page.Features == nil || len(page.Features) != count {
+		expected := count - pageIndex*2000
+		if expected > 2000 {
+			expected = 2000
+		}
+		if e = json.Unmarshal(raw, &page); e != nil || page.Features == nil || len(page.Features) != expected {
 			return errors.New("vacancy page count mismatch")
 		}
-		seenStructures := make(map[string]bool)
-		for _, feature := range page.Features {
-			if p.layer == union.StructuresLayer {
+		for n, feature := range page.Features {
+			if structure {
 				v, e := parseStructure(feature, r.CRS)
 				if e != nil {
 					return e
 				}
-				if seenStructures[v.ObjectID] {
-					return errors.New("duplicate structure OBJECTID")
+				if v.ObjectID != strconv.FormatInt(ids[pageIndex*2000+n], 10) {
+					return errors.New("structure page source ID membership drift")
 				}
-				seenStructures[v.ObjectID] = true
 				p.structures = append(p.structures, v)
 			} else {
 				v, e := parseAssessment(feature)
@@ -222,6 +261,10 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 				p.assessments = append(p.assessments, v)
 			}
 		}
+		pageIndex++
+	}
+	if structure && (len(m.Receipts) != max(1, (count+1999)/2000)+4 || len(p.structures) != count) || !structure && (len(m.Receipts) != 2 || len(p.assessments) != count) {
+		return errors.New("incomplete vacancy capture")
 	}
 	p.count = count
 	return nil
@@ -414,7 +457,7 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 		}
 		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count)
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version) VALUES($1,$2::uuid,$3,$4,$5,$6,$7) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, "bounded count-matched observation; county completeness, assessment year and pagination unverified", fingerprint, normalizerVersion).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version) VALUES($1,$2::uuid,$3,$4,$5,$6,$7) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, "bounded source-ID-reconciled observation; county snapshot, coverage and assessment paging unverified", fingerprint, normalizerVersion).Scan(&id)
 	}
 	if err != nil {
 		return err

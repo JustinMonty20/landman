@@ -1,2 +1,2 @@
-- **Out-of-scope decision.** Countywide pagination was not enabled because assessed-value OIDs repeat and no stable row identity or snapshot cursor has been verified. Single-page capture stays useful for scoped fixtures; a live import beyond the 2,000-feature gate must wait for source-specific validation.
+- **Out-of-scope decision.** Structures now has bounded source-ID-reconciled pagination, but Assessed Value remains at the 2,000-row gate. Repeated assessment OIDs preclude ordering by `OBJECTID`; no source-supported complete disjoint partition or unique total order has been verified.
 - **Scope tangent.** The browser satellite link remains plan-only and no imagery implementation was made in this ingestion change.

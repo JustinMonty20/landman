@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -289,5 +290,123 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
 	if err == nil || query(`SELECT count(*) FROM vacancy_live_generations`) != 4 || requests != requestsBefore {
 		t.Fatalf("corrupt replay accepted or contacted HTTP: %v", err)
+	}
+}
+
+func TestStructurePagesAtomicAndOfflineReplay(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("API_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("API_TEST_DATABASE_URL missing")
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var db string
+	if err = pool.QueryRow(ctx, `SELECT current_database()`).Scan(&db); err != nil || !strings.HasPrefix(db, "landman_api_test_") {
+		t.Fatal("refusing non-disposable database")
+	}
+	for _, sql := range []string{`TRUNCATE vacancy_live_structures,vacancy_live_generations CASCADE`, `DELETE FROM vacancy_latest_observations WHERE source_name='union_structures_171'`, `DELETE FROM ingest_replay_attempts WHERE capture_id IN (SELECT id FROM ingest_captures WHERE source_name='union_structures_171')`, `DELETE FROM ingest_captures WHERE source_name='union_structures_171'`} {
+		if _, err = pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	if err = os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := taxartifact.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := jobs.NewRunner(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := false
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		q := r.URL.Query()
+		switch {
+		case q.Get("returnCountOnly") == "true":
+			fmt.Fprint(w, `{"count":2001}`)
+		case q.Get("returnIdsOnly") == "true":
+			fmt.Fprint(w, `{"objectIdFieldName":"OBJECTID","objectIds":[`)
+			for i := 1; i <= 2001; i++ {
+				if i > 1 {
+					fmt.Fprint(w, ",")
+				}
+				fmt.Fprint(w, i)
+			}
+			fmt.Fprint(w, `]}`)
+		default:
+			offset, _ := strconv.Atoi(q.Get("resultOffset"))
+			if failed && offset == 2000 {
+				fmt.Fprint(w, `{"features":[],"exceededTransferLimit":true}`)
+				return
+			}
+			fmt.Fprint(w, `{"spatialReference":{"wkid":3857},"features":[`)
+			end := offset + 2000
+			if end > 2001 {
+				end = 2001
+			}
+			for i := offset; i < end; i++ {
+				if i > offset {
+					fmt.Fprint(w, ",")
+				}
+				fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d},"geometry":{"rings":[[[0,0],[1,0],[0,0]]]}}`, i+1)
+			}
+			fmt.Fprint(w, `]}`)
+		}
+	}))
+	defer server.Close()
+	source, err := union.NewGISSource(union.GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := Job{Source: source, Pool: pool, Artifacts: artifacts, Layer: union.StructuresLayer}
+	run := func() error { _, _, e := runner.Run(ctx, jobs.Definition{ID: StructuresID, Run: job.Import}); return e }
+	count := func(sql string) int {
+		var n int
+		if e := pool.QueryRow(ctx, sql).Scan(&n); e != nil {
+			t.Fatal(e)
+		}
+		return n
+	}
+	if err = run(); err != nil {
+		t.Fatal(err)
+	}
+	if count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 {
+		t.Fatal("missing structure page")
+	}
+	var good string
+	if err = pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_live_generations WHERE source_name='union_structures_171'`).Scan(&good); err != nil {
+		t.Fatal(err)
+	}
+	if err = run(); err != nil || count(`SELECT count(*) FROM vacancy_live_generations WHERE source_name='union_structures_171'`) != 1 {
+		t.Fatalf("repeat published duplicate: %v", err)
+	}
+	failed = true
+	if err = run(); err == nil {
+		t.Fatal("accepted failed later page")
+	}
+	if count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 || count(`SELECT count(*) FROM vacancy_live_generations WHERE source_name='union_structures_171'`) != 1 {
+		t.Fatal("failed import partially published")
+	}
+	var rejected string
+	if err = pool.QueryRow(ctx, `SELECT id::text FROM ingest_captures WHERE source_name='union_structures_171' ORDER BY observed_at DESC LIMIT 1`).Scan(&rejected); err != nil {
+		t.Fatal(err)
+	}
+	before := requests
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: StructuresID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, rejected) }})
+	if err == nil || requests != before || count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 {
+		t.Fatalf("failed later page replay published: %v", err)
+	}
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: StructuresID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, good) }})
+	if err != nil || requests != before || count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 {
+		t.Fatalf("offline replay changed publication: %v", err)
 	}
 }
