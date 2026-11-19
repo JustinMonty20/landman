@@ -34,6 +34,7 @@ type Manifest struct {
 	ExpectedCount  int        `json:"expected_count"`
 	GeometrySRID   int        `json:"geometry_srid"`
 	ValidationNote string     `json:"validation_note"`
+	Provenance     string     `json:"provenance"`
 }
 type Structure struct {
 	ID       string          `json:"id"`
@@ -74,7 +75,7 @@ func ReadSnapshot(r io.Reader) (Snapshot, string, error) {
 	if err = d.Decode(&extra); err != io.EOF {
 		return s, "", errors.New("snapshot has trailing data")
 	}
-	if s.Manifest.StructureURL == "" || s.Manifest.AssessmentURL == "" || s.Manifest.RetrievedAt.IsZero() || s.Manifest.ValidationNote == "" || s.Manifest.ExpectedCount < 0 || s.Manifest.GeometrySRID != 4326 {
+	if s.Manifest.StructureURL == "" || s.Manifest.AssessmentURL == "" || s.Manifest.RetrievedAt.IsZero() || s.Manifest.ValidationNote == "" || s.Manifest.Provenance != "unverified_fixture" || s.Manifest.ExpectedCount < 0 || s.Manifest.GeometrySRID != 4326 {
 		return s, "", errors.New("snapshot requires provenance, declared WGS84 geometry and expected count")
 	}
 	if s.Manifest.ExpectedCount != len(s.Structures)+len(s.Assessments) {
@@ -104,7 +105,9 @@ func ReadSnapshot(r io.Reader) (Snapshot, string, error) {
 // Nil means missing evidence, never a negative observation.
 type Facts struct {
 	ParcelGeneration, StructureGeneration, AssessmentGeneration string `json:"-"`
-	ParcelCoverage, StructureCoverage, AssessmentCoverage       bool   `json:"parcel_coverage_verified,omitempty"`
+	ParcelCoverage                                              bool   `json:"parcel_coverage_verified"`
+	StructureCoverage                                           bool   `json:"structure_coverage_verified"`
+	AssessmentCoverage                                          bool   `json:"assessment_coverage_verified"`
 	IdentitySafe                                                bool   `json:"identity_safe"`
 	ParcelReportsStructure                                      *bool  `json:"parcel_reports_structure"`
 	OverlappingFootprint                                        *bool  `json:"overlapping_footprint"`
@@ -132,7 +135,7 @@ func Derive(f Facts) Result {
 		return result(Unknown, "necessary_evidence_missing")
 	}
 	footprint, parcel, value := *f.OverlappingFootprint, *f.ParcelReportsStructure, *f.PositiveBuildingValue
-	if footprint && (!parcel || !value) || !footprint && parcel && !value || !footprint && !parcel && value {
+	if footprint != parcel || footprint != value {
 		return result(Conflict, "independent_building_evidence_disagrees")
 	}
 	if !footprint && !parcel && !value {

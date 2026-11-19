@@ -105,8 +105,8 @@ func (p *publisher) Apply(ctx context.Context, tx pgx.Tx, observation ingest.Obs
 		count     int
 		id        *string
 	}{
-		{"union_structures", s.Manifest.StructureURL, len(s.Structures), &structuresID},
-		{"union_assessed_value", s.Manifest.AssessmentURL, len(s.Assessments), &assessmentsID},
+		{"vacancy_fixture_structures", s.Manifest.StructureURL, len(s.Structures), &structuresID},
+		{"vacancy_fixture_assessed_value", s.Manifest.AssessmentURL, len(s.Assessments), &assessmentsID},
 	} {
 		err := tx.QueryRow(ctx, `INSERT INTO vacancy_evidence_generations(source_name,source_url,artifact_sha256,retrieved_at,effective_at,observed_count,validation_note)
    VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(source_name,artifact_sha256) DO UPDATE SET id=vacancy_evidence_generations.id RETURNING id::text`, source.name, source.url, p.hash, s.Manifest.RetrievedAt, s.Manifest.EffectiveAt, source.count, s.Manifest.ValidationNote).Scan(source.id)

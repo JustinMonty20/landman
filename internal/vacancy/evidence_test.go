@@ -1,6 +1,7 @@
 package vacancy
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,10 @@ func TestDerive(t *testing.T) {
 		{"competing rows", func(f *Facts) { f.AssessmentAmbiguous = true }, Unknown},
 		{"future year", func(f *Facts) { f.AssessmentAmbiguous = true }, Unknown},
 		{"zero value improved", func(f *Facts) { f.ParcelReportsStructure = ptr(true) }, Conflict},
+		{"no footprint but both other sources report building", func(f *Facts) {
+			f.ParcelReportsStructure = ptr(true)
+			f.PositiveBuildingValue = ptr(true)
+		}, Conflict},
 		{"building added", func(f *Facts) {
 			f.OverlappingFootprint = ptr(true)
 			f.ParcelReportsStructure = ptr(true)
@@ -42,12 +47,33 @@ func TestDerive(t *testing.T) {
 		})
 	}
 }
+func TestFactsJSONPreservesIndependentCoverage(t *testing.T) {
+	facts := Facts{ParcelCoverage: true, StructureCoverage: false, AssessmentCoverage: true}
+	encoded, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"parcel_coverage_verified":     true,
+		"structure_coverage_verified":  false,
+		"assessment_coverage_verified": true,
+	} {
+		if got[key] != want {
+			t.Fatalf("%s: got %v want %v; JSON %s", key, got[key], want, encoded)
+		}
+	}
+}
+
 func TestSnapshotRejectsPartialAndDuplicates(t *testing.T) {
-	fixture := `{"manifest":{"structure_url":"https://example.test/171","assessment_url":"https://example.test/0","retrieved_at":"2026-11-15T00:00:00Z","geometry_srid":4326,"expected_count":1,"validation_note":"unverified fixture"},"structures":[{"id":"1","pin":"001","status":"existing","geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}],"assessments":[]}`
+	fixture := `{"manifest":{"structure_url":"https://example.test/171","assessment_url":"https://example.test/0","retrieved_at":"2026-11-15T00:00:00Z","geometry_srid":4326,"expected_count":1,"validation_note":"unverified fixture","provenance":"unverified_fixture"},"structures":[{"id":"1","pin":"001","status":"existing","geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}],"assessments":[]}`
 	if _, hash, err := ReadSnapshot(strings.NewReader(fixture)); err != nil || len(hash) != 64 {
 		t.Fatalf("valid snapshot: %v %q", err, hash)
 	}
-	for _, bad := range []string{strings.Replace(fixture, `"expected_count":1`, `"expected_count":2`, 1), fixture + `{}`, strings.Replace(fixture, `"structures":[`, `"structures":[{"id":"1","geometry":{"type":"Polygon"}},`, 1)} {
+	for _, bad := range []string{strings.Replace(fixture, `"expected_count":1`, `"expected_count":2`, 1), fixture + `{}`, strings.Replace(fixture, `"structures":[`, `"structures":[{"id":"1","geometry":{"type":"Polygon"}},`, 1), strings.Replace(fixture, `"unverified_fixture"`, `"union_structures"`, 1), strings.Replace(fixture, `,"provenance":"unverified_fixture"`, ``, 1)} {
 		if _, _, err := ReadSnapshot(strings.NewReader(bad)); err == nil {
 			t.Fatalf("accepted invalid snapshot %s", bad)
 		}

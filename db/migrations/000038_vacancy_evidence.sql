@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE vacancy_evidence_generations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_name TEXT NOT NULL CHECK (source_name IN ('union_structures','union_assessed_value')),
+    source_name TEXT NOT NULL CHECK (source_name IN ('vacancy_fixture_structures','vacancy_fixture_assessed_value')),
     source_url TEXT NOT NULL,
     artifact_sha256 TEXT NOT NULL CHECK (artifact_sha256 ~ '^[0-9a-f]{64}$'),
     retrieved_at TIMESTAMPTZ NOT NULL,
