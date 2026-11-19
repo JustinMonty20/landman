@@ -51,6 +51,9 @@ func TestHTTPPostGIS(t *testing.T) {
 		}
 		return w.Code, body
 	}
+	if code, body := request("/api/v1/parcels/" + ids[0] + "/vacancy"); code != 200 || body["tier"] != "unknown" || body["available"] != false {
+		t.Fatalf("unverified vacancy %d %v", code, body)
+	}
 	bbox := "-79.901,33.099,-79.894,33.102"
 	filter := "bbox=" + bbox + "&likely_vacant=true"
 	code, list := request("/api/v1/parcels?" + filter + "&page_size=1")

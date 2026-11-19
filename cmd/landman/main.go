@@ -23,6 +23,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/qualification"
 	"github.com/JustinMonty20/landman/internal/soil"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
+	"github.com/JustinMonty20/landman/internal/vacancy"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/robfig/cron/v3"
@@ -48,6 +49,7 @@ const (
 	soilJobID          = "union.gis.soil"
 	screeningJobID     = "union.soil.screening"
 	taxJobID           = "union.tax"
+	vacancyJobID       = vacancy.JobID
 	zoningJobID        = "union.gis.zoning"
 	roadsJobID         = "union.gis.roads"
 	qualificationJobID = "union.qualification.assess"
@@ -88,7 +90,7 @@ func command(args []string) (string, error) {
 	}
 	if len(args) == 2 && args[0] == "run" {
 		switch args[1] {
-		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID, fema.JobID:
+		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID, fema.JobID, vacancyJobID:
 			return args[1], nil
 		}
 	}
@@ -177,7 +179,7 @@ func main() {
 
 func needsSoilArtifacts(mode string) bool {
 	switch mode {
-	case taxJobID, "tax-replay", qualificationJobID, "replay", zoningJobID, roadsJobID:
+	case taxJobID, "tax-replay", qualificationJobID, "replay", zoningJobID, roadsJobID, vacancyJobID:
 		return false
 	default:
 		return true
@@ -250,7 +252,7 @@ func run(ctx context.Context) error {
 		return result, err
 	}
 	artifactRoot := os.Getenv("PARCEL_EVIDENCE_DIR")
-	if artifactRoot == "" && mode != taxJobID && mode != "tax-replay" && mode != qualificationJobID {
+	if artifactRoot == "" && mode != taxJobID && mode != "tax-replay" && mode != qualificationJobID && mode != vacancyJobID {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
@@ -365,6 +367,14 @@ func run(ctx context.Context) error {
 			return fmt.Errorf("soil replay did not validate: %s", outcome)
 		}
 		return nil
+	}
+	if mode == vacancyJobID {
+		path := os.Getenv("UNION_VACANCY_FIXTURE_PATH")
+		dir := os.Getenv("UNION_VACANCY_ARTIFACT_DIR")
+		if path == "" || dir == "" {
+			return fmt.Errorf("UNION_VACANCY_FIXTURE_PATH and UNION_VACANCY_ARTIFACT_DIR are required for %s", vacancyJobID)
+		}
+		return runRequired(ctx, runner, jobs.Definition{ID: vacancyJobID, Run: func(ctx context.Context) (jobs.Result, error) { return vacancy.Import(ctx, pool, path, dir) }})
 	}
 	if mode == "tax-replay" {
 		outcome, _, err := runner.Run(ctx, jobs.Definition{ID: taxJobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
