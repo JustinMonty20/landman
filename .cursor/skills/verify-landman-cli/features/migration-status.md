@@ -9,7 +9,7 @@ After the verify database exists, goose can show the applied version and whether
 
 ## How to get to it (user POV)
 
-- Run `make migrate-version` with the verify `DB_CONTAINER` and goose `DATABASE_URL` from `SKILL.md`.
+- Run `make migrate-version` with the verify `DB_CONTAINER` and goose `DATABASE_URL` from `live-gis.md`.
 - Run `make migrate-status` with those same overrides.
 
 ## Driving it with make and the landman binary
@@ -20,7 +20,7 @@ Preconditions:
 - `make db-create` has been run on that container, so the `landman` database exists.
 - This is a read of goose state. It does not apply or roll back migrations.
 
-- Run `make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL"`. Exit code 0. Stderr contains `goose: version ` and the integer of the highest filename prefix in `db/migrations/` after a complete `make migrate-up`. A log timestamp precedes that line. Stdout is the Make recipe. The highest file is `000016_job_attempt_kind.sql`. The version integer is 16.
+- Run `make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0`. Exit code 0. Stderr contains `goose: version ` and the integer of the highest filename prefix in `db/migrations/` after a complete `make migrate-up`. A log timestamp precedes that line. Stdout is the Make recipe. Read the highest numbered migration from the current checkout. Require that integer in the output; do not use a historical fixed version.
 - Run `make migrate-status` with the same overrides. Exit code 0. Stderr names every `db/migrations/*.sql` file. After a complete `make migrate-up`, stderr does not contain `Pending`. Stdout is the Make recipe.
 - Save both command transcripts under `artifacts/verify/$RUN_ID/`. The version integer and the status listing must agree with each other and with the files on disk. Do not invent a pass from `SELECT 1` alone.
 

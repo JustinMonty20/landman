@@ -69,6 +69,9 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Require two implementations before introducing a swappable interface (e.g., production + test double). One implementation is indirection without flexibility.
 - Describe one configured storage interface with alternative backends as one store, not as multiple active stores. Select one backend at composition time.
 - Before retaining a replaced ingestion path or adding a data conversion tool, confirm that the operator needs to use data from the old path. For a forward-only cutover, remove the replaced runtime path and preserve existing data and saved verification inputs.
+- When an existing verification skill no longer covers a changed product path, preserve complete coverage. Update the skill for every current path or split it into a router and dedicated skills. Do not narrow the skill scope without operator approval.
+- For verification recipes, capture the failed command status before later shell statements can replace it. Test failure paths in verification runners. Use explicit disposable database settings for every process; do not let Make load operator settings into verification commands.
+- Default verification skills to small seeded datasets and local edge-case fixtures. Keep full-county imports, live-source requests, operator-file drives, and performance checks as explicit opt-in lanes. Do not make an external service a prerequisite for routine parcel verification.
 - Never expose private wiring publicly for testability. Tests that need internals belong inside the module.
 
 ## Verification Hierarchy
