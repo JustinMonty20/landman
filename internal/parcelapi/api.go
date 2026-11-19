@@ -265,6 +265,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mapView(w, r)
 	case r.URL.Path == "/api/v1/flood/map":
 		h.floodMap(w, r)
+	case r.URL.Path == "/api/v1/qualification/map":
+		h.qualificationMap(w, r)
 	case r.URL.Path == "/api/v1/sources":
 		h.sources(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/parcels/"):

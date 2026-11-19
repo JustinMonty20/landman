@@ -7,7 +7,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { counties, countyBounds, countyGeometry, mapDetail, type CountyId, type MapDetail } from './counties';
 
-let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, parcels, flood, parcelID }: {
+let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, parcels, flood, zoning, roads, parcelID }: {
   selected: CountyId;
   focusRequest: number;
   onselect: (id: CountyId) => void;
@@ -16,6 +16,8 @@ let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, parcels,
   onparcel: (id: string) => void;
   parcels: FeatureCollection;
   flood: FeatureCollection;
+  zoning: FeatureCollection;
+  roads: FeatureCollection;
   parcelID: string;
 } = $props();
 let container: HTMLDivElement;
@@ -72,10 +74,15 @@ onMount(() => {
         label.addEventListener('click', (event) => { event.stopPropagation(); onselect(county.id); });
         markers.push(new Marker({ element: label }).setLngLat([...county.center]).addTo(map));
       }
+      map.addSource('zoning', { type: 'geojson', data: emptyShapes });
+      map.addLayer({ id: 'zoning-fill', type: 'fill', source: 'zoning', filter: ['==', ['get', 'kind'], 'zoning'], paint: { 'fill-color': '#aebf77', 'fill-opacity': 0.3, 'fill-outline-color': '#aebf77' } });
+      map.addLayer({ id: 'jurisdiction-outline', type: 'line', source: 'zoning', filter: ['==', ['get', 'kind'], 'jurisdiction'], paint: { 'line-color': '#d5ce82', 'line-width': 2, 'line-dasharray': [3, 2] } });
       map.addSource('flood-zones', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'flood-fill', type: 'fill', source: 'flood-zones', paint: {
         'fill-color': ['case', ['==', ['get', 'subtype'], 'FLOODWAY'], '#dc78bf', ['==', ['get', 'sfha'], 'T'], '#65cfe4', '#8b9ee8'], 'fill-opacity': 0.42
       } });
+      map.addSource('roads', { type: 'geojson', data: emptyShapes });
+      map.addLayer({ id: 'roads', type: 'line', source: 'roads', paint: { 'line-color': '#ff996b', 'line-width': 2 } });
       map.addSource('parcels', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'parcel-hit', type: 'fill', source: 'parcels', paint: { 'fill-opacity': 0 } });
       map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcels', paint: { 'line-color': '#c4cbd2', 'line-width': 1 } });
@@ -112,6 +119,8 @@ $effect(() => {
   if (!ready || !map) return;
   (map.getSource('parcels') as GeoJSONSource).setData(parcels);
   (map.getSource('flood-zones') as GeoJSONSource).setData(flood);
+  (map.getSource('zoning') as GeoJSONSource).setData(zoning);
+  (map.getSource('roads') as GeoJSONSource).setData(roads);
   map.setFilter('parcel-selected', ['==', ['get', 'id'], parcelID]);
 });
 $effect(() => {

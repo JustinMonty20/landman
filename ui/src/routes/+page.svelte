@@ -22,6 +22,36 @@ let parcelID = $state('');
 let floodOn = $state(false);
 let flood = $state<FloodMap>();
 let floodError = $state('');
+let zoningOn = $state(false);
+let roadsOn = $state(false);
+let overlays = $state<Partial<Record<QualificationLayer, QualificationMap>>>({});
+let overlayErrors = $state<Partial<Record<QualificationLayer, string>>>({});
+type QualificationLayer = 'zoning' | 'roads';
+type QualificationMap = import('geojson').FeatureCollection & {
+  generation: { fetched_at: string; refresh_failed_at: string | null } | null;
+};
+const qualificationLayers = [
+  { id: 'zoning', label: 'Zoning and jurisdiction', minZoom: 9 },
+  { id: 'roads', label: 'Roads', minZoom: 13 }
+] as const;
+
+function loadQualification(layer: QualificationLayer, enabled: boolean, view: Viewport | undefined, minZoom: number) {
+  overlays[layer] = undefined;
+  overlayErrors[layer] = '';
+  if (!enabled || !view || view.zoom < minZoom) return;
+  const task = new AbortController();
+  const params = viewportQuery(view);
+  params.set('layer', layer);
+  readMapData<QualificationMap>(`/api/v1/qualification/map?${params}`, task.signal).then((data) => {
+    if (!task.signal.aborted) overlays[layer] = data;
+  }).catch((error: Error) => {
+    if (!task.signal.aborted) overlayErrors[layer] = error.message === '413' ? 'Zoom in to see this layer.' : 'Layer data is unavailable in this view.';
+  });
+  return () => task.abort();
+}
+
+$effect(() => loadQualification('zoning', parcelView && zoningOn, viewport, 9));
+$effect(() => loadQualification('roads', parcelView && roadsOn, viewport, 13));
 let evidence = $state<FloodDetail>();
 let detailError = $state('');
 let parcelGeometry = $derived(parcelShapes(parcels));
@@ -105,14 +135,16 @@ onMount(() => {
 <div class="app">
   <header><a class="brand" href="/">▧ <span>landman</span></a></header>
   <main aria-label="Parcel discovery">
-    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} parcels={parcelGeometry} flood={flood ?? emptyShapes} {parcelID} /></section>
+    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} parcels={parcelGeometry} flood={flood ?? emptyShapes} zoning={overlays.zoning ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if filterCount > 0 && selected.status === 'configured'}<button class="county-summary" class:with-search={parcelView} aria-label="Show selected filters" onclick={showSelectedFilters}>{selected.name} · {filterCount} {filterCount === 1 ? 'filter' : 'filters'}</button>{/if}
     {#if selected.status === 'locked'}<p class="locked-notice" role="status">{selected.name} County is locked. Parcel discovery is not available.</p>{/if}
     {#if parcelView}
       <div class="map-controls">
         <div class="search-row"><label class="search"><span>Find parcel ID or address</span><input class="input" type="search" aria-describedby="parcel-availability" placeholder={`Find parcel in ${selected.name} County`} disabled /></label></div>
         <span class="sr-only" id="parcel-availability">Parcel search and filters are unavailable. Zoom in and select a parcel to see flood evidence.</span>
-        <label class="flood-toggle"><input type="checkbox" bind:checked={floodOn} /> FEMA flood zones</label>
+        <details class="map-layers">
+          <summary>Map layers</summary>
+          <label><input type="checkbox" bind:checked={floodOn} /> FEMA flood zones</label>
         {#if floodOn}
           <div class="flood-legend">
             <span><i class="floodway"></i> Floodway</span>
@@ -122,6 +154,28 @@ onMount(() => {
             {#if floodError}<p role="status">{floodError}</p>{:else if flood?.release}<small>Archive issue date: {releaseDate(flood.release.issued_at)}</small>{:else if flood}<p role="status">No FEMA release is stored.</p>{/if}
           </div>
         {/if}
+          <label><input type="checkbox" bind:checked={zoningOn} /> Zoning and jurisdiction</label>
+          <label><input type="checkbox" bind:checked={roadsOn} /> Roads</label>
+          {#each qualificationLayers as layer}
+            {#if layer.id === 'zoning' ? zoningOn : roadsOn}
+              <div class="flood-legend">
+                <span class:road-key={layer.id === 'roads'} class:zone-key={layer.id === 'zoning'}>{layer.label}</span>
+                {#if layer.id === 'zoning'}<small>Dashed lines show jurisdiction boundaries.</small>{/if}
+                <small>Source: Union County GIS</small>
+                {#if layer.id === 'roads' && viewport && viewport.zoom < layer.minZoom}
+                  <p role="status">Zoom in to see roads.</p>
+                {:else if overlayErrors[layer.id]}
+                  <p role="status">{overlayErrors[layer.id]}</p>
+                {:else if overlays[layer.id]?.generation}
+                  <small>Retrieved: {releaseDate(overlays[layer.id]!.generation!.fetched_at)}</small>
+                  {#if overlays[layer.id]!.generation!.refresh_failed_at}<p role="status">Last refresh failed. Showing stored data.</p>{/if}
+                {:else if overlays[layer.id]}
+                  <p role="status">No data is stored for this layer.</p>
+                {/if}
+              </div>
+            {/if}
+          {/each}
+        </details>
       </div>
     {/if}
     <div class="panels" style:top="112px">
@@ -186,8 +240,12 @@ h1 { font-size: 19px; font-weight: 650; }
 .county-summary { position: absolute; top: 12px; left: 12px; right: 65px; width: fit-content; max-width: calc(100% - 77px); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 11px; cursor: pointer; }
 .county-summary.with-search { top: 64px; }
 .locked-notice { position: absolute; top: 12px; left: 12px; right: 65px; width: fit-content; max-width: 440px; font-size: 12px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
-.flood-toggle, .flood-legend { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 12px; }
-.flood-toggle { display: inline-flex; gap: 6px; align-items: center; }
+.map-layers, .flood-legend { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 12px; }
+.map-layers { width: fit-content; }
+.map-layers summary { cursor: pointer; }
+.map-layers label { display: flex; gap: 6px; align-items: center; padding: 4px 0; }
+.zone-key { color: #c7da93; }
+.road-key { color: #ff996b; }
 .flood-legend { display: grid; gap: 4px; width: fit-content; }
 .flood-legend i { display: inline-block; width: .8em; height: .8em; }
 .floodway { background: #dc78bf; }.sfha { background: #65cfe4; }.other { background: #8b9ee8; }
