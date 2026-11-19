@@ -1,0 +1,2 @@
+- **Out-of-scope decision.** Structures now has bounded source-ID-reconciled pagination, but Assessed Value remains at the 2,000-row gate. Repeated assessment OIDs preclude ordering by `OBJECTID`; no source-supported complete disjoint partition or unique total order has been verified.
+- **Scope tangent.** The browser satellite link remains plan-only and no imagery implementation was made in this ingestion change.

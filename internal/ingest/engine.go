@@ -20,12 +20,14 @@ import (
 
 // Receipt binds the exact response bytes to the request and source revision.
 type Receipt struct {
-	Request     string `json:"request"`
-	Revision    string `json:"revision,omitempty"`
-	CRS         int    `json:"crs,omitempty"`
-	ArtifactKey string `json:"artifact_key"`
-	Size        int64  `json:"size"`
-	SHA256      string `json:"sha256"`
+	Request          string `json:"request"`
+	Revision         string `json:"revision,omitempty"`
+	CRS              int    `json:"crs,omitempty"`
+	HTTPStatus       int    `json:"http_status,omitempty"`
+	ResponseComplete bool   `json:"response_complete,omitempty"`
+	ArtifactKey      string `json:"artifact_key"`
+	Size             int64  `json:"size"`
+	SHA256           string `json:"sha256"`
 }
 
 // Manifest is the durable, ordered evidence for a single complete capture.
@@ -92,7 +94,16 @@ func NewRecorder(store taxartifact.Store, source string, observedAt time.Time) (
 	return &Recorder{store: store, manifest: Manifest{Source: source, ObservedAt: observedAt, Version: 1}}, nil
 }
 func (r *Recorder) Record(ctx context.Context, request, revision string, crs int, body io.Reader) error {
-	if request == "" || body == nil || crs < 0 {
+	return r.record(ctx, request, revision, crs, 0, false, body)
+}
+
+// RecordHTTP retains HTTP outcome alongside the exact response bytes.
+func (r *Recorder) RecordHTTP(ctx context.Context, request, revision string, crs, status int, complete bool, body io.Reader) error {
+	return r.record(ctx, request, revision, crs, status, complete, body)
+}
+
+func (r *Recorder) record(ctx context.Context, request, revision string, crs, status int, complete bool, body io.Reader) error {
+	if request == "" || body == nil || crs < 0 || status < 0 || status > 599 {
 		return errors.New("invalid capture response")
 	}
 	artifact, err := r.store.Put(ctx, r.manifest.Source, body)
@@ -103,7 +114,7 @@ func (r *Recorder) Record(ctx context.Context, request, revision string, crs int
 		return errors.New("unverified capture response")
 	}
 	digest := artifact.SHA256()
-	r.manifest.Receipts = append(r.manifest.Receipts, Receipt{Request: request, Revision: revision, CRS: crs, ArtifactKey: artifact.Key(), Size: artifact.Size(), SHA256: hex.EncodeToString(digest[:])})
+	r.manifest.Receipts = append(r.manifest.Receipts, Receipt{Request: request, Revision: revision, CRS: crs, HTTPStatus: status, ResponseComplete: complete, ArtifactKey: artifact.Key(), Size: artifact.Size(), SHA256: hex.EncodeToString(digest[:])})
 	r.artifacts = append(r.artifacts, artifact)
 	return nil
 }

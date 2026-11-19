@@ -18,6 +18,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
 	"github.com/JustinMonty20/landman/internal/connector/union/soiljob"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
+	"github.com/JustinMonty20/landman/internal/connector/union/vacancyjob"
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/qualification"
@@ -90,16 +91,19 @@ func command(args []string) (string, error) {
 	}
 	if len(args) == 2 && args[0] == "run" {
 		switch args[1] {
-		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID, fema.JobID, vacancyJobID:
+		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID, fema.JobID, vacancyJobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID:
 			return args[1], nil
 		}
 	}
-	if len(args) == 4 && args[0] == "replay" && (args[1] == parcelJobID || args[1] == taxJobID || args[1] == soilJobID || args[1] == screeningJobID || args[1] == fema.JobID) && args[2] == "--snapshot" {
+	if len(args) == 4 && args[0] == "replay" && (args[1] == parcelJobID || args[1] == taxJobID || args[1] == soilJobID || args[1] == screeningJobID || args[1] == fema.JobID || args[1] == vacancyjob.StructuresID || args[1] == vacancyjob.AssessedValueID) && args[2] == "--snapshot" {
 		if !validCaptureID(args[3]) {
 			return "", fmt.Errorf("snapshot ID must be a capture UUID")
 		}
 		if args[1] == fema.JobID {
 			return "fema-replay", nil
+		}
+		if args[1] == vacancyjob.StructuresID || args[1] == vacancyjob.AssessedValueID {
+			return "vacancy-live-replay", nil
 		}
 		if args[1] == taxJobID {
 			return "tax-replay", nil
@@ -118,7 +122,7 @@ func command(args []string) (string, error) {
 		}
 		return "reprocess", nil
 	}
-	return "", fmt.Errorf("usage: landman [schedule | run <job ID> | replay <%s|%s|%s|%s|%s> --snapshot UUID | reprocess %s --limit N]", parcelJobID, taxJobID, soilJobID, screeningJobID, fema.JobID, parcelJobID)
+	return "", fmt.Errorf("usage: landman [schedule | run <job ID> | replay <%s|%s|%s|%s|%s|%s|%s> --snapshot UUID | reprocess %s --limit N]", parcelJobID, taxJobID, soilJobID, screeningJobID, fema.JobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID, parcelJobID)
 }
 
 func validCaptureID(id string) bool {
@@ -267,6 +271,22 @@ func run(ctx context.Context) error {
 		}
 	}
 	geometryJob := soiljob.Job{Source: gisSource, Pool: pool, Artifacts: soilArtifacts}
+	structuresJob := vacancyjob.Job{Source: gisSource, Pool: pool, Artifacts: soilArtifacts, Layer: union.StructuresLayer}
+	assessmentsJob := vacancyjob.Job{Source: gisSource, Pool: pool, Artifacts: soilArtifacts, Layer: union.AssessedValueLayer}
+	if mode == vacancyjob.StructuresID || mode == vacancyjob.AssessedValueID || mode == "vacancy-live-replay" {
+		job := structuresJob
+		id := vacancyjob.StructuresID
+		if mode == vacancyjob.AssessedValueID || mode == "vacancy-live-replay" && os.Args[2] == vacancyjob.AssessedValueID {
+			job = assessmentsJob
+			id = vacancyjob.AssessedValueID
+		}
+		if mode == "vacancy-live-replay" {
+			return runRequired(ctx, runner, jobs.Definition{ID: id, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, os.Args[4]) }})
+		}
+		return runRequired(ctx, runner, jobs.Definition{ID: id, Run: func(ctx context.Context) (jobs.Result, error) {
+			return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) { return job.Import(ctx) })
+		}})
+	}
 	screeningJob := soiljob.ScreeningJob{Pool: pool, Artifacts: soilArtifacts, Client: http.DefaultClient, Interval: interval}
 	parcelJob := parceljob.Job{Root: artifactRoot, DSN: dsn, Source: gisSource, Quarantine: jobs.NewQuarantineStore(pool)}
 	definitions := []jobs.Definition{

@@ -1,0 +1,1 @@
+- **Out-of-scope decision.** Kept `likely_vacant`, live source probes, and full-county import unchanged. This change only validates bounded assessment range capture and offline publication; fixture counts cannot establish county snapshot or source query capability.

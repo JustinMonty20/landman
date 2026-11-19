@@ -16,6 +16,7 @@ You are a principal engineer.
 ## Rules
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
 - The buyer writes handwritten notes outside the application. Lead tracking means a personal scratchpad, explicit lead states, and follow-up reminders to the buyer—not AI outreach, mailing preparation/exports, campaigns, or owner-facing message delivery. Do not add those features without explicit operator authorization.
+- Before marking a countywide importer ready, compare the documented row count with the source page limit. Test multi-page capture, completeness checks, and replay when the layer exceeds one page. Call a single-page capture a diagnostic, not a countywide import.
 - Route every new Union County ingestion entry point through `jobs.Runner.Run` with a stable job ID. Keep source-specific work in the job definition or an ordered caller. For tax ingestion, keep four-file parsing and storage in a county-scoped job module, not in `main.go`; `main.go` configures and registers the job. Do not call source ingestion directly from an executable or scheduler.
 - Before declaring an existing source unavailable, inspect its documented source evidence and established client request path. Report a failed ad hoc probe separately from application-client failure. Preserve access-denial boundaries.
 - For offline operator-supplied tax files, require file paths, not source URLs from the operator. Keep known county source references as provenance only; do not claim that the application fetched the files.
