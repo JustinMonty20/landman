@@ -2,7 +2,7 @@
 
 The Union GIS parcel publisher writes name-based indicators and mailing-state labels in the same transaction as the parcel. The labels do not establish the owner's residence, identity, or corporate registration. `not_detected` does not mean that the owner is a person.
 
-Apply migrations in order. Migration `000036` belongs to the FEMA change and must be applied before `000037` on shared databases. Goose does not automatically apply a lower migration after the database reaches version `000037`.
+**Migration order.** Do not merge the owner-label branch until FEMA migration `000036` is reachable from `origin/main`. The PR and merge gate must verify that branch ancestry. Apply `000036` before owner-label migration `000037` on every shared database. Goose does not automatically apply a lower migration after a database reaches version `000037`; do not use out-of-order migration mode to bypass this gate. This branch does not contain FEMA migration files. Local tests may apply the migrations present in this checkout, through `000035` and then `000037`, only on a fresh disposable PostGIS database.
 
 After migration, classify existing stored Union GIS parcels without contacting the county:
 
@@ -11,6 +11,8 @@ DATABASE_URL='postgres://…' go run ./cmd/owner-label-backfill
 ```
 
 The command commits up to 500 stored parcels per batch. It fills missing labels, can be rerun after interruption, and fails if its final count of labeled parcels differs from the stored Union GIS parcel count. The publisher refreshes labels on changed snapshots. An unchanged parcel replay fills a missing label. The command does not overwrite existing classifications; republish a changed parcel to recompute its label.
+
+The API source stamp hashes the visible owner-label row versions in each read snapshot. This detects out-of-order commits without a shared counter lock in parcel publication or backfill. Computing the stamp scans all labels on each stamped request; monitor this cost as the stored parcel count grows.
 
 The authenticated `GET /api/v1/parcels` and `GET /api/v1/parcels/map` endpoints accept `out_of_state_mailing=yes|no|unknown` and `entity_name_indicator` or `corporate_name_indicator` with `matched|not_detected|unknown`. The detail endpoint includes `owner_labels` with status, evidence, and classification time. A null `owner_labels` means that the stored parcel has not yet been classified; run the backfill. `source_parcel_id` in the detail response identifies the source record for manual inspection. The browser does not expose these filters or render labels in this change.
 

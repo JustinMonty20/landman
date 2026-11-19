@@ -352,11 +352,13 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	} else if err != nil {
 		return "", err
 	}
-	var labelTime *time.Time
-	if err := tx.QueryRow(ctx, `SELECT max(classified_at) FROM parcel_owner_labels`).Scan(&labelTime); err != nil {
+	var labelVersions string
+	// The visible row versions, not write timestamps or allocated sequence values,
+	// identify labels committed in this snapshot even when transactions commit out of order.
+	if err := tx.QueryRow(ctx, `SELECT md5(COALESCE(string_agg(parcel_id::text || ':' || xmin::text, ',' ORDER BY parcel_id), '')) FROM parcel_owner_labels`).Scan(&labelVersions); err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelTime)))
+	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelVersions)))
 	return hex.EncodeToString(h[:]), nil
 }
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

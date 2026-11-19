@@ -25,7 +25,7 @@ func TestOwnerLabelsBackfillAcrossBatches(t *testing.T) {
 	}
 	defer pool.Close()
 	var db string
-	if err = pool.QueryRow(context.Background(), `SELECT current_database()`).Scan(&db); err != nil || !strings.HasPrefix(db, "landman_owner_test") {
+	if err = pool.QueryRow(context.Background(), `SELECT current_database()`).Scan(&db); err != nil || !(strings.HasPrefix(db, "landman_owner_test_") || db == "landman_parcelstore_test_ci") {
 		t.Fatal("refusing non-task database")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
