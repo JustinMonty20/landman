@@ -44,9 +44,15 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 	}
 	schema := fmt.Sprintf("ingestion_%d", time.Now().UnixNano())
 	name := pgx.Identifier{schema}.Sanitize()
+	t.Cleanup(base.Close)
 	if _, err := base.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if _, err := base.Exec(ctx, "DROP SCHEMA "+name+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+	})
 	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "ingest_captures", "ingest_replay_attempts", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history", "parcel_derived_handoff"} {
 		if _, err := base.Exec(ctx, "CREATE TABLE "+name+"."+table+" (LIKE public."+table+" INCLUDING ALL) WITH (autovacuum_enabled=false)"); err != nil {
 			t.Fatal(err)
@@ -73,13 +79,18 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		pool.Close()
-		if _, err := base.Exec(ctx, "DROP SCHEMA "+name+" CASCADE"); err != nil {
-			t.Error(err)
-		}
-		base.Close()
-	})
+	t.Cleanup(pool.Close)
+	migration, err := os.ReadFile("db/migrations/000037_parcel_owner_labels.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, _, ok := strings.Cut(string(migration), "-- +goose Down")
+	if !ok {
+		t.Fatal("owner label migration has no down section")
+	}
+	if _, err := pool.Exec(ctx, up); err != nil {
+		t.Fatal(err)
+	}
 	return ctx, dsn, pool
 }
 
