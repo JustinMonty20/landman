@@ -34,6 +34,8 @@ In the panel, let the buyer save the parcel to a private list, add a scratchpad 
 
 For a saved parcel, show a **Request tax info** action. Each explicit action makes one bounded DevNet parcel-page request; saving, viewing, filtering, or moving the map does not make that request. Store each successful displayed observation for that buyer and parcel with its source URL and observation time. Show the observation as dated evidence, not a current payoff quote. Show denied, unclear, or failed results as errors, not zero balances. Apply the request and access limits in [tax-data-ingest.md](tax-data-ingest.md#saved-parcel-request-tax-info-action). Define retention for repeated explicit requests and removal of a saved parcel during implementation. Do not put private observations or personal lead data in shared map data.
 
+Add **Open in Google Maps (satellite)** to parcel detail for every parcel with valid geometry, regardless of vacancy tier or street address. Center the link on a point inside the stored parcel geometry. Do not embed imagery or send private lead data to Google. The external view does not show the application boundary or guarantee current imagery. Use the link for manual review only. It does not change vacancy tiers.
+
 ## Map and performance contract
 
 Use PostGIS for county-wide matching, counts, list pages, and full-resolution spatial calculations. The browser must not load every county parcel to calculate a filter. Request bounded geometry for the visible area from stored data; do not query county or FEMA services on each map move or parcel selection. Limit response size, cancel obsolete map requests, and simplify display shapes by zoom. Display simplification must not change filter results or evidence calculations.
