@@ -238,6 +238,39 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 3 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
 		t.Fatalf("older replay changed evidence or contacted HTTP: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE vacancy_live_assessments ADD CONSTRAINT reject_test_building CHECK (market_building <> 1) NOT VALID`); err != nil {
+		t.Fatal(err)
+	}
+	version = 1
+	if err := run(); err == nil {
+		t.Fatal("expected publication to fail")
+	}
+	var retryID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM ingest_captures WHERE source_name='union_assessed_value_0' ORDER BY observed_at DESC LIMIT 1`).Scan(&retryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE vacancy_live_assessments DROP CONSTRAINT reject_test_building`); err != nil {
+		t.Fatal(err)
+	}
+	requestsBefore = requests
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, retryID) }})
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 4 {
+		t.Fatalf("offline retry did not publish: %v", err)
+	}
+	var acceptedAfterRetry string
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&acceptedAfterRetry); err != nil {
+		t.Fatal(err)
+	}
+	if acceptedAfterRetry != current {
+		t.Fatal("offline retry advanced the accepted live observation")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET normalizer_version='prior-normalizer' WHERE capture_id=$1::uuid`, current); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, current) }})
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations WHERE normalizer_version='prior-normalizer'`) != 1 {
+		t.Fatalf("old live capture changed after a newer offline publication: %v", err)
+	}
 	var manifest []byte
 	if err := pool.QueryRow(ctx, `SELECT manifest FROM ingest_captures WHERE id=$1::uuid`, older).Scan(&manifest); err != nil {
 		t.Fatal(err)
@@ -254,7 +287,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
-	if err == nil || query(`SELECT count(*) FROM vacancy_live_generations`) != 3 || requests != requestsBefore {
+	if err == nil || query(`SELECT count(*) FROM vacancy_live_generations`) != 4 || requests != requestsBefore {
 		t.Fatalf("corrupt replay accepted or contacted HTTP: %v", err)
 	}
 }

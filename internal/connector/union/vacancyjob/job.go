@@ -379,7 +379,7 @@ func (p *publisher) Apply(ctx context.Context, tx pgx.Tx, ob ingest.Observation)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if err == nil && ob.Published && latestCapture != ob.ID {
+	if err == nil && latestCapture != ob.ID && (ob.Published || !ob.Manifest.ObservedAt.After(latestAt)) {
 		return ingest.ErrNoPublication
 	}
 	var acceptedID string
@@ -393,9 +393,11 @@ func (p *publisher) Apply(ctx context.Context, tx pgx.Tx, ob ingest.Observation)
 	if acceptedID != "" && acceptedID != ob.ID && !ob.Manifest.ObservedAt.After(acceptedAt) {
 		return ingest.ErrNoPublication
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO vacancy_latest_observations(source_name,capture_id,observed_at) VALUES($1,$2::uuid,$3)
+	if !ob.Replay {
+		if _, err := tx.Exec(ctx, `INSERT INTO vacancy_latest_observations(source_name,capture_id,observed_at) VALUES($1,$2::uuid,$3)
 ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_at=EXCLUDED.observed_at`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt); err != nil {
-		return err
+			return err
+		}
 	}
 	if latestID != "" && latestHash == fingerprint && latestVersion == normalizerVersion {
 		return ingest.ErrObservationOnly
