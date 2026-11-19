@@ -29,10 +29,10 @@ func TestVacancyCaptureFailClosed(t *testing.T) {
 		want              int
 		fail              bool
 	}{
-		{"complete", `{"count":2}`, `{"features":[{"attributes":{"OBJECTID":1}},{"attributes":{"OBJECTID":1}}]}`, 2, false},
-		{"unsafe pagination", `{"count":2001}`, ``, 1, true},
-		{"partial", `{"count":2}`, `{"features":[{}]}`, 2, true},
-		{"transfer limit", `{"count":1}`, `{"features":[{}],"exceededTransferLimit":true}`, 2, true},
+		{"complete", `{"count":2}`, `{"features":[{"attributes":{"OBJECTID":1}},{"attributes":{"OBJECTID":1}}]}`, 5, false},
+		{"unsupported range", `{"count":2001}`, `{}`, 128, true},
+		{"partial", `{"count":2}`, `{"features":[{}]}`, 3, true},
+		{"transfer limit", `{"count":1}`, `{"features":[{}],"exceededTransferLimit":true}`, 3, true},
 		{"server error", `{"error":{"message":"denied"}}`, ``, 1, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

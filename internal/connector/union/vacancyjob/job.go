@@ -116,7 +116,7 @@ type publisher struct {
 func (p *publisher) validationNote() string {
 	switch {
 	case p.layer == union.AssessedValueLayer:
-		return "bounded assessment observation; paging, coverage and effective year unverified"
+		return "bounded numeric-range assessment observation; county snapshot, query support, coverage and effective year unverified"
 	case p.legacyStructures:
 		return "bounded single-page structures observation; source ID membership and county coverage unverified"
 	default:
@@ -132,6 +132,9 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 	m := capture.Manifest()
 	if m.Source != source || m.Kind != "full_scan" || len(m.Receipts) < 2 {
 		return errors.New("invalid vacancy capture manifest")
+	}
+	if p.layer == union.AssessedValueLayer && len(m.Receipts) > 2 {
+		return p.prepareAssessmentRanges(ctx, capture)
 	}
 	structure := p.layer == union.StructuresLayer
 	var ids []int64

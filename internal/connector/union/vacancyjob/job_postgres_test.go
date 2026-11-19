@@ -105,7 +105,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err := run(); err != nil {
 		t.Fatal(err)
 	}
-	if query(`SELECT count(*) FROM vacancy_live_generations WHERE validation_note='bounded assessment observation; paging, coverage and effective year unverified'`) != 1 {
+	if query(`SELECT count(*) FROM vacancy_live_generations WHERE validation_note='bounded numeric-range assessment observation; county snapshot, query support, coverage and effective year unverified'`) != 1 {
 		t.Fatal("assessment provenance incorrect")
 	}
 	if query(`SELECT count(*) FROM vacancy_live_assessments`) != 2 {
@@ -143,7 +143,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err := run(); err == nil {
 		t.Fatal("malformed JSON accepted")
 	}
-	if query(`SELECT count(*) FROM ingest_captures WHERE source_name='union_assessed_value_0' AND jsonb_array_length(convert_from(manifest,'UTF8')::jsonb->'receipts')=2`) < 1 {
+	if query(`SELECT count(*) FROM ingest_captures WHERE source_name='union_assessed_value_0' AND jsonb_array_length(convert_from(manifest,'UTF8')::jsonb->'receipts')=3`) < 1 {
 		t.Fatal("malformed response not sealed")
 	}
 	for _, rejected := range []struct {
@@ -167,15 +167,15 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 		if err := json.Unmarshal(manifest, &receipt); err != nil {
 			t.Fatal(err)
 		}
-		if len(receipt.Receipts) != 2 {
+		if len(receipt.Receipts) != 3 {
 			t.Fatalf("missing failed capture page: %s", manifest)
 		}
-		body, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(receipt.Receipts[1].ArtifactKey)))
+		body, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(receipt.Receipts[2].ArtifactKey)))
 		if err != nil || string(body) != rejected.body {
 			t.Fatalf("wrong failed capture bytes: %q %v", body, err)
 		}
 		if rejected.version == 5 {
-			if receipt.Receipts[1].HTTPStatus != 403 {
+			if receipt.Receipts[2].HTTPStatus != 403 {
 				t.Fatalf("lost refusal status: %s", manifest)
 			}
 			var rejectedID string
@@ -289,7 +289,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err := json.Unmarshal(manifest, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(receipt.Receipts[1].ArtifactKey)), []byte("corrupt"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(receipt.Receipts[2].ArtifactKey)), []byte("corrupt"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
