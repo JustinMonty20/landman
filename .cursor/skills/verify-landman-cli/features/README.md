@@ -1,12 +1,12 @@
 # landman verification map
 
-This directory is the maintained source for verifying the user-facing behavior of landman. Read the index before driving the app, then use the matching feature file as the recipe. The journey sequences those features. It is not a feature file, and it does not use the four-section feature contract.
+These are extended CLI recipes. Use the small local parcel checks in `../SKILL.md` by default. Read this index only when an extended or live journey is explicitly selected. The live journey sequences features; it is not a default check.
 
 ## Baseline preconditions
 
 - Build the CLI with `make build` so `./landman` exists at the repo root.
-- Run the doctors in `.cursor/skills/verify-landman/SKILL.md` before a drive.
-- Every database command uses container `landman-verify-postgis`, goose URL `GOOSE_DATABASE_URL`, and host URL `HOST_DATABASE_URL` from `SKILL.md`.
+- Run the doctors in `.cursor/skills/verify-landman-cli/live-gis.md` before a drive.
+- Every database command uses container `landman-verify-postgis`, goose URL `GOOSE_DATABASE_URL`, and host URL `HOST_DATABASE_URL` from `live-gis.md`.
 - Leave any container named `landman-postgis` untouched. Do not `docker compose` and do not source `.env`.
 - An import needs outbound HTTPS to `atlas.unioncountync.gov` and to the USDA Soil Data Access tabular endpoint.
 - Put evidence in `artifacts/verify/$RUN_ID/` and leave it there after cleanup.
@@ -15,8 +15,8 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 - Start every recipe from the verify database launch unless its preconditions say otherwise.
 - Treat every command as literal. Keep quoted names and flags unchanged.
-- Drive the CLI as `DATABASE_URL="$HOST_DATABASE_URL" ./landman`. Drive the database with `make` overrides and `docker exec`.
-- Run `check-schema`, `check-loaded`, `probe`, and `classify` through `go run ./.cursor/skills/verify-landman/cmd/verify-landman`.
+- Use the explicit source commands in the GIS journey. Use the tax skill for the combined bare command. Drive the database with verify-only `make` overrides and `docker exec`.
+- Run `check-schema`, `check-loaded`, `probe`, and `classify` through `go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman`.
 - Do not remove proof artifacts during cleanup.
 
 ## Proof and skip reporting
@@ -48,7 +48,8 @@ Keep implementation details out of the map. Name only user paths, stable handles
 ## CLI import
 
 - [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman` writing parcels, joining soil, and running screening against the verify database. It also covers `./landman run` and `./landman reprocess`.
-- [Schedule Union jobs](./schedule-union-jobs.md) covers `./landman schedule` and the two cron variables.
+- [Schedule Union jobs](./schedule-union-jobs.md) covers `./landman schedule` and all five cron variables.
+- [Qualification checks](./qualification.md) cover source publication, spatial evidence, refresh failures, and optional live zoning and road jobs.
 
 ## Journey
 
