@@ -88,6 +88,18 @@ func TestFloodMapAndParcelEvidence(t *testing.T) {
 	if ratio := detail.Zones[0].Acres / a.Parcel; ratio < .59 || ratio > .61 {
 		t.Fatalf("duplicate zone counted or wrong area: %f", ratio)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO fema_zones SELECT $1,'000-'||seq,'AE','','T',
+ ST_Multi(ST_MakeEnvelope(CASE WHEN seq=1 THEN ST_XMin(viewport)-0.01 ELSE -80.6 END,34.99,
+ CASE WHEN seq=1 THEN ST_XMin(viewport) ELSE -80.59 END,35,4269)),false,0
+ FROM generate_series(1,501) seq CROSS JOIN
+ (SELECT ST_Transform(ST_MakeEnvelope(-80.61,34.98,-80.58,35.01,4326),4269) AS viewport) b`, release); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/flood/map?bbox=-80.61,34.98,-80.58,35.01&zoom=15", nil))
+	if w.Code != 413 {
+		t.Fatalf("over-limit flood request: %d", w.Code)
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM fema_release_head WHERE study_id='37179C'`); err != nil {
 		t.Fatal(err)
 	}

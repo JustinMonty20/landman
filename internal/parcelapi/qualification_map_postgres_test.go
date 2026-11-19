@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -40,7 +41,7 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 		`INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,source_srid,shape,raw_shape,repair_status,repair_delta_m2) SELECT id,1,1,'Union',code,3857,` + polygon + `,` + polygon + `,'original',0 FROM (VALUES ('` + zoning + `'::uuid,'current'), ('` + old + `'::uuid,'retired')) x(id,code)`,
 		`INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES ('` + zoning + `',194,1,'Town',3857,` + polygon + `,` + polygon + `,'original',0)`,
 		`INSERT INTO qualification_roads(generation_id,source_id,name,source_srid,shape) VALUES ('` + roads + `',1,'Main Road',3857,ST_Multi(ST_Transform(ST_GeomFromText('LINESTRING(-80.62 35,-80.59 35)',4326),3857)))`,
-		`INSERT INTO qualification_refresh_failures VALUES ('roads',now(),'fixture failure')`,
+		`INSERT INTO qualification_refresh_failures VALUES ('roads',now(),'fixture failure'),('zoning',now()-interval '1 day','superseded failure')`,
 	} {
 		if _, err := pool.Exec(ctx, q); err != nil {
 			t.Fatal(err)
@@ -75,10 +76,27 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 			t.Fatalf("unexpected %s response: %+v", c.layer, data)
 		}
 		for _, f := range data.Features {
+			if f.Properties.Kind == "jurisdiction" && !strings.Contains(string(f.Geometry), `LineString`) {
+				t.Fatalf("expected jurisdiction boundary line, got %s", f.Geometry)
+			}
 			if f.Properties.Name == "retired" || len(f.Geometry) == 0 {
 				t.Fatalf("invalid feature: %+v", f)
 			}
 		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/qualification/map?bbox=-80.598,34.992,-80.592,34.998&layer=zoning&zoom=14", nil))
+	var inside struct{ Features []qualificationFeature }
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &inside) != nil || len(inside.Features) != 1 || inside.Features[0].Properties.Kind != "zoning" {
+		t.Fatalf("viewport inside jurisdiction: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,source_srid,shape,raw_shape,repair_status,repair_delta_m2)
+ SELECT $1,1,seq,'Union',3857,g,g,'original',0 FROM generate_series(2,502) seq CROSS JOIN LATERAL
+ (SELECT ST_Multi(ST_Transform(ST_MakeEnvelope(CASE WHEN seq=2 THEN -80.62 ELSE -80.6 END,34.99,CASE WHEN seq=2 THEN -80.61 ELSE -80.59 END,35,4326),3857)) AS g) s`, zoning); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("zoning", "14"); w.Code != 413 {
+		t.Fatalf("over-limit zoning request: %d", w.Code)
 	}
 	if w := request("roads", "12"); w.Code != 400 {
 		t.Fatalf("low zoom: %d", w.Code)

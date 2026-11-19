@@ -73,22 +73,24 @@ func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
  SELECT z.zone_code,z.zone_subtype,z.sfha_flag,ST_CollectionExtract(ST_Intersection(z.shape,b.shape),3) AS shape
  FROM fema_zones z CROSS JOIN bounds b WHERE z.capture_id=$1 AND z.shape && b.shape AND ST_Intersects(z.shape,b.shape)
  ORDER BY z.source_id LIMIT 501
- ) SELECT zone_code,zone_subtype,sfha_flag,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape, GREATEST(0.000001,0.0005 / power(2.0,$6::int-9))),4326),7)::jsonb FROM hits WHERE NOT ST_IsEmpty(shape)`, release.ID, b.West, b.South, b.East, b.North, zoom)
+ ) SELECT zone_code,zone_subtype,sfha_flag,CASE WHEN NOT ST_IsEmpty(shape) THEN ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape, GREATEST(0.000001,0.0005 / power(2.0,$6::int-9))),4326),7)::jsonb END FROM hits`, release.ID, b.West, b.South, b.East, b.North, zoom)
 		if err != nil {
 			unavailable(w)
 			return
 		}
 		defer rows.Close()
-		for rows.Next() {
+		for candidates := 1; rows.Next(); candidates++ {
+			if candidates > 500 {
+				http.Error(w, "Too many flood zones; zoom in", http.StatusRequestEntityTooLarge)
+				return
+			}
 			item := floodFeature{Type: "Feature"}
 			if err := rows.Scan(&item.Properties.Code, &item.Properties.Subtype, &item.Properties.SFHA, &item.Geometry); err != nil {
 				unavailable(w)
 				return
 			}
-			features = append(features, item)
-			if len(features) > 500 {
-				http.Error(w, "Too many flood zones; zoom in", http.StatusRequestEntityTooLarge)
-				return
+			if item.Geometry != nil {
+				features = append(features, item)
 			}
 		}
 		if rows.Err() != nil {

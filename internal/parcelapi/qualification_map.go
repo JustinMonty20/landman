@@ -32,11 +32,11 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	group := q.Get("layer")
-	minZoom, query, dimension := 9, zoneViewport, 3
+	minZoom, query := 9, zoneViewport
 	switch group {
 	case "zoning":
 	case "roads":
-		minZoom, query, dimension = 13, roadViewport, 2
+		minZoom, query = 13, roadViewport
 	default:
 		bad(w, errors.New("layer must be zoning or roads"))
 		return
@@ -63,7 +63,7 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 		RefreshFailedAt *time.Time `json:"refresh_failed_at"`
 	}
 	var gen generation
-	err = tx.QueryRow(ctx, `SELECT g.id::text,g.fetched_at,f.failed_at FROM qualification_heads h JOIN qualification_generations g ON g.id=h.generation_id AND g.source_group=h.source_group LEFT JOIN qualification_refresh_failures f ON f.source_group=h.source_group WHERE h.source_group=$1 AND g.completed_at IS NOT NULL`, group).Scan(&gen.ID, &gen.FetchedAt, &gen.RefreshFailedAt)
+	err = tx.QueryRow(ctx, `SELECT g.id::text,g.fetched_at,f.failed_at FROM qualification_heads h JOIN qualification_generations g ON g.id=h.generation_id AND g.source_group=h.source_group LEFT JOIN qualification_refresh_failures f ON f.source_group=h.source_group AND f.failed_at>=g.started_at WHERE h.source_group=$1 AND g.completed_at IS NOT NULL`, group).Scan(&gen.ID, &gen.FetchedAt, &gen.RefreshFailedAt)
 	features := []qualificationFeature{}
 	if errors.Is(err, pgx.ErrNoRows) {
 		respond(w, map[string]any{"type": "FeatureCollection", "features": features, "generation": nil})
@@ -73,23 +73,25 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	rows, err := tx.Query(ctx, viewportBounds+query+viewportGeometry, gen.ID, b.West, b.South, b.East, b.North, zoom, dimension)
+	rows, err := tx.Query(ctx, viewportBounds+query+viewportGeometry, gen.ID, b.West, b.South, b.East, b.North, zoom)
 	if err != nil {
 		unavailable(w)
 		return
 	}
 	defer rows.Close()
-	for rows.Next() {
+	for candidates := 1; rows.Next(); candidates++ {
+		if candidates > 500 {
+			http.Error(w, "Too many features; zoom in", http.StatusRequestEntityTooLarge)
+			return
+		}
 		var f qualificationFeature
 		f.Type = "Feature"
 		if err := rows.Scan(&f.Properties.Kind, &f.Properties.Name, &f.Geometry); err != nil {
 			unavailable(w)
 			return
 		}
-		features = append(features, f)
-		if len(features) > 500 {
-			http.Error(w, "Too many features; zoom in", http.StatusRequestEntityTooLarge)
-			return
+		if f.Geometry != nil {
+			features = append(features, f)
 		}
 	}
 	if rows.Err() != nil {
@@ -101,16 +103,16 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 
 const viewportBounds = `WITH bounds AS (SELECT ST_Transform(ST_MakeEnvelope($2,$3,$4,$5,4326),3857) AS shape), hits AS MATERIALIZED (`
 const zoneViewport = `
- SELECT 'zoning'::text AS kind, COALESCE(z.district_code,'') AS label,z.shape FROM qualification_zones z CROSS JOIN bounds b
+ SELECT 'zoning'::text AS kind, COALESCE(z.district_code,'') AS label,z.shape,3 AS dimension FROM qualification_zones z CROSS JOIN bounds b
  WHERE z.generation_id=$1 AND z.shape && b.shape AND ST_Intersects(z.shape,b.shape)
  UNION ALL
- SELECT 'jurisdiction',j.name,j.shape FROM qualification_jurisdictions j CROSS JOIN bounds b
- WHERE j.generation_id=$1 AND j.shape && b.shape AND ST_Intersects(j.shape,b.shape)
+ SELECT 'jurisdiction',j.name,ST_Boundary(j.shape),2 FROM qualification_jurisdictions j CROSS JOIN bounds b
+ WHERE j.generation_id=$1 AND j.shape && b.shape AND ST_Intersects(ST_Boundary(j.shape),b.shape)
  LIMIT 501`
 const roadViewport = `
- SELECT 'roads'::text AS kind,COALESCE(r.name,'') AS label,r.shape FROM qualification_roads r CROSS JOIN bounds b
+ SELECT 'roads'::text AS kind,COALESCE(r.name,'') AS label,r.shape,2 AS dimension FROM qualification_roads r CROSS JOIN bounds b
  WHERE r.generation_id=$1 AND r.shape && b.shape AND ST_Intersects(r.shape,b.shape)
  LIMIT 501`
 const viewportGeometry = `), clipped AS MATERIALIZED (
- SELECT kind,label,ST_CollectionExtract(ST_Intersection(h.shape,b.shape),$7::int) AS shape FROM hits h CROSS JOIN bounds b
-) SELECT kind,label,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape,GREATEST(0.1,50.0 / power(2.0,$6::int-9))),4326),7)::jsonb FROM clipped WHERE NOT ST_IsEmpty(shape)`
+ SELECT kind,label,ST_CollectionExtract(ST_Intersection(h.shape,b.shape),h.dimension) AS shape FROM hits h CROSS JOIN bounds b
+) SELECT kind,label,CASE WHEN NOT ST_IsEmpty(shape) THEN ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape,GREATEST(0.1,50.0 / power(2.0,$6::int-9))),4326),7)::jsonb END FROM clipped`
