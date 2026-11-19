@@ -24,7 +24,7 @@ const (
 // CaptureVacancyLayer retains the complete response of a bounded single-page query.
 // Multi-page imports require a verified stable total ordering or snapshot cursor.
 // In particular, assessed-value OBJECTID is not a unique row identity.
-func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer, save func(string, []byte, int) error) (int, error) {
+func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer, save func(string, []byte, int, int, bool) error) (int, error) {
 	if save == nil {
 		return 0, errors.New("capture callback required")
 	}
@@ -50,9 +50,9 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 	q := url.Values{"where": {"1=1"}, "returnCountOnly": {"true"}, "f": {"json"}}
 	base.RawQuery = q.Encode()
 	countURL := base.String()
-	body, responseErr := s.getVacancy(ctx, countURL)
+	body, status, responseErr := s.getVacancy(ctx, countURL)
 	if len(body) != 0 {
-		if err := save(countURL, body, 0); err != nil {
+		if err := save(countURL, body, 0, status, responseErr == nil); err != nil {
 			return 0, err
 		}
 	}
@@ -75,13 +75,13 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 	}
 	base.RawQuery = q.Encode()
 	pageURL := base.String()
-	body, responseErr = s.getVacancy(ctx, pageURL)
+	body, status, responseErr = s.getVacancy(ctx, pageURL)
 	crs := 0
 	if layer == StructuresLayer {
 		crs, _ = ParcelResponseCRS(body)
 	}
 	if len(body) != 0 {
-		if err := save(pageURL, body, crs); err != nil {
+		if err := save(pageURL, body, crs, status, responseErr == nil); err != nil {
 			return 0, err
 		}
 	}
@@ -99,30 +99,30 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 }
 
 // getVacancy returns bounded response bytes even when status, JSON, or size is rejected.
-func (s *GISSource) getVacancy(ctx context.Context, rawURL string) ([]byte, error) {
+func (s *GISSource) getVacancy(ctx context.Context, rawURL string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("User-Agent", "ParcelDataCollection/0.0.1")
 	resp, err := s.httpClient.Do(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	const limit = 32 << 20
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return body, err
+		return body, resp.StatusCode, err
 	}
 	if len(body) > limit {
-		return body, errors.New("vacancy response exceeds 32 MiB limit")
+		return body, resp.StatusCode, errors.New("vacancy response exceeds 32 MiB limit")
 	}
 	if err := unexpectedHTTPStatus(resp.StatusCode); err != nil {
-		return body, err
+		return body, resp.StatusCode, err
 	}
 	if !gjson.ValidBytes(body) {
-		return body, errors.New("vacancy response invalid JSON")
+		return body, resp.StatusCode, errors.New("vacancy response invalid JSON")
 	}
-	return body, nil
+	return body, resp.StatusCode, nil
 }

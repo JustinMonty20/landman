@@ -45,7 +45,7 @@ func TestStructureCaptureValidation(t *testing.T) {
 				url, body string
 				crs       int
 			}{{base + "f=json&returnCountOnly=true&where=1%3D1", count, 0}, {base + "f=json&outFields=%2A&outSR=3857&resultRecordCount=2000&returnGeometry=true&where=1%3D1", tc.body, 3857}} {
-				if err := recorder.Record(ctx, r.url, "", r.crs, strings.NewReader(r.body)); err != nil {
+				if err := recorder.RecordHTTP(ctx, r.url, "", r.crs, 200, true, strings.NewReader(r.body)); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -67,6 +67,57 @@ func TestStructureCaptureValidation(t *testing.T) {
 		})
 	}
 }
+func TestPrepareRejectsUntrustedHTTPOutcome(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := taxartifact.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "https://example.test/server/rest/services/Property_Tax_Live/Assessed_Value/MapServer/0/query?"
+	for _, tc := range []struct {
+		name     string
+		status   int
+		complete bool
+		rejected bool
+	}{
+		{"success", 200, true, false},
+		{"unknown", 0, true, true},
+		{"refusal", 403, true, true},
+		{"truncated", 200, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := ingest.NewRecorder(store, "union_assessed_value_0", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, request := range []string{base + "f=json&returnCountOnly=true&where=1%3D1", base + "f=json&outFields=%2A&resultRecordCount=2000&returnGeometry=false&where=1%3D1"} {
+				body := `{"count":0}`
+				if i == 1 {
+					body = `{"features":[]}`
+				}
+				if err := r.RecordHTTP(ctx, request, "", 0, tc.status, tc.complete, strings.NewReader(body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := r.BindAttempt(AssessedValueID, "00000000-0000-0000-0000-000000000001", "full_scan", 0); err != nil {
+				t.Fatal(err)
+			}
+			v, err := r.Verify(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = (&publisher{layer: union.AssessedValueLayer}).Prepare(ctx, v)
+			if (err != nil) != tc.rejected {
+				t.Fatalf("prepare outcome: %v", err)
+			}
+		})
+	}
+}
+
 func TestNormalizedFingerprintRetainsMultiplicityWithoutPageOrder(t *testing.T) {
 	row := assessment{ObjectID: "7", ParcelNumber: "001", Category: "AV"}
 	other := assessment{ObjectID: "8", ParcelNumber: "002", Category: "PY"}
@@ -132,7 +183,7 @@ func TestPrepareRejectsPartialAndCorruptCapture(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, r := range []struct{ url, body string }{{count, `{"count":2}`}, {page, tc.body}} {
-				if err := recorder.Record(ctx, r.url, "", 0, strings.NewReader(r.body)); err != nil {
+				if err := recorder.RecordHTTP(ctx, r.url, "", 0, 200, true, strings.NewReader(r.body)); err != nil {
 					t.Fatal(err)
 				}
 			}

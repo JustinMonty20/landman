@@ -67,8 +67,8 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 	if err = recorder.BindAttempt(id, attempt, "full_scan", 0); err != nil {
 		return jobs.Result{}, err
 	}
-	n, err := j.Source.CaptureVacancyLayer(ctx, j.Layer, func(request string, body []byte, crs int) error {
-		return recorder.Record(ctx, request, "", crs, bytes.NewReader(body))
+	n, err := j.Source.CaptureVacancyLayer(ctx, j.Layer, func(request string, body []byte, crs, status int, complete bool) error {
+		return recorder.RecordHTTP(ctx, request, "", crs, status, complete, bytes.NewReader(body))
 	})
 	if err != nil {
 		// Keep partial and rejected responses registered for offline diagnosis.
@@ -123,6 +123,9 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 	}
 	var count int
 	for i, r := range m.Receipts {
+		if r.HTTPStatus < 200 || r.HTTPStatus >= 300 || !r.ResponseComplete {
+			return errors.New("vacancy response lacks successful complete HTTP outcome")
+		}
 		u, e := url.Parse(r.Request)
 		if e != nil || u.Scheme != "https" && u.Scheme != "http" || u.Host == "" {
 			return errors.New("invalid vacancy request")
@@ -376,13 +379,26 @@ func (p *publisher) Apply(ctx context.Context, tx pgx.Tx, ob ingest.Observation)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if err == nil {
-		if latestCapture != ob.ID && !ob.Manifest.ObservedAt.After(latestAt) {
-			return ingest.ErrNoPublication
-		}
-		if latestHash == fingerprint && latestVersion == normalizerVersion {
-			return ingest.ErrObservationOnly
-		}
+	if err == nil && ob.Published && latestCapture != ob.ID {
+		return ingest.ErrNoPublication
+	}
+	var acceptedID string
+	var acceptedAt time.Time
+	cursorErr := tx.QueryRow(ctx, `SELECT capture_id::text,observed_at FROM vacancy_latest_observations WHERE source_name=$1`, ob.Manifest.Source).Scan(&acceptedID, &acceptedAt)
+	if errors.Is(cursorErr, pgx.ErrNoRows) && err == nil {
+		acceptedID, acceptedAt = latestCapture, latestAt
+	} else if cursorErr != nil && !errors.Is(cursorErr, pgx.ErrNoRows) {
+		return cursorErr
+	}
+	if acceptedID != "" && acceptedID != ob.ID && !ob.Manifest.ObservedAt.After(acceptedAt) {
+		return ingest.ErrNoPublication
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO vacancy_latest_observations(source_name,capture_id,observed_at) VALUES($1,$2::uuid,$3)
+ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_at=EXCLUDED.observed_at`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt); err != nil {
+		return err
+	}
+	if latestID != "" && latestHash == fingerprint && latestVersion == normalizerVersion {
+		return ingest.ErrObservationOnly
 	}
 	id := latestID
 	if latestCapture == ob.ID {

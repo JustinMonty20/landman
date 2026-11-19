@@ -16,7 +16,7 @@ func TestVacancyCaptureCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = source.CaptureVacancyLayer(ctx, StructuresLayer, func(string, []byte, int) error { t.Fatal("captured after cancellation"); return nil })
+	_, err = source.CaptureVacancyLayer(ctx, StructuresLayer, func(string, []byte, int, int, bool) error { t.Fatal("captured after cancellation"); return nil })
 	if err == nil {
 		t.Fatal("cancelled request accepted")
 	}
@@ -53,7 +53,7 @@ func TestVacancyCaptureFailClosed(t *testing.T) {
 				t.Fatal(err)
 			}
 			captured := 0
-			_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(_ string, _ []byte, _ int) error { captured++; return nil })
+			_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(_ string, _ []byte, _, _ int, _ bool) error { captured++; return nil })
 			if (err != nil) != tt.fail || calls != tt.want || captured != calls {
 				t.Fatalf("err=%v calls=%d captured=%d", err, calls, captured)
 			}
@@ -86,7 +86,7 @@ func TestVacancyRejectedPageRetainedBeforeValidation(t *testing.T) {
 				t.Fatal(err)
 			}
 			var receipts [][]byte
-			_, err = source.CaptureVacancyLayer(context.Background(), StructuresLayer, func(_ string, b []byte, _ int) error {
+			_, err = source.CaptureVacancyLayer(context.Background(), StructuresLayer, func(_ string, b []byte, _, _ int, _ bool) error {
 				receipts = append(receipts, append([]byte(nil), b...))
 				return nil
 			})

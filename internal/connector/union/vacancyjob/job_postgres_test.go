@@ -37,6 +37,9 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if _, err = pool.Exec(ctx, `TRUNCATE vacancy_live_assessments,vacancy_live_structures,vacancy_live_generations CASCADE`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(ctx, `DELETE FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = pool.Exec(ctx, `DELETE FROM ingest_replay_attempts WHERE capture_id IN (SELECT id FROM ingest_captures WHERE source_name='union_assessed_value_0')`); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +75,9 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 			fmt.Fprint(w, `{ "features": [ {"attributes":{"market_building":0,"assess_category":"AV","parcel_year":2027,"parcel_number":"001","OBJECTID":1}}, {"attributes":{"OBJECTID":1,"parcel_number":"001","parcel_year":2027,"assess_category":"AV","market_building":0}} ] }`)
 		case 4:
 			fmt.Fprint(w, `{malformed`)
+		case 5:
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"features":[{"attributes":{"OBJECTID":1,"parcel_number":"001","market_building":0}},{"attributes":{"OBJECTID":1,"parcel_number":"001","market_building":0}}]}`)
 		default:
 			fmt.Fprint(w, `{"features":[]}`)
 		}
@@ -116,6 +122,10 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if query(`SELECT count(*) FROM vacancy_live_generations`) != 1 {
 		t.Fatal("format-only observation published")
 	}
+	var acceptedAfterEquivalent string
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&acceptedAfterEquivalent); err != nil {
+		t.Fatal(err)
+	}
 	version = 2
 	if err := run(); err == nil {
 		t.Fatal("partial capture accepted")
@@ -129,6 +139,68 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	}
 	if query(`SELECT count(*) FROM ingest_captures WHERE source_name='union_assessed_value_0' AND jsonb_array_length(convert_from(manifest,'UTF8')::jsonb->'receipts')=2`) < 1 {
 		t.Fatal("malformed response not sealed")
+	}
+	for _, rejected := range []struct {
+		version int
+		body    string
+	}{{4, `{malformed`}, {5, `{"features":[{"attributes":{"OBJECTID":1,"parcel_number":"001","market_building":0}},{"attributes":{"OBJECTID":1,"parcel_number":"001","market_building":0}}]}`}} {
+		version = rejected.version
+		if rejected.version == 5 && run() == nil {
+			t.Fatal("HTTP refusal accepted")
+		}
+		var manifest []byte
+		if err := pool.QueryRow(ctx, `SELECT manifest FROM ingest_captures WHERE source_name='union_assessed_value_0' ORDER BY observed_at DESC LIMIT 1`).Scan(&manifest); err != nil {
+			t.Fatal(err)
+		}
+		var receipt struct {
+			Receipts []struct {
+				ArtifactKey string `json:"artifact_key"`
+				HTTPStatus  int    `json:"http_status"`
+			} `json:"receipts"`
+		}
+		if err := json.Unmarshal(manifest, &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if len(receipt.Receipts) != 2 {
+			t.Fatalf("missing failed capture page: %s", manifest)
+		}
+		body, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(receipt.Receipts[1].ArtifactKey)))
+		if err != nil || string(body) != rejected.body {
+			t.Fatalf("wrong failed capture bytes: %q %v", body, err)
+		}
+		if rejected.version == 5 {
+			if receipt.Receipts[1].HTTPStatus != 403 {
+				t.Fatalf("lost refusal status: %s", manifest)
+			}
+			var rejectedID string
+			if err := pool.QueryRow(ctx, `SELECT id::text FROM ingest_captures WHERE source_name='union_assessed_value_0' ORDER BY observed_at DESC LIMIT 1`).Scan(&rejectedID); err != nil {
+				t.Fatal(err)
+			}
+			before := requests
+			_, _, replayErr := runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, rejectedID) }})
+			if replayErr == nil || requests != before || query(`SELECT count(*) FROM vacancy_live_generations`) != 1 {
+				t.Fatalf("rejected response published on replay: %v", replayErr)
+			}
+		}
+
+	}
+	var acceptedBefore string
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&acceptedBefore); err != nil {
+		t.Fatal(err)
+	}
+	if acceptedBefore == older || acceptedBefore != acceptedAfterEquivalent {
+		t.Fatal("equivalent observation missing or failed attempts advanced cursor")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET normalizer_version='prior-normalizer' WHERE capture_id=$1::uuid`, older); err != nil {
+		t.Fatal(err)
+	}
+	requestsBeforeEquivalentReplay := requests
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
+	if err != nil || requests != requestsBeforeEquivalentReplay || query(`SELECT count(*) FROM vacancy_live_generations`) != 1 || query(`SELECT count(*) FROM vacancy_live_generations WHERE capture_id=(SELECT capture_id FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0')`) != 0 {
+		t.Fatalf("stale replay outranked equivalent observation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET normalizer_version='vacancy-rows-v1' WHERE capture_id=$1::uuid`, older); err != nil {
+		t.Fatal(err)
 	}
 	version = 1
 	if err := run(); err != nil {
