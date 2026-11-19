@@ -23,7 +23,7 @@ You are a principal engineer.
 - Verify parcel-import performance on an empty migrated database and after a failed first import. Include foreign-key checks and omitted-sale deletes in query measurements. Removing an explicit lookup does not prove that cached query plans remain efficient.
 - Before selecting project commands or files, inspect the repository root and its build manifest. Do not assume a Node.js project or `package.json` exists.
 
-- For raw-data retention, content fingerprints, conditional updates, change history, and normalization replay, define one ingestion contract. Implement it on parcels first. Verify retained source evidence, unchanged-content updates, field-change provenance, geometry-dependent refreshes, and replay safety before extending it. Then apply the verified contract to ALL other ingestion methods. Preserve source-specific identity, schedules, and atomic publication rules.
+- For raw-data retention, content fingerprints, conditional updates, change history, and normalization replay, define one ingestion contract. Implement it on parcels first. Verify retained source evidence, unchanged-content updates, field-change provenance, geometry-dependent refreshes, and replay safety before extending it. The current shared-interface rollout covers parcels, tax, and soil only. Keep zoning, flood, and other source inputs compatible with the design, but defer their implementation until operator authorization. A requested shared interface must be reusable code, not only a written contract or copied source-specific implementation. Before declaring it ready for reuse, show how the same non-generic Go interface accepts parcel, tax, and soil inputs without parcel-specific types or hardcoded source IDs in the shared mechanism. Preserve source-specific identity, schedules, and atomic publication rules.
 ## Agent Diary
 
 Write `.agents/diary/{name}.md` when a trigger event occurs. Omit the file when no events occurred.
@@ -68,6 +68,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Before adding an abstraction layer, imagine deleting it. If complexity vanishes rather than relocating, fold it away.
 - Require two implementations before introducing a swappable interface (e.g., production + test double). One implementation is indirection without flexibility.
 - Describe one configured storage interface with alternative backends as one store, not as multiple active stores. Select one backend at composition time.
+- Before retaining a replaced ingestion path or adding a data conversion tool, confirm that the operator needs to use data from the old path. For a forward-only cutover, remove the replaced runtime path and preserve existing data and saved verification inputs.
 - Never expose private wiring publicly for testability. Tests that need internals belong inside the module.
 
 ## Verification Hierarchy

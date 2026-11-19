@@ -19,6 +19,8 @@ The county zoning, jurisdiction, boundary, and road backend merged in [PR 73](ht
 
 Reuse stable parcel IDs, complete parcel geometry, `jobs.Runner.Run`, and the application's existing Go API and UI. Keep source publication separate from parcel assessment. Do not create another scheduler, parcel importer, application, or general GIS framework.
 
+[Shared ingestion](shared-ingestion.md) covers parcels, tax, and soil. When the operator authorizes FEMA or encumbrance ingestion, evaluate the existing capture, verification, and publication interface before adding another implementation. Keep source records typed and keep publication atomic for each source generation.
+
 Keep both evidence groups independent of zoning, roads, and soil. A failed flood refresh must not remove valid encumbrance evidence or other parcel evidence.
 
 ## Source evidence
