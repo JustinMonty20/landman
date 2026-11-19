@@ -232,6 +232,11 @@ func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel, likelyV
 	if err != nil {
 		return "", fmt.Errorf("parcelstore: save parcel: %w", err)
 	}
+	if parcel.Identity.CountyID == "union" && parcel.Identity.SourceName == "union_county_gis" {
+		if err := saveOwnerLabels(ctx, tx, id, parcel.Owner, parcel.Mailing); err != nil {
+			return "", fmt.Errorf("parcelstore: save owner labels: %w", err)
+		}
+	}
 	return id, nil
 }
 

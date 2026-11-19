@@ -37,7 +37,9 @@ func TestShapeWriterUpdatesStatisticsWithoutPublishingPartialShapes(t *testing.T
 	for _, query := range []string{
 		"CREATE TABLE " + name + ".parcels (LIKE public.parcels INCLUDING ALL) WITH (autovacuum_enabled = false)",
 		"CREATE TABLE " + name + ".parcel_sales (LIKE public.parcel_sales INCLUDING ALL) WITH (autovacuum_enabled = false)",
+		"CREATE TABLE " + name + ".parcel_owner_labels (LIKE public.parcel_owner_labels INCLUDING ALL)",
 		"ALTER TABLE " + name + ".parcel_sales ADD FOREIGN KEY (parcel_id) REFERENCES " + name + ".parcels(id)",
+		"ALTER TABLE " + name + ".parcel_owner_labels ADD FOREIGN KEY (parcel_id) REFERENCES " + name + ".parcels(id)",
 	} {
 		if _, err := conn.Exec(ctx, query); err != nil {
 			t.Fatal(err)
