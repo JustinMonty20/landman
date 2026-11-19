@@ -2,7 +2,6 @@ package vacancyjob
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -100,13 +99,11 @@ func (p *publisher) prepareAssessmentRanges(ctx context.Context, capture ingest.
 		if err != nil {
 			return err
 		}
-		var page struct {
-			Features []json.RawMessage `json:"features"`
-		}
-		if err = json.Unmarshal(raw, &page); err != nil || page.Features == nil || int64(len(page.Features)) != n {
+		features, err := union.DecodeAssessmentPage(raw)
+		if err != nil || int64(len(features)) != n {
 			return errors.New("assessment partition page count mismatch")
 		}
-		for _, feature := range page.Features {
+		for _, feature := range features {
 			oid, err := union.AssessmentObjectID(feature)
 			if err != nil || oid < lo || oid > hi {
 				return errors.New("assessment row outside partition")

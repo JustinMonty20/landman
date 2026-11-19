@@ -263,17 +263,24 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 		if gjson.GetBytes(raw, "exceededTransferLimit").Bool() {
 			return errors.New("truncated vacancy page")
 		}
-		var page struct {
-			Features []json.RawMessage `json:"features"`
+		var features []json.RawMessage
+		if !structure {
+			features, e = union.DecodeAssessmentPage(raw)
+		} else {
+			var page struct {
+				Features []json.RawMessage `json:"features"`
+			}
+			e = json.Unmarshal(raw, &page)
+			features = page.Features
 		}
 		expected := count - pageIndex*2000
 		if expected > 2000 {
 			expected = 2000
 		}
-		if e = json.Unmarshal(raw, &page); e != nil || page.Features == nil || len(page.Features) != expected {
+		if e != nil || features == nil || len(features) != expected {
 			return errors.New("vacancy page count mismatch")
 		}
-		for n, feature := range page.Features {
+		for n, feature := range features {
 			if structure {
 				v, e := parseStructure(feature, r.CRS)
 				if e != nil {
@@ -289,6 +296,9 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 				}
 				p.structures = append(p.structures, v)
 			} else {
+				if _, e := union.AssessmentObjectID(feature); e != nil {
+					return e
+				}
 				v, e := parseAssessment(feature)
 				if e != nil {
 					return e
@@ -484,6 +494,12 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 		}
 	}
 	if latestID != "" && latestHash == fingerprint && latestVersion == normalizerVersion {
+		if ob.Replay && latestCapture == ob.ID {
+			_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET validation_note=$2 WHERE id=$1 AND validation_note IS DISTINCT FROM $2`, latestID, p.validationNote())
+			if err != nil {
+				return err
+			}
+		}
 		return ingest.ErrObservationOnly
 	}
 	id := latestID

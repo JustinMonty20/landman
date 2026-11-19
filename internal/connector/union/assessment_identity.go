@@ -4,9 +4,47 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"strconv"
 	"strings"
 )
+
+// DecodeAssessmentPage rejects ambiguous feature arrays before capture or replay selects rows.
+func DecodeAssessmentPage(body []byte) ([]json.RawMessage, error) {
+	d := json.NewDecoder(bytes.NewReader(body))
+	start, err := d.Token()
+	if err != nil || start != json.Delim('{') {
+		return nil, errors.New("invalid assessment page")
+	}
+	var features []json.RawMessage
+	seen := false
+	for d.More() {
+		key, err := d.Token()
+		if err != nil {
+			return nil, err
+		}
+		var value json.RawMessage
+		if err := d.Decode(&value); err != nil {
+			return nil, err
+		}
+		if key == "features" {
+			if seen {
+				return nil, errors.New("duplicate assessment features")
+			}
+			seen = true
+			if err := json.Unmarshal(value, &features); err != nil || features == nil {
+				return nil, errors.New("invalid assessment features")
+			}
+		}
+	}
+	if _, err := d.Token(); err != nil {
+		return nil, err
+	}
+	if _, err := d.Token(); err != io.EOF || !seen {
+		return nil, errors.New("invalid assessment page ending or missing features")
+	}
+	return features, nil
+}
 
 // AssessmentObjectID reads the same decoded identity that publication uses, rejecting
 // ambiguous attribute envelopes and identity members before range membership checks.
@@ -61,12 +99,8 @@ func AssessmentObjectID(feature []byte) (int64, error) {
 	if _, err = a.Token(); err != nil || len(raw) == 0 {
 		return 0, errors.New("missing assessment OBJECTID")
 	}
-	var n json.Number
-	if err = json.Unmarshal(raw, &n); err != nil {
-		return 0, errors.New("invalid assessment OBJECTID")
-	}
-	id, err := strconv.ParseInt(n.String(), 10, 64)
-	if err != nil || id < 0 {
+	id, err := strconv.ParseInt(string(raw), 10, 64)
+	if err != nil || id < 0 || string(raw) != strconv.FormatInt(id, 10) {
 		return 0, errors.New("invalid assessment OBJECTID")
 	}
 	return id, nil

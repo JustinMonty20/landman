@@ -178,6 +178,8 @@ func TestPrepareRejectsPartialAndCorruptCapture(t *testing.T) {
 		valid      bool
 	}{
 		{"repeated object id", `{"features":[{"attributes":{"OBJECTID":7,"parcel_number":"001","parcel_year":2027,"assess_category":"AV","market_building":0}},{"attributes":{"OBJECTID":7,"parcel_number":"001","parcel_year":2027,"assess_category":"AV","market_building":0}}]}`, true},
+		{"conflicting arrays", `{"features":[{"attributes":{"OBJECTID":7,"parcel_number":"001"}},{"attributes":{"OBJECTID":7,"parcel_number":"002"}}],"\u0066eatures":[]}`, false},
+		{"quoted id", `{"features":[{"attributes":{"OBJECTID":"7","parcel_number":"001"}},{"attributes":{"OBJECTID":7,"parcel_number":"002"}}]}`, false},
 		{"partial", `{"features":[{"attributes":{"OBJECTID":7,"parcel_number":"001"}}]}`, false},
 		{"error", `{"error":{"message":"denied"}}`, false},
 	} {

@@ -81,12 +81,12 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 		if err != nil {
 			return err
 		}
-		features := gjson.GetBytes(body, "features")
-		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || !features.IsArray() || int64(len(features.Array())) != n {
+		features, decodeErr := DecodeAssessmentPage(body)
+		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || decodeErr != nil || int64(len(features)) != n {
 			return errors.New("assessment page incomplete")
 		}
-		for _, feature := range features.Array() {
-			oid, err := AssessmentObjectID([]byte(feature.Raw))
+		for _, feature := range features {
+			oid, err := AssessmentObjectID(feature)
 			if err != nil || oid < lo || oid > hi {
 				return errors.New("assessment page outside partition")
 			}

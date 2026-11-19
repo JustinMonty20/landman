@@ -75,11 +75,18 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 				case "duplicate envelope":
 					fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d},"\u0061ttributes":{"OBJECTID":1,"parcel_number":"001"}}`, oid)
 					continue
+				case "quoted OID":
+					fmt.Fprintf(w, `{"attributes":{"OBJECTID":"%d","parcel_number":"001"}}`, oid)
+					continue
 				}
 			}
 			fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d,"parcel_number":"001","assess_category":"AV","market_building":0}}`, oid)
 		}
-		fmt.Fprint(w, `]}`)
+		fmt.Fprint(w, `]`)
+		if mode == "conflicting arrays" {
+			fmt.Fprint(w, `,"\u0066eatures":[]`)
+		}
+		fmt.Fprint(w, `}`)
 	}))
 	defer server.Close()
 	source, err := union.NewGISSource(union.GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})
@@ -133,6 +140,18 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 		{"duplicate envelope replay", func(i int, u string, b []byte) (string, []byte, bool) {
 			if i == 7 {
 				b = []byte(strings.Replace(string(b), `{"attributes":{"OBJECTID":9223372036854775807,"parcel_number":"001","assess_category":"AV","market_building":0}}`, `{"attributes":{"OBJECTID":9223372036854775807,"parcel_number":"001"},"\u0061ttributes":{"OBJECTID":1,"parcel_number":"001"}}`, 1))
+			}
+			return u, b, true
+		}},
+		{"conflicting arrays replay", func(i int, u string, b []byte) (string, []byte, bool) {
+			if i == 7 {
+				b = []byte(strings.TrimSuffix(string(b), `}`) + `,"\u0066eatures":[]}`)
+			}
+			return u, b, true
+		}},
+		{"quoted OID replay", func(i int, u string, b []byte) (string, []byte, bool) {
+			if i == 7 {
+				b = []byte(strings.Replace(string(b), `"OBJECTID":9223372036854775807`, `"OBJECTID":"9223372036854775807"`, 1))
 			}
 			return u, b, true
 		}},
@@ -195,7 +214,7 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 			}
 		})
 	}
-	for _, mode = range []string{"wrong OID", "duplicate OID", "duplicate envelope"} {
+	for _, mode = range []string{"wrong OID", "duplicate OID", "duplicate envelope", "conflicting arrays", "quoted OID"} {
 		if _, err := capture(); err == nil {
 			t.Fatalf("%s accepted during capture", mode)
 		}

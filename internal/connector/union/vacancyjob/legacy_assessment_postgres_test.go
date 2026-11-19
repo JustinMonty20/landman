@@ -98,4 +98,24 @@ func TestLegacyAssessmentOfflinePublicationProvenance(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM vacancy_live_assessments WHERE object_id='7'`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("legacy duplicate feature rows lost: %d, %v", count, err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET validation_note='bounded numeric-range assessment observation; county snapshot, query support, coverage and effective year unverified' WHERE capture_id=$1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	var freshnessBefore int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&freshnessBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Replay(ctx, id, AssessedValueID, &publisher{layer: union.AssessedValueLayer}); err != nil {
+		t.Fatal(err)
+	}
+	var freshnessAfter int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&freshnessAfter); err != nil || freshnessAfter != freshnessBefore {
+		t.Fatalf("replay advanced freshness: %d %d %v", freshnessBefore, freshnessAfter, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT validation_note,observed_count FROM vacancy_live_generations WHERE capture_id=$1::uuid`, id).Scan(&note, &count); err != nil || note != "bounded single-page assessment observation; county snapshot, partition membership, coverage and effective year unverified" || count != 2 {
+		t.Fatalf("unchanged legacy replay provenance: %q count=%d err=%v", note, count, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM vacancy_live_assessments WHERE object_id='7'`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("unchanged replay changed rows: %d %v", count, err)
+	}
 }
