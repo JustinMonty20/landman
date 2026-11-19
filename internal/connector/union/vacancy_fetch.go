@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -48,12 +50,14 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 	q := url.Values{"where": {"1=1"}, "returnCountOnly": {"true"}, "f": {"json"}}
 	base.RawQuery = q.Encode()
 	countURL := base.String()
-	body, err := s.get(ctx, countURL)
-	if err != nil {
-		return 0, err
+	body, responseErr := s.getVacancy(ctx, countURL)
+	if len(body) != 0 {
+		if err := save(countURL, body, 0); err != nil {
+			return 0, err
+		}
 	}
-	if err := save(countURL, body, 0); err != nil {
-		return 0, err
+	if responseErr != nil {
+		return 0, responseErr
 	}
 	count := gjson.GetBytes(body, "count")
 	if !gjson.ValidBytes(body) || count.Type != gjson.Number || count.Raw != strconv.FormatInt(count.Int(), 10) || count.Int() < 0 {
@@ -71,23 +75,54 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 	}
 	base.RawQuery = q.Encode()
 	pageURL := base.String()
-	body, err = s.get(ctx, pageURL)
-	if err != nil {
-		return 0, err
-	}
+	body, responseErr = s.getVacancy(ctx, pageURL)
 	crs := 0
 	if layer == StructuresLayer {
-		crs, err = ParcelResponseCRS(body)
-		if err != nil {
+		crs, _ = ParcelResponseCRS(body)
+	}
+	if len(body) != 0 {
+		if err := save(pageURL, body, crs); err != nil {
 			return 0, err
 		}
 	}
-	if err := save(pageURL, body, crs); err != nil {
-		return 0, err
+	if responseErr != nil {
+		return 0, responseErr
+	}
+	if layer == StructuresLayer && crs == 0 {
+		return 0, errors.New("structure response missing or invalid CRS")
 	}
 	features := gjson.GetBytes(body, "features")
 	if gjson.GetBytes(body, "error").Exists() || !features.IsArray() || int64(len(features.Array())) != count.Int() || gjson.GetBytes(body, "exceededTransferLimit").Bool() {
 		return 0, errors.New("vacancy page incomplete")
 	}
 	return int(count.Int()), nil
+}
+
+// getVacancy returns bounded response bytes even when status, JSON, or size is rejected.
+func (s *GISSource) getVacancy(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "ParcelDataCollection/0.0.1")
+	resp, err := s.httpClient.Do(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	const limit = 32 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return body, err
+	}
+	if len(body) > limit {
+		return body, errors.New("vacancy response exceeds 32 MiB limit")
+	}
+	if err := unexpectedHTTPStatus(resp.StatusCode); err != nil {
+		return body, err
+	}
+	if !gjson.ValidBytes(body) {
+		return body, errors.New("vacancy response invalid JSON")
+	}
+	return body, nil
 }

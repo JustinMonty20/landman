@@ -4,12 +4,15 @@ package vacancyjob
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -196,12 +199,17 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 		if e = json.Unmarshal(raw, &page); e != nil || page.Features == nil || len(page.Features) != count {
 			return errors.New("vacancy page count mismatch")
 		}
+		seenStructures := make(map[string]bool)
 		for _, feature := range page.Features {
 			if p.layer == union.StructuresLayer {
 				v, e := parseStructure(feature, r.CRS)
 				if e != nil {
 					return e
 				}
+				if seenStructures[v.ObjectID] {
+					return errors.New("duplicate structure OBJECTID")
+				}
+				seenStructures[v.ObjectID] = true
 				p.structures = append(p.structures, v)
 			} else {
 				v, e := parseAssessment(feature)
@@ -325,25 +333,71 @@ func parseAssessment(raw json.RawMessage) (assessment, error) {
 	}
 	return assessment{oid, parcel, category, year, building, land, total}, nil
 }
+
+// normalizedFingerprint hashes canonical rows as a sorted multiset. Repeated assessment rows remain repeated.
+func (p *publisher) normalizedFingerprint() (string, error) {
+	rows := make([]string, 0, p.count)
+	if p.layer == union.StructuresLayer {
+		for _, v := range p.structures {
+			var geometry any
+			if err := json.Unmarshal(v.Geometry, &geometry); err != nil {
+				return "", err
+			}
+			b, err := json.Marshal([]any{v.ObjectID, v.OutlineID, v.PIN, v.Status, geometry, v.CRS})
+			if err != nil {
+				return "", err
+			}
+			rows = append(rows, string(b))
+		}
+	} else {
+		for _, v := range p.assessments {
+			b, err := json.Marshal(v)
+			if err != nil {
+				return "", err
+			}
+			rows = append(rows, string(b))
+		}
+	}
+	sort.Strings(rows)
+	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+const normalizerVersion = "vacancy-rows-v1"
+
 func (p *publisher) Apply(ctx context.Context, tx pgx.Tx, ob ingest.Observation) error {
-	var previous bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM vacancy_live_generations WHERE source_name=$1 AND retrieved_at >= $2 AND capture_id<>$3::uuid)`, ob.Manifest.Source, ob.Manifest.ObservedAt, ob.ID).Scan(&previous)
+	fingerprint, err := p.normalizedFingerprint()
 	if err != nil {
 		return err
 	}
-	if previous {
-		return ingest.ErrNoPublication
-	}
-	var same bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE g.source_name=$1 AND (convert_from(c.manifest,'UTF8')::jsonb)->'receipts'->1->>'sha256'=$2)`, ob.Manifest.Source, ob.Manifest.Receipts[1].SHA256).Scan(&same)
-	if err != nil {
+	var latestID, latestCapture, latestHash, latestVersion string
+	var latestAt time.Time
+	err = tx.QueryRow(ctx, `SELECT id::text,capture_id::text,retrieved_at,normalized_sha256,normalizer_version FROM vacancy_live_generations WHERE source_name=$1 ORDER BY retrieved_at DESC,id DESC LIMIT 1`, ob.Manifest.Source).Scan(&latestID, &latestCapture, &latestAt, &latestHash, &latestVersion)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if same {
-		return ingest.ErrObservationOnly
+	if err == nil {
+		if latestCapture != ob.ID && !ob.Manifest.ObservedAt.After(latestAt) {
+			return ingest.ErrNoPublication
+		}
+		if latestHash == fingerprint && latestVersion == normalizerVersion {
+			return ingest.ErrObservationOnly
+		}
 	}
-	var id string
-	err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note) VALUES($1,$2::uuid,$3,$4,$5) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, "single page reconciled; county coverage, assessment year and live pagination unverified").Scan(&id)
+	id := latestID
+	if latestCapture == ob.ID {
+		_, err = tx.Exec(ctx, `DELETE FROM vacancy_live_structures WHERE generation_id=$1`, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `DELETE FROM vacancy_live_assessments WHERE generation_id=$1`, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count)
+	} else {
+		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version) VALUES($1,$2::uuid,$3,$4,$5,$6,$7) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, "bounded count-matched observation; county completeness, assessment year and pagination unverified", fingerprint, normalizerVersion).Scan(&id)
+	}
 	if err != nil {
 		return err
 	}

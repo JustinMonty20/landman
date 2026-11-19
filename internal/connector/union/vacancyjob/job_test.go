@@ -30,16 +30,21 @@ func TestStructureCaptureValidation(t *testing.T) {
 	}{
 		{"valid", `{"spatialReference":{"wkid":3857},"features":[{"attributes":{"OBJECTID":7,"outline_id":"shape-7","PIN_Num":"001","status":"existing"},"geometry":{"rings":[[[0,0],[1,0],[1,1],[0,0]]]}}]}`, true},
 		{"invalid crs", `{"spatialReference":{"wkid":4326},"features":[{"attributes":{"OBJECTID":7},"geometry":{"rings":[]}}]}`, false},
+		{"duplicate OID", `{"spatialReference":{"wkid":3857},"features":[{"attributes":{"OBJECTID":7},"geometry":{"rings":[[]]}},{"attributes":{"OBJECTID":7},"geometry":{"rings":[[]]}}]}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder, err := ingest.NewRecorder(store, "union_structures_171", time.Now())
 			if err != nil {
 				t.Fatal(err)
 			}
+			count := `{"count":1}`
+			if tc.name == "duplicate OID" {
+				count = `{"count":2}`
+			}
 			for _, r := range []struct {
 				url, body string
 				crs       int
-			}{{base + "f=json&returnCountOnly=true&where=1%3D1", `{"count":1}`, 0}, {base + "f=json&outFields=%2A&outSR=3857&resultRecordCount=2000&returnGeometry=true&where=1%3D1", tc.body, 3857}} {
+			}{{base + "f=json&returnCountOnly=true&where=1%3D1", count, 0}, {base + "f=json&outFields=%2A&outSR=3857&resultRecordCount=2000&returnGeometry=true&where=1%3D1", tc.body, 3857}} {
 				if err := recorder.Record(ctx, r.url, "", r.crs, strings.NewReader(r.body)); err != nil {
 					t.Fatal(err)
 				}
@@ -62,6 +67,25 @@ func TestStructureCaptureValidation(t *testing.T) {
 		})
 	}
 }
+func TestNormalizedFingerprintRetainsMultiplicityWithoutPageOrder(t *testing.T) {
+	row := assessment{ObjectID: "7", ParcelNumber: "001", Category: "AV"}
+	other := assessment{ObjectID: "8", ParcelNumber: "002", Category: "PY"}
+	fingerprint := func(rows ...assessment) string {
+		p := publisher{layer: union.AssessedValueLayer, assessments: rows, count: len(rows)}
+		h, err := p.normalizedFingerprint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	if fingerprint(row, other, row) != fingerprint(other, row, row) {
+		t.Fatal("page order changed normalized fingerprint")
+	}
+	if fingerprint(row, other, row) == fingerprint(row, other) {
+		t.Fatal("duplicate multiplicity was lost")
+	}
+}
+
 func TestAssessmentRepeatedOIDPreserved(t *testing.T) {
 	raw := []byte(`{"attributes":{"OBJECTID":7,"parcel_number":"09336350","parcel_year":2027,"assess_category":"AV","market_building":0,"market_land":123.40,"market_total":123.40}}`)
 	first, err := parseAssessment(raw)

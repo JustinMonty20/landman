@@ -68,6 +68,10 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 			fmt.Fprint(w, `{"features":[{"attributes":{"OBJECTID":1,"parcel_number":"001","parcel_year":2027,"assess_category":"AV","market_building":0}},{"attributes":{"OBJECTID":1,"parcel_number":"001","parcel_year":2027,"assess_category":"AV","market_building":0}}]}`)
 		case 1:
 			fmt.Fprint(w, `{"features":[{"attributes":{"OBJECTID":1,"parcel_number":"001","parcel_year":2027,"assess_category":"AV","market_building":1}},{"attributes":{"OBJECTID":1,"parcel_number":"001","parcel_year":2027,"assess_category":"PY","market_building":0}}]}`)
+		case 3:
+			fmt.Fprint(w, `{ "features": [ {"attributes":{"market_building":0,"assess_category":"AV","parcel_year":2027,"parcel_number":"001","OBJECTID":1}}, {"attributes":{"OBJECTID":1,"parcel_number":"001","parcel_year":2027,"assess_category":"AV","market_building":0}} ] }`)
+		case 4:
+			fmt.Fprint(w, `{malformed`)
 		default:
 			fmt.Fprint(w, `{"features":[]}`)
 		}
@@ -105,12 +109,26 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if query(`SELECT count(*) FROM vacancy_live_generations`) != 1 || query(`SELECT count(*) FROM ingest_captures WHERE source_name='union_assessed_value_0'`) != 2 {
 		t.Fatal("repeat rewrote evidence or lost observation")
 	}
+	version = 3
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	if query(`SELECT count(*) FROM vacancy_live_generations`) != 1 {
+		t.Fatal("format-only observation published")
+	}
 	version = 2
 	if err := run(); err == nil {
 		t.Fatal("partial capture accepted")
 	}
 	if query(`SELECT count(*) FROM vacancy_live_generations`) != 1 {
 		t.Fatal("failed capture published")
+	}
+	version = 4
+	if err := run(); err == nil {
+		t.Fatal("malformed JSON accepted")
+	}
+	if query(`SELECT count(*) FROM ingest_captures WHERE source_name='union_assessed_value_0' AND jsonb_array_length(convert_from(manifest,'UTF8')::jsonb->'receipts')=2`) < 1 {
+		t.Fatal("malformed response not sealed")
 	}
 	version = 1
 	if err := run(); err != nil {
@@ -119,9 +137,33 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if query(`SELECT count(*) FROM vacancy_live_generations`) != 2 {
 		t.Fatal("changed capture not published")
 	}
+	version = 0
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	if query(`SELECT count(*) FROM vacancy_live_generations`) != 3 {
+		t.Fatal("A-B-A reversion was not published")
+	}
+	if query(`SELECT count(*) FROM vacancy_live_assessments a JOIN vacancy_live_generations g ON a.generation_id=g.id WHERE g.retrieved_at=(SELECT max(retrieved_at) FROM vacancy_live_generations) AND a.market_building=0`) != 2 {
+		t.Fatal("reverted assessment rows differ")
+	}
+	var current string
+	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_live_generations ORDER BY retrieved_at DESC LIMIT 1`).Scan(&current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET normalizer_version='prior-normalizer',normalized_sha256='outdated' WHERE capture_id=$1::uuid`, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_assessments SET market_building=999 WHERE generation_id=(SELECT id FROM vacancy_live_generations WHERE capture_id=$1::uuid)`, current); err != nil {
+		t.Fatal(err)
+	}
 	requestsBefore := requests
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, current) }})
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations WHERE normalizer_version='vacancy-rows-v1'`) != 3 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
+		t.Fatalf("correction replay failed: %v", err)
+	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
-	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 2 {
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 3 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
 		t.Fatalf("older replay changed evidence or contacted HTTP: %v", err)
 	}
 	var manifest []byte
@@ -140,7 +182,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
-	if err == nil || query(`SELECT count(*) FROM vacancy_live_generations`) != 2 || requests != requestsBefore {
+	if err == nil || query(`SELECT count(*) FROM vacancy_live_generations`) != 3 || requests != requestsBefore {
 		t.Fatalf("corrupt replay accepted or contacted HTTP: %v", err)
 	}
 }
