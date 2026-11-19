@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/connector/fema"
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/connector/union/parceljob"
 	"github.com/JustinMonty20/landman/internal/connector/union/soiljob"
@@ -87,13 +88,16 @@ func command(args []string) (string, error) {
 	}
 	if len(args) == 2 && args[0] == "run" {
 		switch args[1] {
-		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID:
+		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID, fema.JobID:
 			return args[1], nil
 		}
 	}
-	if len(args) == 4 && args[0] == "replay" && (args[1] == parcelJobID || args[1] == taxJobID || args[1] == soilJobID || args[1] == screeningJobID) && args[2] == "--snapshot" {
+	if len(args) == 4 && args[0] == "replay" && (args[1] == parcelJobID || args[1] == taxJobID || args[1] == soilJobID || args[1] == screeningJobID || args[1] == fema.JobID) && args[2] == "--snapshot" {
 		if !validCaptureID(args[3]) {
 			return "", fmt.Errorf("snapshot ID must be a capture UUID")
+		}
+		if args[1] == fema.JobID {
+			return "fema-replay", nil
 		}
 		if args[1] == taxJobID {
 			return "tax-replay", nil
@@ -112,7 +116,7 @@ func command(args []string) (string, error) {
 		}
 		return "reprocess", nil
 	}
-	return "", fmt.Errorf("usage: landman [schedule | run <job ID> | replay <%s|%s|%s|%s> --snapshot UUID | reprocess %s --limit N]", parcelJobID, taxJobID, soilJobID, screeningJobID, parcelJobID)
+	return "", fmt.Errorf("usage: landman [schedule | run <job ID> | replay <%s|%s|%s|%s|%s> --snapshot UUID | reprocess %s --limit N]", parcelJobID, taxJobID, soilJobID, screeningJobID, fema.JobID, parcelJobID)
 }
 
 func validCaptureID(id string) bool {
@@ -184,6 +188,9 @@ func run(ctx context.Context) error {
 	mode, err := command(os.Args[1:])
 	if err != nil {
 		return err
+	}
+	if mode == fema.JobID || mode == "fema-replay" {
+		return runFEMA(ctx, mode)
 	}
 	var taxInput taxjob.Config
 	if mode == taxJobID || mode == "all" {

@@ -263,6 +263,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.list(w, r)
 	case r.URL.Path == "/api/v1/parcels/map":
 		h.mapView(w, r)
+	case r.URL.Path == "/api/v1/flood/map":
+		h.floodMap(w, r)
 	case r.URL.Path == "/api/v1/sources":
 		h.sources(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/parcels/"):
@@ -621,6 +623,8 @@ func (h *Handler) detailRoute(w http.ResponseWriter, r *http.Request) {
 		h.tax(w, r, parts[0])
 	case "soil":
 		h.soil(w, r, parts[0])
+	case "flood":
+		h.floodDetail(w, r, parts[0])
 	default:
 		http.NotFound(w, r)
 	}

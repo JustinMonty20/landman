@@ -1,15 +1,22 @@
 <script lang="ts">
 import { onMount } from 'svelte';
-import { Map, Marker, NavigationControl, setWorkerUrl } from 'maplibre-gl';
+import { Map, Marker, NavigationControl, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
+import type { FeatureCollection } from 'geojson';
+import { emptyShapes, type Viewport } from './flood';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { counties, countyBounds, countyGeometry, mapDetail, type CountyId, type MapDetail } from './counties';
 
-let { selected, focusRequest, onselect, ondetail }: {
+let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, parcels, flood, parcelID }: {
   selected: CountyId;
   focusRequest: number;
   onselect: (id: CountyId) => void;
   ondetail: (detail: MapDetail) => void;
+  onviewport: (viewport: Viewport) => void;
+  onparcel: (id: string) => void;
+  parcels: FeatureCollection;
+  flood: FeatureCollection;
+  parcelID: string;
 } = $props();
 let container: HTMLDivElement;
 let map: Map | undefined;
@@ -24,6 +31,8 @@ function reportDetail() {
   const detail = mapDetail(map.getZoom());
   markers.forEach((marker) => { marker.getElement().hidden = detail === 'parcels'; });
   ondetail(detail);
+  const bounds = map.getBounds();
+  onviewport({ bbox: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].map((n) => n.toFixed(6)).join(','), zoom: Math.floor(map.getZoom()) });
 }
 function showRegion() {
   map?.fitBounds(countyBounds(), { padding, maxZoom: 8.5, duration: 0 });
@@ -63,12 +72,29 @@ onMount(() => {
         label.addEventListener('click', (event) => { event.stopPropagation(); onselect(county.id); });
         markers.push(new Marker({ element: label }).setLngLat([...county.center]).addTo(map));
       }
-      map.on('click', 'county-fill', (event) => {
-        const county = counties.find((county) => county.id === event.features?.[0]?.properties?.id);
+      map.addSource('flood-zones', { type: 'geojson', data: emptyShapes });
+      map.addLayer({ id: 'flood-fill', type: 'fill', source: 'flood-zones', paint: {
+        'fill-color': ['case', ['==', ['get', 'subtype'], 'FLOODWAY'], '#dc78bf', ['==', ['get', 'sfha'], 'T'], '#65cfe4', '#8b9ee8'], 'fill-opacity': 0.42
+      } });
+      map.addSource('parcels', { type: 'geojson', data: emptyShapes });
+      map.addLayer({ id: 'parcel-hit', type: 'fill', source: 'parcels', paint: { 'fill-opacity': 0 } });
+      map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcels', paint: { 'line-color': '#c4cbd2', 'line-width': 1 } });
+      map.addLayer({ id: 'parcel-selected', type: 'line', source: 'parcels', filter: ['==', ['get', 'id'], ''], paint: { 'line-color': '#edba71', 'line-width': 3 } });
+      map.on('click', (event) => {
+        if (!map) return;
+        const hit = map.queryRenderedFeatures(event.point, { layers: ['parcel-hit'] })[0];
+        if (hit) {
+          onparcel(String(hit.properties.id));
+          return;
+        }
+        if (mapDetail(map.getZoom()) === 'parcels') return;
+        const county = counties.find((county) => county.id === map?.queryRenderedFeatures(event.point, { layers: ['county-fill'] })[0]?.properties?.id);
         if (county) onselect(county.id);
       });
       map.on('mouseenter', 'county-fill', () => { if (map) map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'county-fill', () => { if (map) map.getCanvas().style.cursor = ''; });
+      map.on('mouseenter', 'parcel-hit', () => { if (map) map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'parcel-hit', () => { if (map) map.getCanvas().style.cursor = ''; });
       ready = true;
       reportDetail();
     });
@@ -81,6 +107,12 @@ onMount(() => {
 
 $effect(() => {
   if (ready && map) map.setFilter('county-selection', ['==', ['get', 'id'], selected]);
+});
+$effect(() => {
+  if (!ready || !map) return;
+  (map.getSource('parcels') as GeoJSONSource).setData(parcels);
+  (map.getSource('flood-zones') as GeoJSONSource).setData(flood);
+  map.setFilter('parcel-selected', ['==', ['get', 'id'], parcelID]);
 });
 $effect(() => {
   if (!ready || focusRequest === lastFocusRequest) return;
