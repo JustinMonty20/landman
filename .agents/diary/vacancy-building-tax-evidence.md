@@ -1,0 +1,2 @@
+- Out-of-scope decision. Countywide structures coverage, structure status meanings, and assessed-value row selection are not verified from an operator-supplied reproducible snapshot. Fixture capture remains unverified, assessment publication permits only unknown, and the existing likely_vacant reader remains authoritative until a separately verified backfill.
+- Scope tangent. Back-tax totals belong to the separately approved tax evidence work and require a current dated delinquent-list publication; this fixture PR does not infer a payable balance from billed taxes.
