@@ -1,0 +1,2 @@
+- **Out-of-scope decision.** Countywide pagination was not enabled because assessed-value OIDs repeat and no stable row identity or snapshot cursor has been verified. Single-page capture stays useful for scoped fixtures; a live import beyond the 2,000-feature gate must wait for source-specific validation.
+- **Scope tangent.** The browser satellite link remains plan-only and no imagery implementation was made in this ingestion change.

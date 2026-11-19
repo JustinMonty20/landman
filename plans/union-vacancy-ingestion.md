@@ -9,6 +9,7 @@ Capture Union Structures layer 171 and Assessed Value layer 0 as separate source
 - Register each manual job with `jobs.Runner.Run`. Use the existing county client, rate limit, and host exclusion. Keep the two source captures independent.
 - Retain exact response bytes and request metadata with `ingest.Engine`. Use its SHA-256 checks and capture registry. Validate complete captures before publication. Record a repeat observation without rewriting unchanged evidence. Replay must not contact the county or replace newer evidence.
 - Preserve repeated assessment rows in the raw capture. Do not assume `OBJECTID` is unique in layer 0. Reject or retain as incomplete any capture for which completeness cannot be established. A failed refresh must not replace the last complete source data.
+- **Live gate.** A count-checked offset scan cannot establish completeness when assessment OIDs repeat and no stable total order is verified. The manual jobs currently accept only a single response of at most 2,000 features; larger counts fail after retaining the count receipt. Countywide publication requires source-specific verification of stable ordering or snapshot-safe partitioning, transfer-limit behavior and repeat scans. Fixtures cannot establish these live properties. A successful single-page observation has unverified coverage and cannot enable tiers. Confirm source terms, dates and county coverage separately.
 
 ## Likely-vacant filters
 
@@ -19,7 +20,7 @@ Capture Union Structures layer 171 and Assessed Value layer 0 as separate source
 
 ## Source evidence
 
-A point query for parcel `09336350` returned two identical `AV` rows and two identical `PY` rows. Both categories reported year `2027`. This confirms the category labels for that response. It does not prove that year `2027` is effective. The mapped footprint overlapped 98.46% of the saved parcel geometry when measured as a share of the footprint. Two additional appraisal samples had no footprint match by parcel number. Those searches did not test spatial overlap or county coverage.
+A point query for parcel `09336350` returned two identical `AV` rows and two identical `PY` rows. Both categories reported year `2027`. This confirms the category labels for that response. It does not prove that year `2027` is effective. 98.46% of the mapped footprint area overlapped the saved parcel geometry, not vice versa. Two additional appraisal samples had no footprint match by parcel number. Those searches did not test spatial overlap or county coverage.
 
 ## Verification
 

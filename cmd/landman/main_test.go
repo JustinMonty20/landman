@@ -11,6 +11,7 @@ import (
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
+	"github.com/JustinMonty20/landman/internal/connector/union/vacancyjob"
 	"github.com/JustinMonty20/landman/internal/jobs"
 )
 
@@ -92,6 +93,10 @@ func TestCommands(t *testing.T) {
 		{nil, "all"}, {[]string{"schedule"}, "schedule"},
 		{[]string{"run", parcelJobID}, parcelJobID}, {[]string{"run", soilJobID}, soilJobID},
 		{[]string{"run", screeningJobID}, screeningJobID}, {[]string{"run", taxJobID}, taxJobID},
+		{[]string{"run", vacancyjob.StructuresID}, vacancyjob.StructuresID},
+		{[]string{"run", vacancyjob.AssessedValueID}, vacancyjob.AssessedValueID},
+		{[]string{"replay", vacancyjob.StructuresID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "vacancy-live-replay"},
+		{[]string{"replay", vacancyjob.AssessedValueID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "vacancy-live-replay"},
 		{[]string{"replay", taxJobID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "tax-replay"},
 		{[]string{"replay", soilJobID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "soil-replay"},
 		{[]string{"replay", screeningJobID, "--snapshot", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "screening-replay"},

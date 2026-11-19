@@ -111,7 +111,9 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE landman_api_test_vacancy_ci'
           "$(go env GOPATH)/bin/goose" -dir db/migrations postgres "$VACANCY_TEST_DATABASE_URL" up
       - name: Vacancy database tests
-        run: API_TEST_DATABASE_URL="$VACANCY_TEST_DATABASE_URL" go test -race -tags postgres ./internal/vacancy -count=1
+        run: |
+          API_TEST_DATABASE_URL="$VACANCY_TEST_DATABASE_URL" go test -race -tags postgres ./internal/vacancy -count=1
+          API_TEST_DATABASE_URL="$VACANCY_TEST_DATABASE_URL" go test -race -tags postgres ./internal/connector/union/vacancyjob -count=1
 
   ui:
     name: Browser UI
