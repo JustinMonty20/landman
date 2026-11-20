@@ -1,0 +1,1 @@
+[Unrelated issue, resolved locally] During terrain triage, the whitespace check found conflict markers in `cmd/landman/main.go`, `docs/union-jobs.md`, and `internal/qualification/derive.go`. The terrain work did not change these files. The conflicts no longer exist after the local `main` branch was synchronized with `origin/main`.
