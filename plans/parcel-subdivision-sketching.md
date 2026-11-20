@@ -16,6 +16,8 @@ This is a planning aid, not a subdivision application, survey, legal boundary, d
 ## Per-lot evidence overlays
 Recompute available parcel evidence against each generated lot as the sketch changes. Show both map geometry and a per-lot summary where the source supports it. These are screening/context results, not a buildability score or regulatory determination.
 
+The [Union County terrain plan](union-terrain-ingestion.md) covers a later slope overlay. Terrain data is not a prerequisite for the first sketch release.
+
 - **Flood:** show intersecting mapped flood categories and affected acreage/share for each lot; distinguish SFHA, mapped 0.2% annual-chance areas, and regulatory floodway where classified. Include source effective-date and coverage/freshness status. Distinguish verified no mapped overlap from unknown, stale, or unavailable evidence.
 - **Soils:** show intersecting soil map units and mapped limitations/area for each lot using the available use-specific screening evidence. Do not present this as septic approval, engineering suitability, or buildability certification.
 - **Zoning and jurisdiction:** show mapped zoning districts and municipal/ETJ evidence crossing each lot, including split, conflicting, unmapped, or stale evidence. Do not infer permitted use, minimum lot size, subdivision eligibility, or density from a district code.

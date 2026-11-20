@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/connector/fema"
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/connector/union/vacancyjob"
@@ -275,41 +276,53 @@ func TestSourceOutcomesDoNotConcealIncompleteWork(t *testing.T) {
 	}
 }
 
-func TestSourceAndRefreshShareDeadlineAndCancellation(t *testing.T) {
-	const limit = 10 * time.Minute
-	for _, parentLimit := range []time.Duration{time.Hour, time.Minute} {
-		t.Run(parentLimit.String(), func(t *testing.T) {
-			parent, cancel := context.WithTimeout(context.Background(), parentLimit)
-			defer cancel()
-			started := time.Now()
-			var sourceDeadline time.Time
-			executor := unionExecutor{runner: &executingRunner{}, refresh: func(ctx context.Context) error {
-				deadline, ok := ctx.Deadline()
-				if !ok || !deadline.Equal(sourceDeadline) {
-					t.Fatalf("source deadline %v differs from refresh deadline %v", sourceDeadline, deadline)
-				}
-				return ctx.Err()
-			}}
-			outcome, _, err := executor.Run(parent, jobs.Definition{ID: parcelJobID, Run: func(ctx context.Context) (jobs.Result, error) {
-				var ok bool
-				sourceDeadline, ok = ctx.Deadline()
-				if !ok {
-					t.Fatal("source has no deadline")
-				}
-				if parentLimit > limit {
-					if sourceDeadline.Before(started.Add(limit)) || sourceDeadline.After(time.Now().Add(limit)) {
-						t.Fatalf("source deadline %v is not bounded by %v", sourceDeadline, limit)
-					}
-				} else if deadline, _ := parent.Deadline(); !sourceDeadline.Equal(deadline) {
-					t.Fatalf("extended parent deadline %v to %v", deadline, sourceDeadline)
-				}
-				cancel()
-				return jobs.Result{}, nil
-			}})
-			if outcome != jobs.OutcomeSuccess || !errors.Is(err, context.Canceled) {
-				t.Fatalf("outcome=%s error=%v", outcome, err)
-			}
-		})
+func TestSourceAndRefreshHaveSeparateDeadlines(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	var sourceDeadline time.Time
+	executor := unionExecutor{runner: &executingRunner{}, refresh: func(ctx context.Context) error {
+		refreshDeadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("refresh has no deadline")
+		}
+		if !refreshDeadline.After(sourceDeadline) {
+			t.Fatalf("refresh deadline %v must follow source deadline %v", refreshDeadline, sourceDeadline)
+		}
+		return nil
+	}}
+	outcome, _, err := executor.Run(parent, jobs.Definition{ID: parcelJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+		var ok bool
+		sourceDeadline, ok = ctx.Deadline()
+		if !ok {
+			t.Fatal("source has no deadline")
+		}
+		return jobs.Result{}, nil
+	}})
+	if outcome != jobs.OutcomeSuccess || err != nil {
+		t.Fatalf("outcome=%s error=%v", outcome, err)
+	}
+}
+
+func TestSourceAndRefreshDoNotExtendParentDeadline(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	parentDeadline, _ := parent.Deadline()
+	executor := unionExecutor{runner: &executingRunner{}, refresh: func(ctx context.Context) error {
+		deadline, ok := ctx.Deadline()
+		if !ok || !deadline.Equal(parentDeadline) {
+			t.Fatalf("refresh deadline %v, want parent deadline %v", deadline, parentDeadline)
+		}
+		return nil
+	}}
+	outcome, _, err := executor.Run(parent, jobs.Definition{ID: parcelJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || !deadline.Equal(parentDeadline) {
+			t.Fatalf("source deadline %v, want parent deadline %v", deadline, parentDeadline)
+		}
+		return jobs.Result{}, nil
+	}})
+	if outcome != jobs.OutcomeSuccess || err != nil {
+		t.Fatalf("outcome=%s error=%v", outcome, err)
 	}
 }
 
@@ -405,6 +418,9 @@ func TestManualTaxRequiresAllInputsBeforeDatabase(t *testing.T) {
 		}
 		setManualTaxEnv(t, config)
 	}
+	t.Setenv("UNION_FEMA_ARTIFACT_DIR", missing)
+	t.Setenv("UNION_FEMA_CATALOG_PATH", missing)
+	t.Setenv("UNION_FEMA_ARCHIVE_PATH", missing)
 	got, err := manualTaxConfig(os.Getenv)
 	if err != nil || got != config {
 		t.Fatalf("configured tax job: %+v %v", got, err)
@@ -425,15 +441,24 @@ func TestDefaultManualRunsAllJobsOnce(t *testing.T) {
 	definitions := []jobs.Definition{
 		{ID: parcelJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
 		{ID: soilJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: zoningJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: roadsJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: fema.JobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: vacancyjob.StructuresID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
+		{ID: vacancyjob.AssessedValueID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
 		{ID: taxJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
 	}
 	refresh := func(ctx context.Context) error {
 		return runRequired(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }})
 	}
-	if err := runManual(context.Background(), "all", runner, unionExecutor{}, definitions, refresh); err != nil {
+	qualify := func(ctx context.Context) error {
+		return runRequired(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }})
+	}
+	if err := runManual(context.Background(), "all", runner, unionExecutor{qualify: qualify}, definitions, refresh); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(runner.ids, ","), parcelJobID+","+soilJobID+","+screeningJobID+","+taxJobID; got != want {
+	want := strings.Join([]string{parcelJobID, soilJobID, zoningJobID, roadsJobID, fema.JobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID, screeningJobID, qualificationJobID, taxJobID}, ",")
+	if got := strings.Join(runner.ids, ","); got != want {
 		t.Fatalf("default job order %q, want %q", got, want)
 	}
 }

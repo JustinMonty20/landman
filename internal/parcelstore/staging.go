@@ -29,6 +29,10 @@ WHERE parcel_import_identities.source_parcel_id=EXCLUDED.source_parcel_id`, rawK
 // StagePart defers every parcel and sale mutation until whole-PID eligibility is known.
 // Payload is normalized data. Geometry is encoded separately, never as a geom.T interface.
 func (w *ShapeWriter) StagePart(ctx context.Context, parcel models.GISParcel, vacant bool, rawKey string) error {
+	return w.stagePart(ctx, parcel, vacant, rawKey, nil, nil)
+}
+
+func (w *ShapeWriter) stagePart(ctx context.Context, parcel models.GISParcel, vacant bool, rawKey string, feature json.RawMessage, hash *string) error {
 	if err := identityKey(parcel.Identity); err != nil {
 		return err
 	}
@@ -44,7 +48,7 @@ func (w *ShapeWriter) StagePart(ctx context.Context, parcel models.GISParcel, va
 	if err != nil {
 		return err
 	}
-	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_import_parts(source_parcel_id,payload,shape,likely_vacant,raw_key) VALUES($1,$2,$3,$4,$5)`, parcel.Identity.SourceParcelID, payload, shape, vacant, rawKey)
+	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_import_parts(source_parcel_id,payload,shape,likely_vacant,raw_key,source_feature,source_hash) VALUES($1,$2,$3,$4,$5,$6,$7)`, parcel.Identity.SourceParcelID, payload, shape, vacant, rawKey, feature, hash)
 	return err
 }
 

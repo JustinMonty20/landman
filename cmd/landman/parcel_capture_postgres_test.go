@@ -349,6 +349,34 @@ func TestLiveParcelCaptureRepeatability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("UNION_PARCEL_FAIL_FIRST_PUBLICATION") == "1" {
+		if mode != "replay" {
+			t.Fatal("publication failure injection requires offline replay")
+		}
+		_, err := pool.Exec(ctx, `CREATE FUNCTION reject_fixture_publication() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'fixture late publication failure'; END $$;
+		CREATE TRIGGER reject_fixture_publication BEFORE INSERT ON parcel_derived_handoff
+		FOR EACH STATEMENT EXECUTE FUNCTION reject_fixture_publication()`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := parcelCaptureSource(t, &parcelCaptureProxy{dir: dir, manifest: manifest, replay: true})
+		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		outcome, _, err := runParcelFixture(attemptCtx, pool, dsn, source, false, 0)
+		cancel()
+		if outcome != jobs.OutcomeFailed || err == nil || !strings.Contains(err.Error(), "fixture late publication failure") {
+			t.Fatalf("expected injected failure, got %s: %v", outcome, err)
+		}
+		for _, table := range []string{"parcels", "parcel_sales", "parcel_owner_labels", "parcel_evidence_current", "parcel_evidence_history", "parcel_evidence_observations", "parcel_derived_handoff", "ingest_captures WHERE published_at IS NOT NULL"} {
+			if n := countRows(t, ctx, pool, table); n != 0 {
+				t.Fatalf("failed publication left %d rows in %s", n, table)
+			}
+		}
+		if _, err := pool.Exec(ctx, `DROP TRIGGER reject_fixture_publication ON parcel_derived_handoff; DROP FUNCTION reject_fixture_publication()`); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("late publication failure rolled back all serving and parcel evidence rows")
+	}
 	for pass := 1; pass <= 2; pass++ {
 		proxy := &parcelCaptureProxy{dir: dir, manifest: manifest, replay: true}
 		source := parcelCaptureSource(t, proxy)

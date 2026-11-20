@@ -23,17 +23,7 @@ func (w *ShapeWriter) StageEvidencePart(ctx context.Context, parcel models.GISPa
 	if err != nil {
 		return err
 	}
-	if err := w.StagePart(ctx, parcel, vacant, rawKey); err != nil {
-		return err
-	}
-	tag, err := w.tx.Exec(ctx, `UPDATE parcel_import_parts SET source_feature=$1,source_hash=$2 WHERE ordinal=(SELECT max(ordinal) FROM parcel_import_parts)`, feature, hash)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("missing staged evidence part")
-	}
-	return nil
+	return w.stagePart(ctx, parcel, vacant, rawKey, feature, &hash)
 }
 
 // ApplyEvidence serializes source evidence, history and current rows in the caller's publication transaction.
@@ -344,10 +334,10 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 		return 0, err
 	}
 	last.Geometry.Shape = &decoded
-	if err = w.SavePart(ctx, last, vacant); err != nil {
+	if err = w.saveParcelAndSales(ctx, last, vacant); err != nil {
 		return 0, err
 	}
-	if _, err = w.tx.Exec(ctx, `UPDATE parcels SET shape=ST_GeomFromEWKB($2),likely_vacant=$3,updated_at=now() WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, pid, shape, vacant); err != nil {
+	if err = w.analyzeAfterSavedPart(ctx); err != nil {
 		return 0, err
 	}
 	cause := "source_observation"
@@ -361,6 +351,12 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	}
 	if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 		return 0, err
+	}
+	// A cached lookup can keep scanning the whole table as an empty table grows.
+	if w.partsSaved == parcelAnalyzeInterval {
+		if _, err := w.tx.Exec(ctx, `ANALYZE parcel_evidence_current (county_id, source_name, source_parcel_id)`); err != nil {
+			return 0, fmt.Errorf("parcelstore: analyze current evidence keys: %w", err)
+		}
 	}
 	if oldGeometry == nil || *oldGeometry != geometryHash {
 		w.geometryChanged = true
