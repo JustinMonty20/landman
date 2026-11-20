@@ -25,6 +25,12 @@ The [Union County terrain plan](union-terrain-ingestion.md) covers a later slope
 - Each layer can be toggled independently. Keep source attribution, source dates, retrieval freshness, and unavailable/stale states visible. Selecting an evidence result highlights its contributing geometry without obscuring the sketch or authoritative parcel boundary.
 - Parcel-level owner, sale, and tax facts remain parcel context rather than subdivision constraints unless a later product decision defines a useful per-lot interpretation.
 
+## Potential building area (later release)
+
+For the selected parcel and each proposed lot, show total acres, acres that meet the selected screening rules, and the acreage of the largest connected area that meets those rules. For example, a 5-acre parcel can have 3 acres that meet the rules, but those acres can be in several separate areas. Show all qualifying areas on the map and highlight the largest connected area separately.
+
+Show which rules apply, such as a maximum slope or exclusion of a mapped floodway. Show unknown acreage separately. Do not count unknown ground as qualifying. Update the map and the acreage when a proposed lot line moves. Label this result **potential building area**, not approved buildable acreage. It does not establish that a building fits or that the lot can be legally subdivided.
+
 ## Interaction and evidence
 - Enter the tool from a selected/highlighted parcel and keep its boundary emphasized above map overlays.
 - Draw and edit on the map with keyboard-accessible controls and a non-map way to inspect lot count, acreage, and per-lot evidence. Clearly distinguish sketch lines and generated lots from official parcel boundaries.
@@ -49,3 +55,4 @@ The [Union County terrain plan](union-terrain-ingestion.md) covers a later slope
 - [ ] Overlay toggles work independently, and selecting a result highlights its contributing evidence geometry without confusing it with the sketch or official boundary.
 - [ ] The UI makes clear that results are conceptual and do not establish legal or regulatory approval, access, buildability, or saleability.
 - [ ] Sketching does not alter parcel source data, saved lead state, scratchpad, or qualification evidence.
+- [ ] In the later screening release, a 5-acre fixture with 3 qualifying acres split into 2-acre and 1-acre areas reports 3 qualifying acres and a 2-acre largest connected area. Show both on the map. Keep unknown acres separate and update the results after a cut moves.
