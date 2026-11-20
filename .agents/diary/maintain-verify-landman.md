@@ -113,3 +113,11 @@ On 2026-11-20 the parcel command on `landman-verify-postgis` published 118204 pa
 ## Live proof
 
 The same run loaded the existing seed, rejected `./landman import` and `--limit 0` before opening the database, skipped qualification with no heads, and stopped a not-due `./landman schedule` with `SIGTERM` at exit 0 after the new `[union.qualification.assess]` lines. Stdout stayed empty on every CLI command.
+
+## Out-of-scope decision
+
+`cmd/owner-label-backfill` prints a stored-parcel classification count and does not fetch the county. This pass does not add a feature file for it.
+
+## Out-of-scope decision
+
+Did not start a second county import after `classify` began counting assessments on the current screening head. The 2026-11-20 parcel command already exited 1 before that count was compared. `go test` on `TestSaleQueryRejectsUnsafeParcelID` locks the SQL.

@@ -159,6 +159,9 @@ func TestSaleQueryRejectsUnsafeParcelID(t *testing.T) {
 	if strings.Contains(postImportSQL, "parcel_sales") {
 		t.Fatal("post-import SQL counts parcel_sales")
 	}
+	if !strings.Contains(postImportSQL, "JOIN soil_screening_heads AS h ON h.run_id = a.run_id") {
+		t.Fatal("post-import SQL counts assessments from earlier screening runs")
+	}
 }
 
 func TestProbeWritesTimingsAndAcceptsSlowPage(t *testing.T) {
