@@ -121,3 +121,19 @@ Did not rewrite `features/import-journey.md` into the four-heading contract. The
 ## Out-of-scope decision
 
 Left the journey sentence that screening and assessment print no lines. `internal/qualification/derive.go` logs step lines when a qualification head exists. Soil stderr on this drive was empty, and parcel stderr contained only the deadline.
+
+## Product gap
+
+On 2026-11-20 at 04:39:20Z, `./landman run union.gis.parcels` against `landman-verify-postgis` logged `Parcel capture page` lines and committed `full_scan` `success` with processed 118204 after 7m36s. `union.soil.screening` then recorded `interrupted` at the same command's 10-minute deadline. The error was `refresh expired screening: timeout: context deadline exceeded`, followed by a Postgres dial timeout on that cancelled context. Probe pages were 437 ms and 1069 ms. An empty `reprocess --limit 1` finished screening in 4m17s with no parcel capture lines. The separate downstream deadline in `unionExecutor` does not extend `./landman run union.gis.parcels`, because `run` still limits that mode to 10 minutes before the executor starts. This pass does not change product code. Evidence is `artifacts/verify/20261120T043546Z-50629`, which is gitignored.
+
+## Out-of-scope decision
+
+Did not run bare `./landman`, `union.fema`, zoning, roads, structures, assessed value, or the publication-retry performance test. Bare `./landman` with tax paths set and FEMA paths unset exited 1 with `UNION_FEMA_ARTIFACT_DIR is required` before it opened the database. `plans/union-terrain-ingestion.md` names no `landman` command. `docs/parcel-publication-retry.md` describes a store change and a Go test, not a new flag.
+
+## Live proof
+
+After the successful reprocess screening, county parcels and assessments on the current `soil_screening_heads` row were both 117985. The unfiltered `soil_parcel_assessments` count was 118021. The extra 36 rows are the seed screening run. The head join is the count `classify` uses. This pass did not start a second county import to re-drive that count.
+
+## Out-of-scope decision
+
+The earlier notes that left the journey silent, and that skipped the four-heading rewrite, describe the 03:51Z drive. The 04:35Z drive showed capture and screening lines on stderr. `features/import-journey.md` now uses the four headings and names those lines.

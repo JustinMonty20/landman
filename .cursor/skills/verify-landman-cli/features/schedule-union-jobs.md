@@ -18,11 +18,11 @@ Preconditions:
 - No other `./landman` process runs.
 - Run `./landman schedule` with the five calendar variables unset. It exits 1. Stderr contains `UNION_PARCELS_CRON requires CRON_TZ and five calendar fields`. The process does not open the database.
 - Set the first four calendar variables to `CRON_TZ=UTC 0 0 1 1 *`. Leave `UNION_QUALIFICATION_CRON` unset. Run `./landman schedule`. It exits 1 and stderr contains `UNION_QUALIFICATION_CRON requires CRON_TZ and five calendar fields`.
-- Set all five calendar variables to `CRON_TZ=UTC 0 0 1 1 *`. Run `./landman schedule`. The process stays running. It does not write `[union_county_gis]`. Send `SIGTERM` only to that process. It exits 0.
+- Set all five calendar variables to `CRON_TZ=UTC 0 0 1 1 *`. Run `./landman schedule`. The process stays running. Startup stderr contains `[union.qualification.assess]` and `No active generation; skip` when no zoning or roads head is stored. It does not write `[union_county_gis]`. Send `SIGTERM` only to that process. It exits 0.
 - Save each transcript under `artifacts/verify/$RUN_ID/`.
 
 ## Gotchas
 - A calendar without `CRON_TZ` and five fields exits 1 before the database opens. The error names the variable.
 - A calendar in `.env.example` can be due during a drive. Use a date that is not today, such as `CRON_TZ=UTC 0 0 1 1 *`, so the process does not fetch county data.
 - `SIGINT` and `SIGTERM` cancel the scheduler. Kill only that PID. Do not use `pkill landman`.
-- A due parcel, soil, zoning, or road tick uses the ten-minute deadline and contacts the county. A due qualification tick stays at ten minutes and only reconciles stored rows. Do not use a calendar due now for this wait check.
+- A due parcel, soil, zoning, or road tick contacts the county under a ten-minute limit. Its downstream screening or qualification gets a separate ten-minute limit. A due qualification tick stays at ten minutes and only reconciles stored rows. Do not use a calendar due now for this wait check.

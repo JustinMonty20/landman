@@ -35,8 +35,8 @@ Preconditions:
 
 ## Gotchas
 
-- Soil runs before the parcel command. The parcel command prints nothing on stdout and does not print `[union_county_gis]` batch lines. Quiet output is not proof of completion. Derived screening and qualification still run after the source attempt.
-- The runner's two commands each have ten minutes. This does not verify the combined bare command's single ten-minute budget.
+- Soil runs before the parcel command. Stdout stays empty. The parcel command writes `Parcel capture page` lines on stderr and does not write `Batch` or `Fetch complete` lines. Screening and qualification write their own stderr lines. Quiet stderr is not proof of completion.
+- `./landman run union.gis.soil` and `./landman run union.gis.parcels` each have one ten-minute deadline, and that deadline includes derived screening. Bare `./landman` gives each source and each derived step its own ten minutes, and it also requires the three FEMA paths. This journey does not run the bare command.
 - Quarantined parcel records can leave prior parcel values unchanged. `success_with_quarantine` is non-clean and stops that source's derived work.
 - A parcel command without an active soil set can publish parcels and then fail with pending screening. The seed alone does not supply an active soil set.
 - `classify` reports `inconclusive: county-source-slow` only for its existing deadline and timed-probe conditions. USDA HTTP 502 is an external drive failure, not a slow-county pass. Keep the helper verdict distinct from the maintenance outcome `blocked`.
