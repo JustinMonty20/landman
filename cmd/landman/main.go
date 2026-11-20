@@ -20,6 +20,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/connector/union/vacancyjob"
 	"github.com/JustinMonty20/landman/internal/county"
+	"github.com/JustinMonty20/landman/internal/heapprof"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/qualification"
 	"github.com/JustinMonty20/landman/internal/soil"
@@ -226,6 +227,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	stopProfile, err := heapprof.Start(os.Getenv("LANDMAN_HEAP_PROFILE_DIR"))
+	if err != nil {
+		return err
+	}
+	defer stopProfile()
+
 	if mode == fema.JobID || mode == "fema-replay" {
 		return runFEMA(ctx, mode)
 	}

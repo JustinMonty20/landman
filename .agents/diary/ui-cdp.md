@@ -1,0 +1,1 @@
+- **Scope tangent:** The production UI build warns that some chunks exceed 500 kB after minification. The profiling test passed. Measure load time before changing bundle structure.
