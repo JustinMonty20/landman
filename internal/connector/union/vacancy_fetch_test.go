@@ -62,6 +62,41 @@ func TestVacancyCaptureFailClosed(t *testing.T) {
 	}
 }
 
+func TestAssessmentCaptureReportsPageAndRowFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, page, want string
+		split            bool
+	}{
+		{"decoder", `{"features":[],"features":[]}`, "decode assessment page for OBJECTID range 0–9223372036854775807: duplicate assessment features", false},
+		{"identity", `{"features":[{"attributes":{}}]}`, "read assessment identity in range 0–9223372036854775807, row 1: missing assessment OBJECTID", false},
+		{"outside range", `{"features":[{"attributes":{"OBJECTID":4611686018427387904}}]}`, "assessment OBJECTID 4611686018427387904 at row 1 is outside range 0–4611686018427387903", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				if q.Get("returnCountOnly") != "true" {
+					fmt.Fprint(w, tc.page)
+					return
+				}
+				if tc.split && q.Get("where") != AssessmentWhere(0, 4611686018427387903) {
+					fmt.Fprint(w, `{"count":2001}`)
+					return
+				}
+				fmt.Fprint(w, `{"count":1}`)
+			}))
+			defer server.Close()
+			source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestVacancyRejectedPageRetainedBeforeValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, page string

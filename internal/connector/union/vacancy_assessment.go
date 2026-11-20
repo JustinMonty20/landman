@@ -86,13 +86,19 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			return err
 		}
 		features, decodeErr := DecodeAssessmentPage(body)
-		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || decodeErr != nil || int64(len(features)) != n {
+		if decodeErr != nil {
+			return fmt.Errorf("decode assessment page for OBJECTID range %d–%d: %w", lo, hi, decodeErr)
+		}
+		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || int64(len(features)) != n {
 			return fmt.Errorf("assessment page incomplete for OBJECTID range %d–%d: got %d rows, expected %d", lo, hi, len(features), n)
 		}
-		for _, feature := range features {
+		for i, feature := range features {
 			oid, err := AssessmentObjectID(feature)
-			if err != nil || oid < lo || oid > hi {
-				return errors.New("assessment page outside partition")
+			if err != nil {
+				return fmt.Errorf("read assessment identity in range %d–%d, row %d: %w", lo, hi, i+1, err)
+			}
+			if oid < lo || oid > hi {
+				return fmt.Errorf("assessment OBJECTID %d at row %d is outside range %d–%d", oid, i+1, lo, hi)
 			}
 		}
 		after, err := count(where)
