@@ -7,11 +7,11 @@ func coverageSQL(workspace, result string) string {
 	return strings.NewReplacer("@workspace", workspace, "@result", result).Replace(`CREATE TEMP TABLE @result ON COMMIT DROP AS
 WITH covered AS MATERIALIZED (
 SELECT DISTINCT h.parcel_id FROM @workspace_shapes h JOIN qualification_targets p ON p.id=h.parcel_id
-JOIN @workspace_sources s USING (parcel_id,layer_id,source_id)
+JOIN @workspace_geometry s ON (s.layer_id,s.source_id,s.precision_grid)=(h.layer_id,h.source_id,p.precision_grid)
 WHERE CASE WHEN p.precision_grid>0 AND ST_Equals(h.geom,p.analysis_geom) THEN ST_Covers(s.geom,p.analysis_geom) ELSE false END
 ), candidates AS MATERIALIZED (
 SELECT s.parcel_id,p.precision_grid,array_agg(ARRAY[s.layer_id::bigint,s.source_id] ORDER BY s.layer_id,s.source_id) source_keys
-FROM @workspace_sources s JOIN qualification_targets p ON p.id=s.parcel_id
+FROM @workspace_candidates s JOIN qualification_targets p ON p.id=s.parcel_id
 WHERE NOT EXISTS (SELECT 1 FROM covered d WHERE d.parcel_id=s.parcel_id)
 GROUP BY s.parcel_id,p.precision_grid
 ), representatives AS (
@@ -19,8 +19,10 @@ SELECT DISTINCT ON (precision_grid,source_keys) precision_grid,source_keys,parce
 FROM candidates ORDER BY precision_grid,source_keys,parcel_id
 ), merged AS MATERIALIZED (
 SELECT r.precision_grid,r.source_keys,u.geom FROM representatives r CROSS JOIN LATERAL (
-SELECT ST_UnaryUnion(ST_Collect(s.geom ORDER BY s.layer_id,s.source_id),r.precision_grid) geom
-FROM @workspace_sources s WHERE s.parcel_id=r.parcel_id
+SELECT ST_UnaryUnion(ST_Collect(g.geom ORDER BY g.layer_id,g.source_id),r.precision_grid) geom
+FROM @workspace_candidates s JOIN @workspace_geometry g
+ON (g.layer_id,g.source_id,g.precision_grid)=(s.layer_id,s.source_id,r.precision_grid)
+WHERE s.parcel_id=r.parcel_id
 ) u
 )
 SELECT c.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,m.geom,c.precision_grid),3) geom
@@ -34,21 +36,19 @@ func conflictSteps(label, workspace, result, distinct, unknown string) []assessm
 	return []assessmentStep{
 		{"Find " + label + " conflict parcel pairs", sql(`CREATE TEMP TABLE @workspace_pair_parcels ON COMMIT DROP AS
 SELECT a.parcel_id,a.layer_id a_layer,a.source_id a_source,b.layer_id b_layer,b.source_id b_source,p.precision_grid
-FROM @workspace_sources a JOIN @workspace_sources b ON a.parcel_id=b.parcel_id
+FROM @workspace_candidates a JOIN @workspace_candidates b ON a.parcel_id=b.parcel_id
 JOIN qualification_targets p ON p.id=a.parcel_id
 WHERE (a.layer_id,a.source_id)<(b.layer_id,b.source_id) AND @distinct`), nil},
 		{"Cache " + label + " conflict source pairs", sql(`CREATE TEMP TABLE @workspace_pair_overlaps ON COMMIT DROP AS
 WITH representatives AS MATERIALIZED (
-SELECT DISTINCT ON (a_layer,a_source,b_layer,b_source,precision_grid)
-a_layer,a_source,b_layer,b_source,precision_grid,parcel_id
+SELECT DISTINCT a_layer,a_source,b_layer,b_source,precision_grid
 FROM @workspace_pair_parcels
-ORDER BY a_layer,a_source,b_layer,b_source,precision_grid,parcel_id
 )
 SELECT r.a_layer,r.a_source,r.b_layer,r.b_source,r.precision_grid,
 ST_CollectionExtract(ST_Intersection(a.geom,b.geom,r.precision_grid),3) geom
 FROM representatives r
-JOIN @workspace_sources a ON (a.parcel_id,a.layer_id,a.source_id)=(r.parcel_id,r.a_layer,r.a_source)
-JOIN @workspace_sources b ON (b.parcel_id,b.layer_id,b.source_id)=(r.parcel_id,r.b_layer,r.b_source)
+JOIN @workspace_geometry a ON (a.layer_id,a.source_id,a.precision_grid)=(r.a_layer,r.a_source,r.precision_grid)
+JOIN @workspace_geometry b ON (b.layer_id,b.source_id,b.precision_grid)=(r.b_layer,r.b_source,r.precision_grid)
 WHERE a.geom && b.geom AND ST_Intersects(a.geom,b.geom)`), nil},
 		{"Index cached " + label + " conflicts", sql(`CREATE INDEX ON @workspace_pair_overlaps(a_layer,a_source,b_layer,b_source,precision_grid)`), nil},
 		{"Analyze cached " + label + " conflicts", sql(`ANALYZE @workspace_pair_overlaps`), nil},
