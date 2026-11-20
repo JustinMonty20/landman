@@ -4,12 +4,12 @@ Run this journey only after explicit approval for live county GIS and USDA reque
 
 Landman has a Go CLI, PostGIS, and a separate API executable. This skill verifies CLI parcel, soil, scheduler, and qualification behavior. It does not verify manual tax ingestion, API/authentication, or browser UI behavior. Use `verify-landman` to select all required skills.
 
-With no arguments, `landman` requires five operator tax-file inputs and then runs parcel, soil, screening, and tax jobs. The tax skill owns the separate combined-command drive and its operator files. This CLI skill does not use that command. It drives `./landman run union.gis.soil` and then `./landman run union.gis.parcels`. Each successful source run screens the stored soil set and reconciles stored qualification data. The parcel job writes accepted parcels, prints fetch progress on stderr, and prints nothing on stdout. The soil job stores soil. `success_with_quarantine` stops downstream work. `./landman schedule` requires cron values for parcels, soil, zoning, roads, and qualification, then waits for the next due time. `./landman reprocess union.gis.parcels --limit N` repairs pending parcel records. `N` is an integer from 1 through 100, and the check occurs before the database opens. A clean repair screens stored soil and does not fetch county soil. An unknown command, including `import`, prints usage and exits 1 before it opens the database.
+With no arguments, `landman` requires `UNION_TAX_ARTIFACT_DIR` and four tax-file paths, then runs parcel, soil, screening, and tax jobs. The tax skill owns the separate combined-command drive and its operator files. This CLI skill does not use that command. It drives `./landman run union.gis.soil` and then `./landman run union.gis.parcels`. A clean soil run always screens the stored soil set and reconciles stored qualification data. A clean parcel run always reconciles qualification, and it screens only when stored screening is due. Stdout stays empty. Stderr lines start with a timestamp. Parcel progress is `Parcel capture`, `Parcel capture page`, and `Parcel capture complete`, then publication lines. Soil, screening, ingest, and qualification print their own lines. `success_with_quarantine` stops downstream work. `./landman schedule` requires cron values for parcels, soil, zoning, roads, and qualification, then waits for the next due time. `./landman reprocess union.gis.parcels --limit N` repairs pending parcel records. `N` is an integer from 1 through 100, and the check occurs before the database opens. A clean repair screens stored soil and does not fetch county soil. An unknown command, including `import`, prints usage and exits 1 before it opens the database.
 
 Drive the real binary and verify database changes. Do not treat `go test` as a substitute. Do not use the operator database.
 
 ## Verification sync
-This skill did not record a sync commit. This maintenance pass uses `70bc8f1` (the last commit that changed this skill) as the prior sync. The sync remains at `70bc8f1` because the current GIS drive is blocked by a USDA HTTP 502 response. Covered code: `cmd/landman`, `internal/connector/union/gis.go`, `internal/connector/union/translator.go`, parcel and soil storage, `Makefile`, and `db/migrations`.
+The prior map sync is `70bc8f1`. The 2026-11-20 drive on `landman-verify-postgis` loaded the 2026-11-14 seed without a refresh. Soil completed. Parcel publication completed. Derived screening on the parcel command was interrupted by the shared ten-minute deadline, so `classify` printed `fail`. Covered code includes the progress and error lines in `cmd/landman`, parcel capture, soil capture, screening, qualification, and the ingest engine.
 
 ## Launch
 
@@ -168,18 +168,24 @@ Run `probe` before the GIS commands. It times each layer's `?f=json` metadata re
 
 Run `classify` after both GIS commands. Stdout is one verdict line. The command also writes `$EVIDENCE/drive-outcome.json`. The fields are `verdict`, `seededSales`, `fullImport`, and `sales`. `sales` is null when the parcel transaction did not commit. The parcel transaction committed when `job_attempts` has a `full_scan` row for `union.gis.parcels` whose outcome is `success` or `success_with_quarantine`. The helper does not look for an import summary line. The helper exits 2 for `inconclusive: county-source-slow`. `go run` turns that into shell exit 1 and prints `exit status 2` on stderr. Read the verdict line and `drive-outcome.json`.
 
-Each GIS command has a 10-minute deadline. The two commands together cover parcel import, soil fetch, soil storage, optional USDA name lookup, and screening. Parcel pages use `BatchSize` 2000 from `cmd/landman/main.go`. The GIS client sends about one request per second. Soil pages are also 2000. The parcel job prints the `[union_county_gis]` lines and prints nothing on stdout. Soil fetch, soil storage, and screening log nothing. `Fetch complete:` is not success. The process still has to store soil and screen it.
+Each GIS command has a 10-minute deadline shared by the source attempt and its derived screening and qualification. Parcel pages are 2000. The GIS client sends about one request per second. Soil pages are also 2000. `Parcel capture complete` is not command success. The process still publishes parcels and may screen and assess them. A source `Finished: outcome=success` line can be followed by a derived failure and exit 1.
 
 Stable handles:
 
 - CLI stdout for each GIS command is empty
-- CLI stderr: `[union_county_gis] Total parcels to fetch: <n>`
-- CLI stderr: `[union_county_gis] Batch size: 2000, Total batches: <m>`
-- CLI stderr: `[union_county_gis] Batch <i>/<total> complete:`
-- CLI stderr: `[union_county_gis] Fetch complete:`
-- CLI stderr for an unknown command begins `usage: landman [schedule | run <job ID> | reprocess union.gis.parcels --limit N]`
+- CLI stderr timestamp prefix on every log line, including `log.Fatal`
+- CLI stderr parcel capture: `[union_county_gis] Parcel capture: <n> records across <m> pages`
+- CLI stderr parcel capture: `[union_county_gis] Parcel capture page <i>/<m>: <got>/<n> records`
+- CLI stderr parcel capture: `[union_county_gis] Parcel capture complete: <n> records`
+- CLI stderr publication: `[union.gis.parcels] capture=<id>: Checked <n> parcel groups in publication transaction` and `Parcel publication complete: processed=<n> quarantined=<n>`
+- CLI stderr job boundary: `[<job ID>] Started: kind=<kind>`, `Running: attempt=<id>`, `Finished: outcome=<outcome> processed=<n> quarantined=<n> elapsed=<duration> attempt=<id>`
+- CLI stderr soil: `[union.gis.soil] Soil Polygons (layer 197):`
+- CLI stderr screening: `[union.soil.screening]` USDA name and interpretation lines
+- CLI stderr qualification: `[union.qualification.assess] Wait for assessment lock`
+- Do not require `Total parcels to fetch`, `Batch size`, `Batch <i>/<total> complete`, or `Fetch complete:`. Those lines are not on this command.
+- CLI stderr for an unknown command is a timestamp, then `usage: landman [schedule | run <job ID> | replay <union.gis.parcels|union.tax|union.gis.soil|union.soil.screening|union.fema|union.gis.structures|union.gis.assessed_value> --snapshot UUID | reprocess union.gis.parcels --limit N]`
 - CLI stderr when `--limit` is not an integer from 1 through 100: `reprocess limit must be between 1 and 100`
-- CLI stderr fatal substrings: `create GIS source:`, `fetch soil polygons:`, `import parcels:`, `union repair:`, `required union.gis.parcels:`, `required union.gis.soil:`, `required union.soil.screening:`, `required union.gis.parcels did not complete cleanly:`, `required union.gis.soil did not complete cleanly:`, `required union.soil.screening did not complete cleanly:`, `success_with_quarantine`, `invalid SOIL_SCREENING_MAX_AGE`, `connect for derived refresh exclusion:`, `wait for derived refresh exclusion:`
+- CLI stderr fatal substrings: `create GIS source:`, `capture parcels:`, `capture county geometry for Soil Polygons (layer 197):`, `capture=<id>:`, `union repair:`, `required union.gis.parcels:`, `required union.gis.soil:`, `required union.soil.screening:`, `required union.gis.parcels did not complete cleanly:`, `required union.gis.soil did not complete cleanly:`, `required union.soil.screening did not complete cleanly:`, `success_with_quarantine`, `invalid SOIL_SCREENING_MAX_AGE`, `connect for derived refresh exclusion:`, `wait for derived refresh exclusion:`
 - Makefile targets, always with the verify `DB_CONTAINER` and URL overrides: `make build`, `make db-drop`, `make db-create`, `make migrate-up`, `make migrate-version`, `make migrate-status`
 - SQL seed identities: `source_parcel_id` `07102010` and `07102051`, both `source_name` `union_county_gis`. Vacancy and situs are the `census parcel` lines from `check-loaded`.
 - `check-schema` stdout `schema: ok`
@@ -196,7 +202,7 @@ Proof standards:
 
 - Exercise `./landman` with `HOST_DATABASE_URL`, and exercise goose through the Makefile against `GOOSE_DATABASE_URL`. Do not call the GIS fetch, the import service, or the vacant filter from a scratch program and call that a user-path proof.
 - Capture the command, stdout, stderr, and exit code. For the database, capture `drive-outcome.json` from `classify`.
-- A successful import exits 0. Stdout is empty. Stderr contains the batch-size line and `Fetch complete:`. `classify` then prints `pass`. `drive-outcome.json` records `seededSales` and `fullImport` as `met`. The parcel attempt is `attempt_kind` `full_scan` and outcome `success`. `SavePart` upserts each accepted parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete. Do not query a county-wide `parcel_sales` total.
+- A successful import exits 0. Stdout is empty. Parcel stderr contains `Parcel capture complete:` and `Finished: outcome=success` for `union.gis.parcels`. Soil and screening stderr contain their own `Finished: outcome=success` lines. `classify` then prints `pass`. `drive-outcome.json` records `seededSales` and `fullImport` as `met`. The parcel attempt is `attempt_kind` `full_scan` and outcome `success`. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete. Do not query a county-wide `parcel_sales` total. A fast probe page can still miss the ten-minute budget during parcel publication or derived screening. That result is `fail`, with `seededSales` `met` when the seed slots match, not `inconclusive: county-source-slow`.
 - An empty `PID` is stored with `likely_vacant` false. `job_attempts.processed_count` on the parcel job counts saved features, which can exceed the number of `parcels` rows. A quarantined record is not one of those saved features. Outcome `success_with_quarantine` exits non-zero and does not start that source command's derived work.
 - The GIS and USDA endpoints are production systems. There is no dry-run flag. Do not run two `./landman` drives at the same time. A second run records `skipped_overlap` and exits non-zero.
 - A green `make test` or `go test` is not evidence that the CLI or migrations work.

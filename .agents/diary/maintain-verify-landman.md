@@ -85,3 +85,31 @@ Did not run `./landman run union.gis.parcels` or `./landman run union.gis.soil`.
 ## Live proof
 
 On 2026-11-15 at 11:13:08Z, bare `./landman` against `landman-verify-postgis` fetched 118202 parcel records in 1m0s. Stdout was empty. `union.gis.parcels` and `union.gis.soil` recorded `full_scan` `success` with zero quarantine. `union.soil.screening` recorded `interrupted` at 11:23:08Z with `timeout: context deadline exceeded`. Probe pages were 510 ms and 969 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. `./landman reprocess union.gis.parcels --limit 1` then exited 0 with empty output and no parcel fetch. Its parcel attempt was `reprocess` `success` with processed 0, and screening recorded `success`. Evidence is `artifacts/verify/20261115T111044-10364`, which is gitignored.
+
+## Out-of-scope decision
+
+The feature map now lives in `verify-landman-cli` after the router split. This pass edits that map. It does not add FEMA, vacancy, or tax progress lines. The tax skill owns tax. The CLI map covers parcel, soil, schedule, and qualification.
+
+## Out-of-scope decision
+
+Left `import-journey.md` as the ordered pass with `Reset through classify`. Stuffing it into the four feature headings would hide the sequence.
+
+## Out-of-scope decision
+
+Did not edit `docs/union-qualification-verification.md`. It still says zoning method `stored-overlay-measured/5`. The code constant is `stored-overlay-measured/4` with the EPSG:3857 grid suffix. The map now names the code string.
+
+## Out-of-scope decision
+
+Did not refresh `seed.sql`. After migrate to version 41, `check-schema` printed `schema: ok` and `check-loaded` printed `loaded: ok` with 36 parcels, 18 vacant, 18 built, 7 map units, 9 polygons, 71 overlaps, and 79 sales. The capture header is still 2026-11-14T23:06:21Z.
+
+## Out-of-scope decision
+
+Did not run `./landman run union.gis.zoning` or `./landman run union.gis.roads`. This pass keeps one county import, and that import is `run-gis.sh` (soil, then parcels). `cursor-team-kit` `deslop` is not installed here.
+
+## Product gap
+
+On 2026-11-20 the parcel command on `landman-verify-postgis` published 118204 parcels in 8m47s with `Finished: outcome=success` and zero quarantine. Probe pages were 386 ms and 1339 ms. Derived screening then recorded `interrupted` at 04:42:05Z with `timeout: context deadline exceeded` because the source attempt and the refresh share ten minutes. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. An empty `reprocess --limit 1` then finished screening in 4m9s and exited 0, with no `Parcel capture` line. This pass does not change product code. Evidence is `artifacts/verify/20261120T042338Z-5798`, which is gitignored.
+
+## Live proof
+
+The same run loaded the existing seed, rejected `./landman import` and `--limit 0` before opening the database, skipped qualification with no heads, and stopped a not-due `./landman schedule` with `SIGTERM` at exit 0 after the new `[union.qualification.assess]` lines. Stdout stayed empty on every CLI command.

@@ -11,10 +11,11 @@ Qualification jobs publish zoning and road generations and derive stored parcel 
 
 ## How to get to it (user POV)
 
-- `./landman run union.gis.zoning` fetches the zoning source group and reconciles stored qualification evidence.
-- `./landman run union.gis.roads` fetches roads and reconciles stored qualification evidence.
-- `./landman run union.qualification.assess` reconciles stored data without a county fetch.
-- The scheduler uses separate zoning, road, and qualification calendars. It reconciles stored qualification evidence once at startup before calendar dispatch.
+- `./landman run union.gis.zoning` fetches the zoning source group. A clean success then reconciles stored qualification evidence. Any other outcome exits 1 and leaves the previous head in place.
+- `./landman run union.gis.roads` fetches roads. A clean success then reconciles stored qualification evidence.
+- `./landman run union.qualification.assess` reconciles stored data without a county fetch. Its deadline is one hour.
+- A clean parcel run, soil run, and `./landman reprocess union.gis.parcels --limit N` also reconcile qualification. Bare `./landman` does too. The tax skill owns that command.
+- The scheduler uses separate zoning, road, and qualification calendars. It reconciles stored qualification evidence once at startup before calendar dispatch. That startup reconcile prints `[union.qualification.assess]` lines and does not fetch the county.
 
 ## Driving it with make and the landman binary
 
@@ -47,11 +48,11 @@ mkdir -p artifacts/verify
 go build -o artifacts/verify/qualification-cli ./cmd/landman
 DATABASE_URL="$VERIFY_DATABASE_URL" artifacts/verify/qualification-cli run union.qualification.assess
 docker exec "$VERIFY_CONTAINER" psql -X -U verify -d "$VERIFY_DB_NAME" \
-  -v ON_ERROR_STOP=1 -c "SELECT job_id,outcome FROM job_attempts ORDER BY started_at;" \
+  -v ON_ERROR_STOP=1 -c "SELECT job_id, attempt_kind, outcome, processed_count FROM job_attempts ORDER BY started_at;" \
   -c 'SELECT count(*) FROM qualification_heads; SELECT count(*) FROM qualification_assessments;'
 ```
 
-Require a successful assessment attempt and zero heads/assessments on this empty database. This proves the unavailable-source path, not county source completeness.
+Require exit 0, empty stdout, and stderr in this order: `Wait for assessment lock`, `Started: kind=full_scan`, `Running: attempt=`, `Zoning and jurisdictions: Find active generation`, `Zoning and jurisdictions: No active generation; skip`, `Road Centerlines: Find active generation`, `Road Centerlines: No active generation; skip`, `Finished: outcome=success processed=0 quarantined=0`. Require one `union.qualification.assess` `full_scan` `success` row with `processed_count` 0, and zero heads and assessments. This is the no-head skip. It does not call the read API. The typed `source_unavailable` result stays in `TestQualificationHoleAndUnavailableStates`. Run this command on a migrated database that the package tests have not written. Leftover `job_attempts` rows can look like a fresh success. The stored zoning method string is `stored-overlay-measured/4; EPSG:3857 grid=0.000001m; EPSG:2264 acres=ftUS^2/43560`. Do not require `stored-overlay-measured/5`.
 
 - Only with explicit live approval, use another fresh setup database populated with verified parcel inputs. Build the CLI, run zoning once, roads once, and assessment once. Capture each exit and query:
 
