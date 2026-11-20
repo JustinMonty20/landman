@@ -2,6 +2,10 @@
 
 Data gathering and sanitization aspect of NC county GIS data.
 
+## Go heap profiling
+
+Use the [Landman heap profile skill](.agents/skills/landman-heap-profile/SKILL.md) to capture and compare API and ingestion heap profiles. The skill also describes when to use Delve for local stack inspection.
+
 ## Database migrations
 
 This project uses Postgres/PostGIS and plain SQL migrations managed by [`goose`](https://github.com/pressly/goose).

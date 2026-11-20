@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/auth"
+	"github.com/JustinMonty20/landman/internal/heapprof"
 	"github.com/JustinMonty20/landman/internal/parcelapi"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,6 +24,12 @@ func run() error {
 	if os.Getenv("DATABASE_URL") == "" {
 		return errors.New("DATABASE_URL is required")
 	}
+	stopProfile, err := heapprof.Start(os.Getenv("LANDMAN_HEAP_PROFILE_DIR"))
+	if err != nil {
+		return err
+	}
+	defer stopProfile()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	startup, cancel := context.WithTimeout(ctx, 20*time.Second)
