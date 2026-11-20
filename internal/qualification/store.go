@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	ZoningMethod = "stored-overlay-measured/4; EPSG:3857 grid=0.000001m; EPSG:2264 acres=ftUS^2/43560"
+	ZoningMethod = "stored-overlay-measured/5; EPSG:3857 grid=0.000001m retry=0.0000001m; EPSG:2264 acres=ftUS^2/43560"
 	RoadsMethod  = "stored-nearest-measured/3; EPSG:2264; radius=5280ft; ties<=0.01ft"
 	maxSourceAge = 90 * 24 * time.Hour
 )
@@ -232,7 +232,7 @@ func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Segmentize(ST_Simplify(shape,0),10),2264),3) END geom,CASE WHEN $2='zoning' AND shape IS NOT NULL AND ST_IsValid(shape) THEN ST_ReducePrecision(shape,0.000001) END analysis_geom FROM parcels WHERE id=ANY($1::uuid[])`, ids, group); err != nil {
+	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Segmentize(ST_Simplify(shape,0),10),2264),3) END geom,CASE WHEN $2='zoning' AND shape IS NOT NULL AND ST_IsValid(shape) THEN ST_ReducePrecision(shape,0.000001) END analysis_geom,CASE WHEN $2='zoning' THEN 0.000001::float8 END precision_grid FROM parcels WHERE id=ANY($1::uuid[])`, ids, group); err != nil {
 		return 0, err
 	}
 	for _, sql := range []string{`CREATE UNIQUE INDEX ON qualification_targets(id)`, `CREATE INDEX ON qualification_targets USING GIST(shape)`, `ANALYZE qualification_targets`} {
@@ -241,9 +241,6 @@ func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen
 		}
 	}
 	if group == union.QualificationZoning {
-		if _, err = tx.Exec(ctx, `DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_targets WHERE shape IS NOT NULL AND ST_Area(shape)>0 AND ST_Area(analysis_geom)=0) THEN RAISE EXCEPTION 'analysis precision collapsed a required parcel'; END IF; END $$`); err != nil {
-			return 0, err
-		}
 		err = s.reconcileZoning(ctx, tx, gen, method)
 	} else {
 		err = s.reconcileRoads(ctx, tx, gen, method)

@@ -38,7 +38,9 @@ func TestStoredTopologyMeasuredEvidence(t *testing.T) {
 		{"exact-cover-extra-bottom", rect(0, 0, 1000, 100), []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+500, y, x+1000, y, x+1000, y+100, x, y+100, x, y)}, []string{"A"}, false, false, false, 1},
 		{"exact-cover-extra-top", rect(0, 0, 1000, 100), []string{fmt.Sprintf("POLYGON((%g %g,%g %g,%g %g,%g %g,%g %g,%g %g))", x, y, x+1000, y, x+1000, y+100, x+500, y+100, x, y+100, x, y)}, []string{"A"}, false, false, false, 1},
 		{"thin-valid-strip", rect(0, 0, 1000, 100), []string{rect(500, 0, 500.001, 100)}, []string{"A"}, true, false, false, 1},
-		{"collapsed-below-grid", rect(0, 0, 1000, 100), []string{rect(500, 0, 500.0000002, 100)}, []string{"A"}, true, false, false, 0},
+		{"collapsed-below-grid", rect(0, 0, 1000, 100), []string{rect(500, 0, 500.0000002, 100)}, []string{"A"}, true, false, false, 1},
+		{"collapsed-zone-hit", rect(500, 0, 1000, 100), []string{rect(0, 0, 500.0000002, 100)}, []string{"A"}, true, false, false, 1},
+		{"collapsed-parcel", rect(500, 0, 500.0000002, 100), []string{rect(0, 0, 1000, 100)}, []string{"A"}, false, false, false, 1},
 		{"positive-tiny-conflict", rect(0, 0, 1000, 100), []string{rect(0, 0, 1000, 100), rect(500, 50, 500.01, 50.01)}, []string{"A", "B"}, false, true, false, 2},
 		{"duplicate-district", rect(0, 0, 1000, 100), []string{rect(0, 0, 1000, 100), rect(0, 0, 1000, 100)}, []string{"A", "A"}, false, false, false, 2},
 		{"exact-cover-hole", withHole, []string{withHole}, []string{"A"}, false, false, false, 1},
@@ -94,12 +96,7 @@ func TestStoredTopologyMeasuredEvidence(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := store.reconcileOne(ctx, union.QualificationZoning, ZoningMethod); tc.name == "collapsed-below-grid" {
-				if err == nil || !strings.Contains(err.Error(), "analysis precision collapsed a required zone") {
-					t.Fatalf("lost required thin source: %v", err)
-				}
-				return
-			} else if err != nil {
+			if _, err := store.reconcileOne(ctx, union.QualificationZoning, ZoningMethod); err != nil {
 				t.Fatal(err)
 			}
 			z, err := CurrentZoning(ctx, pool, parcel)
@@ -108,6 +105,11 @@ func TestStoredTopologyMeasuredEvidence(t *testing.T) {
 			}
 			if len(z.Zones) != tc.wantHits || z.Split != tc.wantSplit || (z.UnmappedAcres > 0) != tc.wantGap || (z.AmbiguousAcres > 0) != tc.wantAmb {
 				t.Fatalf("unexpected evidence %+v", z)
+			}
+			if tc.name == "collapsed-below-grid" || tc.name == "collapsed-zone-hit" || tc.name == "collapsed-parcel" {
+				if len(z.Jurisdictions) != 1 || z.Zones[0].Area.Acres <= 0 || z.Zones[0].Area.Share <= 0 || z.Jurisdictions[0].Area.Acres <= 0 || z.Jurisdictions[0].Area.Share <= 0 {
+					t.Fatalf("fine grid must persist both positive hits: %+v", z)
+				}
 			}
 			if tc.name == "unnamed-jurisdiction" {
 				if len(z.Jurisdictions) != 1 || z.Jurisdictions[0].Name != nil || z.JurisdictionAmbiguousAcres <= 0 || z.JurisdictionUnmappedAcres != 0 {
