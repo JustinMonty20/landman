@@ -27,6 +27,8 @@ Launch creates the verify database, migrates it, loads the seed, and builds the 
 
 Do not copy or source `.env`. Make loads `.env` when the file exists, and that file is the operator database. Pass `DB_CONTAINER`, `POSTGRES_URL`, and `DATABASE_URL` on the `make` command line. Command-line assignments override `.env`.
 
+Leave `LANDMAN_HEAP_PROFILE_DIR` unset. The process then writes no heap socket and prints no heap line. When the variable names an existing directory, stderr logs `Heap profile socket: <path> (PID <pid>)` before the job. The process keeps a private `heap-*` directory and a `heap.sock` socket until exit, then removes that directory. The profile is served on that socket. When the variable names a missing path or a file, a valid command exits 1 with `create heap profile directory` before it opens the database. `import` and a bad reprocess limit still exit before that check.
+
 ```sh
 export VERIFY_CONTAINER=landman-verify-postgis
 export VERIFY_VOLUME=landman-verify-data

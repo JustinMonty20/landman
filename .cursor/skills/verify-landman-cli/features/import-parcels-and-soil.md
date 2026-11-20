@@ -43,3 +43,4 @@ Preconditions:
 - Qualification failures can make a source command fail after source publication. The GIS classifier does not prove qualification correctness; run the qualification recipe separately.
 - Likely vacancy is provisional. Missing tax data is not zero debt. The GIS journey does not verify tax ingestion.
 - `make run` loads `.env`. Never use it for verification. Keep verify database overrides on every database Make command.
+- Leave `LANDMAN_HEAP_PROFILE_DIR` unset. A directory value adds `Heap profile socket` before the job lines and removes its private socket directory on exit. A missing path or a file exits 1 with `create heap profile directory` and does not start the job.

@@ -185,3 +185,11 @@ Did not add headed assessment step lines, including `Release source geometry vie
 ## Out-of-scope decision
 
 Did not refresh `seed.sql`. Goose version 41 applied, `check-schema` and `check-loaded` passed, and `classify` reported `seededSales` `met`. The capture header is still 2026-11-14T23:06:21Z.
+
+## Live proof
+
+On 2026-11-20 at 22:05Z, after merging `9735872`, the 2026-11-14 seed still loaded. `check-schema` printed `schema: ok`. `check-loaded` printed `loaded: ok` for 36 parcels. With `LANDMAN_HEAP_PROFILE_DIR` unset, `./landman run union.qualification.assess` exited 0 and printed no heap line. `run-gis.sh` then logged no heap line. Soil exited 0. The parcel command published 118205 parcels in 8m6s, then screening recorded `interrupted` at the 10-minute deadline. Qualification printed `Wait for assessment lock` and did not print `Finished`. With the variable set to an existing directory, `./landman run union.gis.soil` logged `Heap profile socket` before capture, kept a private `heap-*` directory and `heap.sock` while running, served `GET /heap` with HTTP 200, exited 0, and removed that directory. Stdout stayed empty. A missing parent and a file parent each exited 1 with `create heap profile directory` and did not start the soil job. `./landman import` with a missing parent still exited 1 with usage. Evidence is `artifacts/verify/20261120T220503Z-43627`, which is gitignored.
+
+## Out-of-scope decision
+
+Did not add `.agents/skills/landman-heap-profile` or `.agents/skills/landman-ui-cdp` to the verify feature map. Those are operator capture skills. The verify map records the `LANDMAN_HEAP_PROFILE_DIR` startup contract on the CLI. The API process recipe already starts with `env -i` and does not set the variable. This pass did not start `cmd/api`.
