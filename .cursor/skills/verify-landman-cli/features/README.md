@@ -40,7 +40,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 Keep implementation details out of the map. Name only user paths, stable handles, required state, commands, and observable proof.
 
-`import-journey.md` is the ordered pass. It keeps the heading `Reset through classify` instead of these four sections.
+`import-journey.md` is the ordered pass. It uses these four sections.
 
 ## Database
 

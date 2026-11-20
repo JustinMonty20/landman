@@ -165,3 +165,7 @@ Did not edit `docs/union-qualification-verification.md`. Its older paragraphs st
 ## Out-of-scope decision
 
 `cursor-team-kit` `deslop` is not installed here. The live drive and the precision tests are the checks. Claude Opus and Sonnet were rejected for weekly quota, so the source readers ran on Grok.
+
+## Index and doctor correction
+
+`features/README.md` said `import-journey.md` keeps the heading `Reset through classify`. That file uses the four feature sections. The CLI doctor paragraph said exit 0 also calls the USDA tabular endpoint. `probe` requests only layers 215 and 197. The soil command logs `Fetch USDA names` and `Fetch USDA interpretations` during screening. An interpretation fetch error fails screening. A map-unit name error during soil store does not fail that store. Evidence is `artifacts/verify/20261120T044121Z-5952/soil.stderr.txt`.

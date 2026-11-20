@@ -138,7 +138,7 @@ curl -sS -o /tmp/landman-verify-layer-197.json -w "%{http_code}" \
   "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197?f=json"
 ```
 
-Worth driving when `./landman` is executable, `go version` can build the module in `go.mod`, and both layer metadata requests return HTTP 200. Layer 215 is parcels. Layer 197 is soil. Those curls check that the hosts answer. Page timings come from `probe`. Exit 0 also calls the USDA tabular endpoint `https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest`. There is no separate metadata probe for that host. A failed USDA call fails the drive.
+Worth driving when `./landman` is executable, `go version` can build the module in `go.mod`, and both layer metadata requests return HTTP 200. Layer 215 is parcels. Layer 197 is soil. Those curls check that the hosts answer. Page timings come from `probe`. The doctor and `probe` do not call USDA. `./landman run union.gis.soil` calls `https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest` while screening. Stderr then contains `Fetch USDA names` and `Fetch USDA interpretations`. An interpretation fetch error fails screening. A map-unit name error during soil store does not fail that store. There is no separate metadata probe for that host.
 
 ## Drive
 
