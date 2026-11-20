@@ -132,9 +132,10 @@ JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
 		}
 	}
 	statements := []assessmentStep{
-		{"Check fine parcel precision", `DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_retry_targets r JOIN qualification_targets p ON p.id=r.parcel_id
-WHERE p.shape IS NOT NULL AND ST_Area(p.shape)>0 AND ST_Area(p.analysis_geom)=0) THEN
-RAISE EXCEPTION 'analysis precision collapsed a required parcel at fine grid'; END IF; END $$`, nil},
+		{"Check fine parcel precision", `DO $$ DECLARE target_id uuid; BEGIN
+SELECT p.id INTO target_id FROM qualification_retry_targets r JOIN qualification_targets p ON p.id=r.parcel_id
+WHERE p.shape IS NOT NULL AND ST_Area(p.shape)>0 AND ST_Area(p.analysis_geom)=0 LIMIT 1;
+IF FOUND THEN RAISE EXCEPTION 'analysis precision collapsed a required parcel at fine grid: parcel_id=%',target_id; END IF; END $$`, nil},
 		{"Check fine source precision", `DO $$ DECLARE hit record; BEGIN
 SELECT parcel_id,layer_id,source_id,original_area INTO hit FROM qualification_zone_sources
 WHERE original_area>0 AND ST_Area(geom)=0 LIMIT 1;
@@ -162,7 +163,9 @@ BEGIN
    quote_nullable(parcel_number),hit.parcel_id,hit.layer_id,hit.source_id,hit.original_area;
  END IF;
 END $$`, nil},
-		{"Check clipped jurisdiction overlaps", `DO $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_jurisdiction_sources s WHERE s.original_area>0 AND NOT EXISTS (SELECT 1 FROM qualification_jurisdiction_shapes h WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND ST_Area(h.geom)>0)) THEN RAISE EXCEPTION 'analysis precision collapsed a required jurisdiction hit'; END IF; END $$`, nil},
+		{"Check clipped jurisdiction overlaps", `DO $$ DECLARE hit record; BEGIN
+SELECT s.parcel_id,s.layer_id,s.source_id INTO hit FROM qualification_jurisdiction_sources s WHERE s.original_area>0 AND NOT EXISTS (SELECT 1 FROM qualification_jurisdiction_shapes h WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND ST_Area(h.geom)>0) LIMIT 1;
+IF FOUND THEN RAISE EXCEPTION 'analysis precision collapsed a required jurisdiction hit: parcel_id=% layer_id=% source_id=%',hit.parcel_id,hit.layer_id,hit.source_id; END IF; END $$`, nil},
 		{"Remove zero-area zone overlaps", `DELETE FROM qualification_zone_shapes WHERE ST_Area(geom)=0`, nil},
 		{"Index zone overlaps", `CREATE INDEX ON qualification_zone_shapes(parcel_id)`, nil},
 		{"Analyze zone overlaps", `ANALYZE qualification_zone_shapes`, nil},

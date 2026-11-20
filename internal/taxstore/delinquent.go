@@ -91,7 +91,7 @@ func saveDelinquentBatch(ctx context.Context, tx pgx.Tx, rows []union.Delinquent
 			continue
 		}
 		if err != nil {
-			return result, fmt.Errorf("lookup delinquent parcel: %w", err)
+			return result, fmt.Errorf("lookup delinquent parcel PIN %q for tax year %d: %w", row.ParcelKey, row.Year, err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO delinquent_seen(parcel_id,tax_year) VALUES ($1,$2) ON CONFLICT DO NOTHING`, parcelID, row.Year); err != nil {
 			return result, err
@@ -113,7 +113,7 @@ DO UPDATE SET
 WHERE (tax_delinquent_balances.balance_due, tax_delinquent_balances.primary_source) IS DISTINCT FROM (EXCLUDED.balance_due, EXCLUDED.primary_source)`, county.Union, meta.Name, parcelID, row.Year, balance,
 			row.PrimarySource, meta.URL, digest[:], meta.FetchedAt)
 		if err != nil {
-			return result, fmt.Errorf("save delinquent balance: %w", err)
+			return result, fmt.Errorf("save delinquent balance for PIN %q (parcel_id=%s, tax year %d): %w", row.ParcelKey, parcelID, row.Year, err)
 		}
 		result.Saved++
 	}

@@ -34,6 +34,34 @@ type requiredRunner interface {
 	Run(context.Context, jobs.Definition) (jobs.Outcome, jobs.Result, error)
 }
 
+type loggingRunner struct{ requiredRunner }
+
+func (r loggingRunner) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
+	start := time.Now()
+	kind := definition.Kind
+	if kind == "" {
+		kind = jobs.AttemptFullScan
+	}
+	log.Printf("[%s] Started: kind=%s", definition.ID, kind)
+	attemptID := "-"
+	if run := definition.Run; run != nil {
+		definition.Run = func(ctx context.Context) (jobs.Result, error) {
+			if id, ok := jobs.AttemptID(ctx); ok {
+				attemptID = id
+				log.Printf("[%s] Running: attempt=%s", definition.ID, id)
+			}
+			return run(ctx)
+		}
+	}
+	outcome, result, err := r.requiredRunner.Run(ctx, definition)
+	status := string(outcome)
+	if status == "" {
+		status = "error"
+	}
+	log.Printf("[%s] Finished: outcome=%s processed=%d quarantined=%d elapsed=%s attempt=%s", definition.ID, status, result.Processed, result.Quarantined, time.Since(start).Round(time.Millisecond), attemptID)
+	return outcome, result, err
+}
+
 func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Definition) error {
 	outcome, _, err := runner.Run(ctx, definition)
 	if err != nil {
@@ -234,13 +262,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer pool.Close()
-	runner, err := jobs.NewRunner(pool)
+	jobRunner, err := jobs.NewRunner(pool)
 	if err != nil {
 		return err
 	}
-	if err = runner.RecoverInterrupted(ctx); err != nil {
+	if err = jobRunner.RecoverInterrupted(ctx); err != nil {
 		return err
 	}
+	runner := loggingRunner{jobRunner}
 	interval := soil.DefaultFreshnessInterval
 	if text := os.Getenv("SOIL_SCREENING_MAX_AGE"); text != "" {
 		interval, err = time.ParseDuration(text)
@@ -343,6 +372,7 @@ func run(ctx context.Context) error {
 		})
 	}
 	qualificationRefresh := func(ctx context.Context) error {
+		log.Print("[union.qualification.assess] Wait for assessment lock")
 		return withQualificationLock(ctx, dsn, func(ctx context.Context) error {
 			requests, err := observedHandoffs(ctx, pool, "qualification_pending")
 			if err != nil {

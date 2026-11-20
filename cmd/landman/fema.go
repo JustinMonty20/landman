@@ -35,11 +35,11 @@ func runFEMA(ctx context.Context, mode string) error {
 		return err
 	}
 	defer pool.Close()
-	runner, err := jobs.NewRunner(pool)
+	jobRunner, err := jobs.NewRunner(pool)
 	if err != nil {
 		return err
 	}
-	if err := runner.RecoverInterrupted(ctx); err != nil {
+	if err := jobRunner.RecoverInterrupted(ctx); err != nil {
 		return err
 	}
 	job := fema.Job{Pool: pool, Artifacts: store}
@@ -48,5 +48,5 @@ func runFEMA(ctx context.Context, mode string) error {
 		def.Kind = jobs.AttemptReplay
 		def.Run = func(ctx context.Context) (jobs.Result, error) { return job.Replay(ctx, os.Args[4]) }
 	}
-	return runRequired(ctx, runner, def)
+	return runRequired(ctx, loggingRunner{jobRunner}, def)
 }

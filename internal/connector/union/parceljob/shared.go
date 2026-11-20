@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"net/url"
 	"strconv"
 	"strings"
@@ -60,6 +61,9 @@ func (j Job) publishShared(ctx context.Context, store taxartifact.Store, recorde
 	}
 	publisher := &sharedPublisher{quarantine: j.Quarantine, selected: selected}
 	_, err = (ingest.Engine{Pool: pool, Store: store}).Ingest(ctx, recorder, publisher)
+	if err == nil {
+		log.Printf("[%s] Parcel publication complete: processed=%d quarantined=%d", JobID, publisher.result.Processed, publisher.result.Quarantined)
+	}
 	return publisher.result, err
 }
 
@@ -167,6 +171,7 @@ func (p *sharedPublisher) Apply(ctx context.Context, tx pgx.Tx, observation inge
 	if err != nil {
 		return err
 	}
+	log.Printf("[%s] capture=%s: Stage %d parcel features", JobID, observation.ID, p.manifest.Count)
 	count := 0
 	for i, receipt := range p.manifest.Receipts {
 		publish, err := parcelPublicationPage(p.manifest.Kind, receipt)
@@ -186,15 +191,22 @@ func (p *sharedPublisher) Apply(ctx context.Context, tx pgx.Tx, observation inge
 		}
 		count += len(records)
 		if err := stageParcelEvidenceRecords(ctx, writer, records, &p.result); err != nil {
-			return err
+			return fmt.Errorf("stage parcel receipt %d/%d: %w", i+1, len(p.manifest.Receipts), err)
+		}
+		if i%10 == 0 || count == p.manifest.Count {
+			log.Printf("[%s] capture=%s: Staged %d/%d parcel features", JobID, observation.ID, count, p.manifest.Count)
 		}
 	}
 	if count != p.manifest.Count {
 		return fmt.Errorf("snapshot feature count %d differs from manifest %d", count, p.manifest.Count)
 	}
+	log.Printf("[%s] capture=%s: Publish complete parcel groups", JobID, observation.ID)
 	p.result.Processed, err = writer.ApplyEvidence(ctx, p.quarantine, JobID, p.selected, p.manifest, observation.Replay)
-	if err != nil || observation.Published {
-		return err
+	if err != nil {
+		return fmt.Errorf("publish complete parcel groups: %w", err)
+	}
+	if observation.Published {
+		return nil
 	}
 	var recorded bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_observations WHERE artifact_id=$1)`, observation.ID).Scan(&recorded); err != nil {

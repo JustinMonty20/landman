@@ -114,6 +114,27 @@ Parcel, soil, zoning, and roads have independent source schedules. Qualification
 
 The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its downstream work share a ten-minute deadline. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
 
+## Save a log for diagnosis
+
+The CLI logs the job ID, attempt ID, result, record counts, and elapsed time. Qualification source logs show the layer name and number. `union.qualification.assess` reports the active zoning and road generations, the number of parcels to assess, and the name of each database step. Jobs that use the shared import engine report the capture ID and the verification, preparation, and publication steps.
+
+To save a log for a standalone assessment, run these commands in Bash from the repository root:
+
+```sh
+mkdir -p artifacts
+set -o pipefail
+(
+  umask 077
+  set -a
+  . ./.env
+  set +a
+  ./landman run union.qualification.assess 2>&1 |
+    tee "$(mktemp artifacts/ingestion-assess.XXXXXX.log)"
+)
+```
+
+When you report a failure, include the command, the attempt ID, and the log lines from the start of the failed job through its error. Include the record identifier shown in the error, such as the county parcel ID, `OBJECTID`, or FEMA feature ID. If the failure occurred before the job could identify a record, include the capture ID, generation ID, or page shown in the log. Review the error text first. Remove any private paths or source values. Do not share `.env` or saved source files.
+
 ## Inspect incomplete work
 
 ```sql

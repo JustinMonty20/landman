@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"strconv"
 	"time"
@@ -47,11 +48,12 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 			return jobs.Result{}, err
 		}
 	}
+	log.Print("[union.gis.soil] Soil Polygons (layer 197): Capture county geometry")
 	polygons, _, err := j.Source.CaptureSoilPolygons(ctx, func(request string, body []byte, crs int) error {
 		return recorder.Record(ctx, request, "", crs, bytes.NewReader(body))
 	})
 	if err != nil {
-		return jobs.Result{}, sealFailedCapture(ctx, j.Pool, j.Artifacts, recorder, err)
+		return jobs.Result{}, sealFailedCapture(ctx, j.Pool, j.Artifacts, recorder, fmt.Errorf("capture county geometry for Soil Polygons (layer 197): %w", err))
 	}
 	_, err = (ingest.Engine{Pool: j.Pool, Store: j.Artifacts}).Ingest(ctx, recorder, &publication{})
 	return jobs.Result{Processed: len(polygons)}, err

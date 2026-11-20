@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
@@ -133,7 +134,7 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	if _, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_evidence_groups ON COMMIT DROP AS SELECT p.source_parcel_id,min(p.ordinal) first_ordinal FROM parcel_import_parts p WHERE NOT EXISTS (SELECT 1 FROM parcel_import_rejected r WHERE r.source_parcel_id=p.source_parcel_id) GROUP BY p.source_parcel_id; CREATE UNIQUE INDEX ON parcel_evidence_groups(first_ordinal); ANALYZE parcel_evidence_groups`); err != nil {
 		return 0, err
 	}
-	processed := 0
+	processed, groupsChecked := 0, 0
 	var cursor int64
 	for {
 		rows, err := w.tx.Query(ctx, `SELECT source_parcel_id,first_ordinal FROM parcel_evidence_groups WHERE first_ordinal>$1 ORDER BY first_ordinal LIMIT 200`, cursor)
@@ -167,7 +168,11 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 			cursor = g.ordinal
 			n, err := w.publishEvidencePID(ctx, g.pid, observationID, manifest.CreatedAt, manifest.ID, correction, publicationKind, attemptID)
 			if err != nil {
-				return 0, err
+				return 0, fmt.Errorf("write parcel PID %q (group %d, first source part %d): %w", g.pid, groupsChecked+1, g.ordinal, err)
+			}
+			groupsChecked++
+			if groupsChecked%10000 == 0 {
+				log.Printf("[%s] capture=%s: Checked %d parcel groups in publication transaction", jobID, manifest.ID, groupsChecked)
 			}
 			processed += n
 			pids = append(pids, g.pid)

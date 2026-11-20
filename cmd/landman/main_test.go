@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +43,43 @@ func (f *fakeRequiredRunner) Run(_ context.Context, definition jobs.Definition) 
 	f.calls++
 	f.id = definition.ID
 	return f.outcome, jobs.Result{}, f.err
+}
+
+func TestStandaloneJobLogsSourceAndDerivedAttempts(t *testing.T) {
+	var output bytes.Buffer
+	logger := log.Default()
+	previous := logger.Writer()
+	logger.SetOutput(&output)
+	t.Cleanup(func() { logger.SetOutput(previous) })
+
+	runner := loggingRunner{&executingRunner{}}
+	source := jobs.Definition{ID: zoningJobID, Run: func(context.Context) (jobs.Result, error) {
+		if !strings.Contains(output.String(), "[union.gis.zoning] Started:") {
+			t.Fatal("source started before its start log")
+		}
+		return jobs.Result{Processed: 7}, nil
+	}}
+	executor := unionExecutor{runner: runner, afterSource: func(ctx context.Context, _ string) error {
+		return runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(context.Context) (jobs.Result, error) {
+			return jobs.Result{Processed: 3}, nil
+		}})
+	}}
+	if err := runManual(context.Background(), zoningJobID, runner, executor, []jobs.Definition{source}, nil); err != nil {
+		t.Fatal(err)
+	}
+	remaining := output.String()
+	for _, line := range []string{
+		"[union.gis.zoning] Started: kind=full_scan",
+		"[union.gis.zoning] Finished: outcome=success processed=7",
+		"[union.qualification.assess] Started: kind=full_scan",
+		"[union.qualification.assess] Finished: outcome=success processed=3",
+	} {
+		_, after, ok := strings.Cut(remaining, line)
+		if !ok {
+			t.Fatalf("missing or out-of-order log %q in %s", line, output.String())
+		}
+		remaining = after
+	}
 }
 
 func TestRunRequired(t *testing.T) {

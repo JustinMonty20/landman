@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"os"
 
@@ -38,10 +39,12 @@ func Import(ctx context.Context, pool *pgxpool.Pool, path, artifactDir string) (
 		return result, err
 	}
 	defer file.Close()
+	log.Printf("[%s] Read local vacancy snapshot", JobID)
 	s, _, err := ReadSnapshot(file)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("read vacancy snapshot: %w", err)
 	}
+	log.Printf("[%s] Retain snapshot: structures=%d assessments=%d", JobID, len(s.Structures), len(s.Assessments))
 	for _, raw := range []string{s.Manifest.StructureURL, s.Manifest.AssessmentURL} {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {

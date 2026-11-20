@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -24,14 +25,14 @@ func ReprocessLimit(text string) (int, error) {
 }
 
 func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWriter, records []connector.RawRecord, result *jobs.Result) error {
-	for _, record := range records {
+	for i, record := range records {
 		id, err := union.ParcelRecordIdentity(record)
 		if err != nil {
-			return err
+			return fmt.Errorf("read parcel identity at receipt row %d: %w", i+1, err)
 		}
 		rawKey := strconv.FormatInt(id.ObjectID, 10)
 		if err := writer.ObserveIdentity(ctx, rawKey, id.PID); err != nil {
-			return err
+			return fmt.Errorf("record identity for OBJECTID %d: %w", id.ObjectID, err)
 		}
 		if len(id.PID) > maxIndexedPIDBytes {
 			result.Quarantined++
@@ -41,17 +42,17 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 		if err != nil {
 			var invalid *union.InvalidParcelRecord
 			if !errors.As(err, &invalid) {
-				return err
+				return fmt.Errorf("normalize parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 			}
 			if err := writer.RejectPID(ctx, invalid.Identity.PID); err != nil {
-				return err
+				return fmt.Errorf("reject parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 			}
 			result.Quarantined++
 			continue
 		}
 		attrs, _ := record.RawData["attributes"].(map[string]interface{})
 		if err := parcelevidence.QuantizeSourceNumbers(attrs, &parcel); err != nil {
-			return err
+			return fmt.Errorf("quantize parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 		}
 		feature := make(map[string]interface{}, len(record.RawData))
 		for key, value := range record.RawData {
@@ -61,10 +62,10 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 		}
 		payload, err := json.Marshal(feature)
 		if err != nil {
-			return err
+			return fmt.Errorf("encode parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 		}
 		if err = writer.StageEvidencePart(ctx, parcel, vacant, rawKey, payload); err != nil {
-			return err
+			return fmt.Errorf("stage parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 		}
 	}
 	return nil
@@ -127,6 +128,7 @@ type Job struct {
 }
 
 func (j Job) Import(ctx context.Context) (jobs.Result, error) {
+	log.Printf("[%s] Parcel import started", JobID)
 	store, err := j.sharedStore()
 	if err != nil {
 		return jobs.Result{}, err
@@ -141,6 +143,7 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 	if err != nil {
 		return jobs.Result{}, errors.Join(fmt.Errorf("capture parcels: %w", err), j.sealPartial(ctx, store, recorder, "full_scan"))
 	}
+	log.Printf("[%s] Parcel pages captured; start verification and publication", JobID)
 	return j.publishShared(ctx, store, recorder, nil, total)
 }
 
@@ -156,6 +159,7 @@ func (j Job) Reprocess(ctx context.Context, limit int) (jobs.Result, error) {
 	if err != nil {
 		return jobs.Result{}, err
 	}
+	log.Printf("[%s] Repair: %d pending records selected (limit=%d)", JobID, len(pending), limit)
 	if len(pending) == 0 {
 		return jobs.Result{}, nil
 	}
@@ -179,15 +183,16 @@ func (j Job) Reprocess(ctx context.Context, limit int) (jobs.Result, error) {
 		groups[entry.PID] = append(groups[entry.PID], entry)
 	}
 	count := 0
-	for _, pid := range pids {
+	for i, pid := range pids {
 		entries := groups[pid]
 		oid, err := strconv.ParseInt(entries[0].RawRecordKey, 10, 64)
 		if err != nil {
 			return jobs.Result{}, fmt.Errorf("reprocess: invalid stored OBJECTID")
 		}
+		log.Printf("[%s] Repair: capture group %d/%d (OBJECTID %d)", JobID, i+1, len(pids), oid)
 		n, err := captureReprocessPID(fetchCtx, j, recorder, oid, pid, budget, entries)
 		if err != nil {
-			return jobs.Result{}, errors.Join(err, j.sealPartial(ctx, store, recorder, "reprocess"))
+			return jobs.Result{}, errors.Join(fmt.Errorf("capture repair group %d/%d (OBJECTID %d): %w", i+1, len(pids), oid, err), j.sealPartial(ctx, store, recorder, "reprocess"))
 		}
 		count += n
 	}

@@ -214,6 +214,8 @@ func (s *GISSource) CaptureParcelPages(ctx context.Context, save func(string, []
 		return 0, fmt.Errorf("invalid count response")
 	}
 	total := int(count.Int())
+	pages := (total + s.batchSize - 1) / s.batchSize
+	log.Printf("[%s] Parcel capture: %d records across %d pages", s.Name(), total, pages)
 	params := ArcGISParams{Where: "1=1", ReturnGeometry: true, ResultRecordCount: s.batchSize, Format: "json", OutFields: "*", OrderByFields: "OBJECTID"}
 	fetchedAt := time.Now().UTC()
 	for offset := 0; offset < total; offset += s.batchSize {
@@ -246,7 +248,10 @@ func (s *GISSource) CaptureParcelPages(ctx context.Context, save func(string, []
 		if err := onBatch(records); err != nil {
 			return 0, err
 		}
+		page := offset/s.batchSize + 1
+		log.Printf("[%s] Parcel capture page %d/%d: %d/%d records", s.Name(), page, pages, offset+len(records), total)
 	}
+	log.Printf("[%s] Parcel capture complete: %d records", s.Name(), total)
 	return total, nil
 }
 

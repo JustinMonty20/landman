@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/jobs"
@@ -160,9 +161,10 @@ func (e Engine) Ingest(ctx context.Context, recorder *Recorder, publisher Publis
 	if recorder == nil || recorder.store != e.Store || publisher == nil {
 		return "", errors.New("ingestion requires selected store, recorder and publisher")
 	}
+	log.Printf("[ingest] source=%s: Verify and register capture (%d responses)", recorder.manifest.Source, len(recorder.artifacts))
 	id, err := e.Seal(ctx, recorder)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("source=%s: verify and register capture: %w", recorder.manifest.Source, err)
 	}
 	return id, e.publish(ctx, id, false, publisher)
 }
@@ -218,13 +220,19 @@ RETURNING capture_id::text`, id, attempt, jobID).Scan(&registered)
 	}
 	return e.publish(ctx, id, true, publisher)
 }
-func (e Engine) publish(ctx context.Context, id string, replay bool, publisher Publisher) error {
+func (e Engine) publish(ctx context.Context, id string, replay bool, publisher Publisher) (err error) {
+	stage := "load capture manifest"
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("capture=%s: %s: %w", id, stage, err)
+		}
+	}()
 	if e.Pool == nil || e.Store == nil || publisher == nil {
 		return errors.New("ingestion requires store, database and publisher")
 	}
 	var data, savedHash []byte
 	var mode string
-	err := e.Pool.QueryRow(ctx, `SELECT manifest,manifest_sha256,storage_mode FROM ingest_captures WHERE id=$1::uuid`, id).Scan(&data, &savedHash, &mode)
+	err = e.Pool.QueryRow(ctx, `SELECT manifest,manifest_sha256,storage_mode FROM ingest_captures WHERE id=$1::uuid`, id).Scan(&data, &savedHash, &mode)
 	if err != nil {
 		return err
 	}
@@ -236,13 +244,19 @@ func (e Engine) publish(ctx context.Context, id string, replay bool, publisher P
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return err
 	}
+	stage = "verify saved responses"
+	log.Printf("[ingest] source=%s capture=%s replay=%t: Verify saved responses", manifest.Source, id, replay)
 	verified, err := e.verify(ctx, manifest)
 	if err != nil {
 		return err
 	}
+	stage = "prepare source data"
+	log.Printf("[ingest] source=%s capture=%s: Prepare source data", manifest.Source, id)
 	if err := publisher.Prepare(ctx, verified); err != nil {
 		return err
 	}
+	stage = "run publication transaction"
+	log.Printf("[ingest] source=%s capture=%s: Run publication transaction", manifest.Source, id)
 	err = e.transaction(ctx, manifest.Source, func(ctx context.Context, tx pgx.Tx) error {
 		var published bool
 		if err := tx.QueryRow(ctx, `SELECT published_at IS NOT NULL FROM ingest_captures WHERE id=$1::uuid FOR UPDATE`, id).Scan(&published); err != nil {
@@ -268,7 +282,11 @@ func (e Engine) publish(ctx context.Context, id string, replay bool, publisher P
 		return nil
 	})
 	if errors.Is(err, ErrNoPublication) {
+		log.Printf("[ingest] source=%s capture=%s: No publication needed", manifest.Source, id)
 		return nil
+	}
+	if err == nil {
+		log.Printf("[ingest] source=%s capture=%s: Publication transaction committed", manifest.Source, id)
 	}
 	return err
 }
@@ -303,16 +321,19 @@ func (e Engine) verify(ctx context.Context, manifest Manifest) (VerifiedCapture,
 func (e Engine) transaction(ctx context.Context, source string, apply func(context.Context, pgx.Tx) error) error {
 	tx, err := e.Pool.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "ingest:"+source); err != nil {
-		return err
+		return fmt.Errorf("acquire publication lock: %w", err)
 	}
 	if err = apply(ctx, tx); err != nil {
-		return err
+		return fmt.Errorf("apply source data: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit publication: %w", err)
+	}
+	return nil
 }
 
 // ChangeCause distinguishes a new observation from a normalizer correction.

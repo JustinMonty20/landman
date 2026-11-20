@@ -257,6 +257,12 @@ func TestQualificationPagingAndErrors(t *testing.T) {
 			}
 			return 200, b
 		}, "invalid polygon rings"},
+		{"malformed non-empty rings from layer 190", func(r *http.Request, n int, b string) (int, string) {
+			if n != 3 {
+				return 200, b
+			}
+			return 200, `{"features":[{"attributes":{"OBJECTID":231245,"ZONE":"R-40","PETITION":" ","URL":" "},"geometry":{"rings":[[]]}},{"attributes":{"OBJECTID":231256,"ZONE":"CITY","PETITION":" ","URL":" "},"geometry":{"rings":[]}}],"spatialReference":{"wkid":102100,"latestWkid":3857}}`
+		}, "Union County Zoning (layer 190): offset 0: OBJECTID 231245: invalid polygon rings"},
 		{"transfer limit", func(r *http.Request, n int, b string) (int, string) {
 			if n == 3 {
 				return 200, strings.TrimSuffix(b, "}") + `,"exceededTransferLimit":true}`
