@@ -1,6 +1,6 @@
 # Import parcels and soil
 
-The isolated GIS journey runs soil first and parcels second. The soil command screens stored soil. The parcel command screens stored soil only when that screen is due. Both reconcile stored qualification data. Soil must run first because the seed has polygons but no active soil set. The combined bare command belongs to the tax skill.
+The isolated GIS journey runs soil first and parcels second. A clean soil command screens stored soil and reconciles stored qualification data. A clean parcel command reconciles qualification, and it screens only when stored screening is due. Soil must run first because the seed has polygons but no active soil set. The combined bare command belongs to the tax skill.
 
 ## Sub-features
 
@@ -31,11 +31,11 @@ Preconditions:
 - Keep source-specific logs, combined `import.*` logs, `page-timings.json`, and `drive-outcome.json` under `artifacts/verify/$RUN_ID/`. Require `import.exit.txt` to match the runner exit.
 - Run `env -u DATABASE_URL ./landman import`. Require exit 1 and usage text containing `run <job ID>`.
 - Run `env -u DATABASE_URL ./landman reprocess union.gis.parcels --limit 0`. Require exit 1 and `reprocess limit must be between 1 and 100`.
-- After classification, query `SELECT count(*) FROM quarantined_records WHERE job_id='union.gis.parcels' AND reprocessed_at IS NULL`. If zero, run `DATABASE_URL="$HOST_DATABASE_URL" ./landman reprocess union.gis.parcels --limit 1`. Require no parcel fetch lines and successful derived attempts. If pending rows exist, report the empty-repair check as not run; a repair would fetch county data again.
+- After classification, query `SELECT count(*) FROM quarantined_records WHERE job_id='union.gis.parcels' AND reprocessed_at IS NULL`. If zero, run `DATABASE_URL="$HOST_DATABASE_URL" ./landman reprocess union.gis.parcels --limit 1`. Stdout is empty. Stderr contains `Repair: 0 pending records selected` and does not contain `Parcel capture`. Derived screening and qualification print their own `Finished` lines, and the command exits 0 when those attempts succeed. If pending rows exist, report the empty-repair check as not run; a repair would fetch county data again.
 
 ## Gotchas
 
-- Soil runs before the parcel command. Stdout stays empty. The parcel command writes `Parcel capture page` lines on stderr and does not write `Batch` or `Fetch complete` lines. Screening and qualification write their own stderr lines. Quiet stderr is not proof of completion.
+- Soil runs before parcel progress. Parcel progress is `Parcel capture`, `Parcel capture page`, and `Parcel capture complete`. Do not require `Fetch complete:` or the batch-size lines. A source `Finished: outcome=success` line is not the end of the command. Screening and qualification print their own lines afterward. Quiet output is not proof of completion.
 - `./landman run union.gis.soil` and `./landman run union.gis.parcels` each have one ten-minute deadline, and that deadline includes derived screening. Bare `./landman` gives each source and each derived step its own ten minutes, and it also requires the three FEMA paths. This journey does not run the bare command.
 - Quarantined parcel records can leave prior parcel values unchanged. `success_with_quarantine` is non-clean and stops that source's derived work.
 - A parcel command without an active soil set can publish parcels and then fail with pending screening. The seed alone does not supply an active soil set.

@@ -137,3 +137,11 @@ After the successful reprocess screening, county parcels and assessments on the 
 ## Out-of-scope decision
 
 The earlier notes that left the journey silent, and that skipped the four-heading rewrite, describe the 03:51Z drive. The 04:35Z drive showed capture and screening lines on stderr. `features/import-journey.md` now uses the four headings and names those lines.
+
+## Out-of-scope decision
+
+Did not edit `docs/union-qualification-verification.md`. It still says zoning method `stored-overlay-measured/5`. The code constant in `internal/qualification/store.go` is `stored-overlay-measured/4` with the EPSG:3857 grid suffix. The map names the code string.
+
+## Out-of-scope decision
+
+`cmd/owner-label-backfill` prints a stored-parcel classification count and does not fetch the county. The router selects the CLI skill for it. This pass does not add a feature file for it.

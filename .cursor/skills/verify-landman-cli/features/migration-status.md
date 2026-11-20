@@ -18,10 +18,10 @@ Preconditions:
 
 - Database doctor passed for `landman-verify-postgis`.
 - `make db-create` has been run on that container, so the `landman` database exists.
-- This is a read of goose state. It does not apply or roll back migrations.
+- After `make migrate-up`, this is a read of goose state. It does not roll back migrations. Before `migrate-up`, both targets create `goose_db_version` at version 0 when that table is missing. They still do not run the SQL files.
 
-- Run `make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0`. Exit code 0. Stderr contains `goose: version ` and the integer of the highest filename prefix in `db/migrations/` after a complete `make migrate-up`. A log timestamp precedes that line. Stdout is the Make recipe. Read the highest numbered migration from the current checkout. Require that integer in the output; do not use a historical fixed version.
-- Run `make migrate-status` with the same overrides. Exit code 0. Stderr names every `db/migrations/*.sql` file. After a complete `make migrate-up`, stderr does not contain `Pending`. Stdout is the Make recipe.
+- Run `make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0`. Exit code 0. Stderr is one line. A log timestamp prefixes `goose: version ` and the integer of the highest filename prefix in `db/migrations/` after a complete `make migrate-up`. Stdout is the Make recipe. Read the highest numbered migration from the current checkout. Require that integer immediately after `goose: version `. The same digits can appear in the clock.
+- Run `make migrate-status` with the same overrides. Exit code 0. Stderr names the basename of every file in `db/migrations/`, such as `000041_vacancy_latest_observations.sql`. It does not print the `db/migrations/` path. After a complete `make migrate-up`, stderr does not contain `Pending`. Stdout is the Make recipe.
 - Save both command transcripts under `artifacts/verify/$RUN_ID/`. The version integer and the status listing must agree with each other and with the files on disk. Do not invent a pass from `SELECT 1` alone.
 
 ## Gotchas
