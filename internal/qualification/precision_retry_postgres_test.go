@@ -118,7 +118,7 @@ func TestPrecisionRetryPartition(t *testing.T) {
 	}
 }
 
-func TestPrecisionRetryExhaustionRollsBackGroup(t *testing.T) {
+func TestNoGridRetryPreservesSliverAndRollsBackOnFailure(t *testing.T) {
 	pool := correctedPool(t)
 	ctx := context.Background()
 	store := Store{Pool: pool}
@@ -158,16 +158,29 @@ func TestPrecisionRetryExhaustionRollsBackGroup(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE qualification_assessments SET method_version=$1 WHERE parcel_id=ANY($2::uuid[]) AND source_group='zoning'`, stale, parcels); err != nil {
 		t.Fatal(err)
 	}
-	thin := rect(10, 10.00000002)
+	// The full source polygon survives fine precision, but its clip to the
+	// first parcel collapses to a shared edge. The second parcel is unaffected.
+	thin := rect(20-0.00000002, 30)
 	if _, err := pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2,jurisdiction,district_code) SELECT $1,190,1,3857,g,g,'original',0,'Union','A' FROM (SELECT ST_Multi(ST_GeomFromText($2,3857)) g) s`, gen, thin); err != nil {
 		t.Fatal(err)
 	}
 	var rawArea, fineArea float64
-	if err := pool.QueryRow(ctx, `SELECT ST_Area(ST_Intersection(p.shape,z.shape)),ST_Area(ST_ReducePrecision(z.shape,0.0000001)) FROM parcels p JOIN qualification_zones z ON z.generation_id=$2 WHERE p.id=$1`, parcels[0], gen).Scan(&rawArea, &fineArea); err != nil || !(rawArea > 0 && fineArea == 0) {
+	if err := pool.QueryRow(ctx, `SELECT ST_Area(ST_Intersection(p.shape,z.shape)),ST_Area(ST_Intersection(ST_ReducePrecision(p.shape,0.0000001),ST_ReducePrecision(z.shape,0.0000001),0.0000001)) FROM parcels p JOIN qualification_zones z ON z.generation_id=$2 WHERE p.id=$1`, parcels[0], gen).Scan(&rawArea, &fineArea); err != nil || !(rawArea > 0 && fineArea == 0) {
 		t.Fatalf("exhaustion fixture raw=%g fine=%g err=%v", rawArea, fineArea, err)
 	}
-	if n, err := store.reconcileOne(ctx, union.QualificationZoning, ZoningMethod); n != 0 || err == nil || !strings.Contains(err.Error(), "collapsed a required zone at fine grid") {
-		t.Fatalf("retry must roll back count=%d err=%v", n, err)
+	// Simulate the loss of a hit at the last write. The positive-overlap
+	// validation must fail closed and roll back both parcels' updates.
+	if _, err := pool.Exec(ctx, `CREATE FUNCTION test_drop_precision_hit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;
+CREATE TRIGGER test_drop_precision_hit BEFORE INSERT ON qualification_zone_hits FOR EACH ROW EXECUTE FUNCTION test_drop_precision_hit()`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DROP TRIGGER IF EXISTS test_drop_precision_hit ON qualification_zone_hits; DROP FUNCTION IF EXISTS test_drop_precision_hit()`)
+	})
+	if n, err := store.reconcileOne(ctx, union.QualificationZoning, ZoningMethod); n != 0 || err == nil ||
+		!strings.Contains(err.Error(), "assessment pending precision repair: projected zone hit") ||
+		!strings.Contains(err.Error(), parcels[0]+" layer_id=190 source_id=1 original_overlap_m2=") {
+		t.Fatalf("retry must roll back with hit evidence: count=%d err=%v", n, err)
 	}
 	for _, parcel := range parcels {
 		var method string
@@ -176,7 +189,7 @@ func TestPrecisionRetryExhaustionRollsBackGroup(t *testing.T) {
 			t.Fatalf("group was partially written: parcel=%s method=%s hits=%d/%d err=%v", parcel, method, zoneHits, jurisdictionHits, err)
 		}
 	}
-	if _, err := pool.Exec(ctx, `UPDATE qualification_zones SET shape=ST_Multi(ST_GeomFromText($1,3857)),raw_shape=ST_Multi(ST_GeomFromText($1,3857)) WHERE generation_id=$2`, rect(10, 10.0000002), gen); err != nil {
+	if _, err := pool.Exec(ctx, `DROP TRIGGER test_drop_precision_hit ON qualification_zone_hits`); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := store.reconcileOne(ctx, union.QualificationZoning, ZoningMethod); n != 2 || err != nil {

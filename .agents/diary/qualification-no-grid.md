@@ -1,0 +1,1 @@
+- **Out of scope:** Keep the local migrations for source records without polygons out of this fix. The overlap failure occurs when both stored polygons exist.

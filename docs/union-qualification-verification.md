@@ -40,6 +40,10 @@ Refresh failure observation is a standalone short monotonic UPSERT of the origin
 
 Synthetic disposable PostGIS fixtures exercise coarse source collapse, clip collapse, parcel collapse, jurisdiction-only and mixed-group retries, stored positive acres and shares from a synthetic sub-micrometer-width raw hit, unchanged ordinary and true boundary-contact evidence, a clean replay, and full group rollback when the fine grid still collapses a positive source. The retry remains a bounded two-grid attempt, not a guarantee for arbitrary smaller geometries. County-scale memory and time, precision of arbitrary projected slivers, and full live import remain unverified.
 
+## No-grid assessment retry
+
+If the fine grid removes a positive overlap, the assessment uses the stored parcel, zoning, and jurisdiction shapes for that parcel. It does not round coordinates to a grid or use an area cutoff. PostGIS still uses floating-point arithmetic. The job logs the generation, parcel number and ID, source layer and ID, and original overlap area. If a required hit still has no positive area or share, the assessment attempt fails and the transaction keeps the previous assessments. The source generation and the assessment attempt have separate status.
+
 ## Unverified release conditions
 
 A full live import, its memory and time budget, the future stability of county object IDs, county zoning authority and update dates, and road coverage beyond the county boundary remain unverified. The ArcGIS count and ordered pages detect some drift but cannot prove a transactional county snapshot. A terminated lock session cancels context-aware source work; a transport or storage call that ignores context may continue until it returns. FEMA ingestion and the buyer-facing API and UI are separate V1 work.

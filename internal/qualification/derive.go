@@ -130,42 +130,12 @@ JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
 		if err := runAssessmentSteps(ctx, tx, gen, retry); err != nil {
 			return err
 		}
+		if err := retryWithoutGrid(ctx, tx, gen); err != nil {
+			return err
+		}
 	}
 	statements := []assessmentStep{
-		{"Check fine parcel precision", `DO $$ DECLARE target_id uuid; BEGIN
-SELECT p.id INTO target_id FROM qualification_retry_targets r JOIN qualification_targets p ON p.id=r.parcel_id
-WHERE p.shape IS NOT NULL AND ST_Area(p.shape)>0 AND ST_Area(p.analysis_geom)=0 LIMIT 1;
-IF FOUND THEN RAISE EXCEPTION 'analysis precision collapsed a required parcel at fine grid: parcel_id=%',target_id; END IF; END $$`, nil},
-		{"Check fine source precision", `DO $$ DECLARE hit record; BEGIN
-SELECT parcel_id,layer_id,source_id,original_area INTO hit FROM qualification_zone_sources
-WHERE original_area>0 AND ST_Area(geom)=0 LIMIT 1;
-IF FOUND THEN RAISE EXCEPTION 'analysis precision collapsed a required zone at fine grid: parcel_id=% layer_id=% source_id=% original_overlap_m2=%',
-hit.parcel_id,hit.layer_id,hit.source_id,hit.original_area; END IF;
-SELECT parcel_id,layer_id,source_id,original_area INTO hit FROM qualification_jurisdiction_sources
-WHERE original_area>0 AND ST_Area(geom)=0 LIMIT 1;
-IF FOUND THEN RAISE EXCEPTION 'analysis precision collapsed a required jurisdiction at fine grid: parcel_id=% layer_id=% source_id=% original_overlap_m2=%',
-hit.parcel_id,hit.layer_id,hit.source_id,hit.original_area; END IF;
-END $$`, nil},
-		{"Check clipped zone overlaps", `DO $$
-DECLARE
- hit record;
- parcel_number text;
-BEGIN
- SELECT s.parcel_id,s.layer_id,s.source_id,s.original_area INTO hit
- FROM qualification_zone_sources s
- WHERE s.original_area>0 AND NOT EXISTS (
- SELECT 1 FROM qualification_zone_shapes h
- WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND ST_Area(h.geom)>0
- ) LIMIT 1;
- IF FOUND THEN
-  SELECT source_parcel_id INTO parcel_number FROM parcels WHERE id=hit.parcel_id;
-  RAISE EXCEPTION 'analysis precision collapsed a required zone hit: parcel_number=% parcel_id=% layer_id=% source_id=% original_overlap_m2=%',
-   quote_nullable(parcel_number),hit.parcel_id,hit.layer_id,hit.source_id,hit.original_area;
- END IF;
-END $$`, nil},
-		{"Check clipped jurisdiction overlaps", `DO $$ DECLARE hit record; BEGIN
-SELECT s.parcel_id,s.layer_id,s.source_id INTO hit FROM qualification_jurisdiction_sources s WHERE s.original_area>0 AND NOT EXISTS (SELECT 1 FROM qualification_jurisdiction_shapes h WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND ST_Area(h.geom)>0) LIMIT 1;
-IF FOUND THEN RAISE EXCEPTION 'analysis precision collapsed a required jurisdiction hit: parcel_id=% layer_id=% source_id=%',hit.parcel_id,hit.layer_id,hit.source_id; END IF; END $$`, nil},
+		{"Check clipped positive overlaps", precisionCheckSQL("qualification_zone_shapes", "qualification_jurisdiction_shapes", "h.geom IS NULL OR ST_Area(h.geom)<=0", "clipped"), nil},
 		{"Remove zero-area zone overlaps", `DELETE FROM qualification_zone_shapes WHERE ST_Area(geom)=0`, nil},
 		{"Index zone overlaps", `CREATE INDEX ON qualification_zone_shapes(parcel_id)`, nil},
 		{"Analyze zone overlaps", `ANALYZE qualification_zone_shapes`, nil},
@@ -229,16 +199,94 @@ CROSS JOIN LATERAL (SELECT CASE WHEN ST_Area(h.geom)*2<=ST_Area(p.analysis_geom)
 THEN ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))
 ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,p.precision_grid),0),10),2264)) END area_ft2) m
 WHERE ST_Area(p.geom)>0`, nil},
-		{"Check projected positive matches", `DO $$ BEGIN
-IF EXISTS (SELECT 1 FROM qualification_zone_sources s WHERE s.original_area>0 AND NOT EXISTS (
-SELECT 1 FROM qualification_zone_hits h WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND h.acres>0 AND h.share>0)) THEN
-RAISE EXCEPTION 'projection collapsed a required positive zone hit'; END IF;
-IF EXISTS (SELECT 1 FROM qualification_jurisdiction_sources s WHERE s.original_area>0 AND NOT EXISTS (
-SELECT 1 FROM qualification_jurisdiction_hits h WHERE h.parcel_id=s.parcel_id AND h.layer_id=s.layer_id AND h.source_id=s.source_id AND h.acres>0 AND h.share>0)) THEN
-RAISE EXCEPTION 'projection collapsed a required positive jurisdiction hit'; END IF;
-END $$`, nil},
+		{"Check projected positive overlaps", precisionCheckSQL("qualification_zone_hits", "qualification_jurisdiction_hits", "h.acres IS NULL OR h.acres<=0 OR h.share<=0", "projected"), nil},
 	}
 	return runAssessmentSteps(ctx, tx, gen, statements)
+}
+
+// PostGIS uses floating-point overlay when gridSize is -1. This preserves
+// the stored coordinates without snap rounding; it is not exact arithmetic.
+func retryWithoutGrid(ctx context.Context, tx pgx.Tx, gen string) error {
+	steps := []assessmentStep{
+		{"Find overlaps still collapsed at fine precision", `CREATE TEMP TABLE qualification_no_grid_evidence ON COMMIT DROP AS
+SELECT p.id parcel_id,'parcel'::text kind,NULL::integer layer_id,NULL::bigint source_id,ST_Area(p.shape) original_overlap_m2
+FROM qualification_retry_targets r JOIN qualification_targets p ON p.id=r.parcel_id
+WHERE p.shape IS NOT NULL AND ST_Area(p.shape)>0 AND (p.analysis_geom IS NULL OR ST_Area(p.analysis_geom)=0)
+UNION ALL
+SELECT s.parcel_id,'zone',s.layer_id,s.source_id,s.original_area
+FROM qualification_retry_targets r JOIN qualification_zone_sources s USING (parcel_id)
+LEFT JOIN qualification_zone_shapes h USING (parcel_id,layer_id,source_id)
+WHERE s.original_area>0 AND (h.geom IS NULL OR ST_Area(h.geom)=0)
+UNION ALL
+SELECT s.parcel_id,'jurisdiction',s.layer_id,s.source_id,s.original_area
+FROM qualification_retry_targets r JOIN qualification_jurisdiction_sources s USING (parcel_id)
+LEFT JOIN qualification_jurisdiction_shapes h USING (parcel_id,layer_id,source_id)
+WHERE s.original_area>0 AND (h.geom IS NULL OR ST_Area(h.geom)=0)`, nil},
+	}
+	if err := runAssessmentSteps(ctx, tx, gen, steps); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT p.source_parcel_id,e.parcel_id::text,e.kind,COALESCE(e.layer_id::text,'-'),COALESCE(e.source_id::text,'-'),e.original_overlap_m2
+FROM qualification_no_grid_evidence e JOIN parcels p ON p.id=e.parcel_id`)
+	if err != nil {
+		return fmt.Errorf("read no-grid retry evidence: %w", err)
+	}
+	var count int
+	for rows.Next() {
+		var number, id, kind, layer, source string
+		var area float64
+		if err := rows.Scan(&number, &id, &kind, &layer, &source, &area); err != nil {
+			rows.Close()
+			return fmt.Errorf("decode no-grid retry evidence: %w", err)
+		}
+		count++
+		log.Printf("[union.qualification.assess] generation=%s retry=no-grid kind=%s parcel_number=%q parcel_id=%s layer_id=%s source_id=%s original_overlap_m2=%g", gen, kind, number, id, layer, source, area)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read no-grid retry evidence: %w", err)
+	}
+	if count == 0 {
+		return nil
+	}
+
+	return runAssessmentSteps(ctx, tx, gen, []assessmentStep{
+		{"Restore stored parcel geometry", `UPDATE qualification_targets p
+SET analysis_geom=p.shape,precision_grid=-1
+FROM (SELECT DISTINCT parcel_id FROM qualification_no_grid_evidence) r WHERE p.id=r.parcel_id`, nil},
+		{"Restore stored zone geometry", `UPDATE qualification_zone_sources s SET geom=z.shape
+FROM qualification_targets p,qualification_zones z
+WHERE p.id=s.parcel_id AND p.precision_grid=-1
+AND z.generation_id=$1 AND z.layer_id=s.layer_id AND z.source_id=s.source_id`, []any{gen}},
+		{"Restore stored jurisdiction geometry", `UPDATE qualification_jurisdiction_sources s SET geom=j.shape
+FROM qualification_targets p,qualification_jurisdictions j
+WHERE p.id=s.parcel_id AND p.precision_grid=-1
+AND j.generation_id=$1 AND j.layer_id=s.layer_id AND j.source_id=s.source_id`, []any{gen}},
+		{"Clip stored zones without a grid", `UPDATE qualification_zone_shapes h
+SET geom=ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,p.precision_grid),3)
+FROM qualification_zone_sources s JOIN qualification_targets p ON p.id=s.parcel_id
+WHERE p.precision_grid=-1 AND (h.parcel_id,h.layer_id,h.source_id)=(s.parcel_id,s.layer_id,s.source_id)`, nil},
+		{"Clip stored jurisdictions without a grid", `UPDATE qualification_jurisdiction_shapes h
+SET geom=ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,p.precision_grid),3)
+FROM qualification_jurisdiction_sources s JOIN qualification_targets p ON p.id=s.parcel_id
+WHERE p.precision_grid=-1 AND (h.parcel_id,h.layer_id,h.source_id)=(s.parcel_id,s.layer_id,s.source_id)`, nil},
+	})
+}
+
+// Validate one required hit per failure. All interpolated SQL is internal.
+func precisionCheckSQL(zones, jurisdictions, missing, stage string) string {
+	return fmt.Sprintf(`DO $$ DECLARE hit record; BEGIN
+SELECT failures.*,p.source_parcel_id INTO hit FROM (
+SELECT 'zone' kind,s.parcel_id,s.layer_id,s.source_id,s.original_area
+FROM qualification_zone_sources s LEFT JOIN %s h USING (parcel_id,layer_id,source_id)
+WHERE s.original_area>0 AND (%s)
+UNION ALL
+SELECT 'jurisdiction',s.parcel_id,s.layer_id,s.source_id,s.original_area
+FROM qualification_jurisdiction_sources s LEFT JOIN %s h USING (parcel_id,layer_id,source_id)
+WHERE s.original_area>0 AND (%s)
+) failures JOIN parcels p ON p.id=failures.parcel_id LIMIT 1;
+IF FOUND THEN RAISE EXCEPTION 'assessment pending precision repair: %s %% hit has no positive area: parcel_number=%% parcel_id=%% layer_id=%% source_id=%% original_overlap_m2=%%',
+hit.kind,quote_nullable(hit.source_parcel_id),hit.parcel_id,hit.layer_id,hit.source_id,hit.original_area; END IF;
+END $$`, zones, missing, jurisdictions, missing, stage)
 }
 
 func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string) error {
