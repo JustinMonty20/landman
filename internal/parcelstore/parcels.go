@@ -76,6 +76,17 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 	if len(shape) == 0 {
 		return fmt.Errorf("parcelstore: %s has no rings", parcel.Identity.SourceParcelID)
 	}
+	if err := w.saveParcelAndSales(ctx, parcel, likelyVacant); err != nil {
+		return err
+	}
+	if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)
+		VALUES ($1, ST_GeomFromEWKB($2), $3)`, parcel.Identity.SourceParcelID, shape, likelyVacant); err != nil {
+		return err
+	}
+	return w.analyzeAfterSavedPart(ctx)
+}
+
+func (w *ShapeWriter) saveParcelAndSales(ctx context.Context, parcel models.GISParcel, likelyVacant bool) error {
 	parcelID, err := SaveParcel(ctx, w.tx, parcel, likelyVacant)
 	if err != nil {
 		return err
@@ -92,12 +103,14 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 		  AND NOT (sequence = ANY($2::smallint[]))`, parcelID, seqs); err != nil {
 		return fmt.Errorf("parcelstore: delete omitted sales: %w", err)
 	}
-	if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)
-		VALUES ($1, ST_GeomFromEWKB($2), $3)`, parcel.Identity.SourceParcelID, shape, likelyVacant); err != nil {
-		return err
-	}
+	return nil
+}
+
+const parcelAnalyzeInterval = 2000
+
+func (w *ShapeWriter) analyzeAfterSavedPart(ctx context.Context) error {
 	w.partsSaved++
-	if w.partsSaved%2000 != 0 {
+	if w.partsSaved%parcelAnalyzeInterval != 0 {
 		return nil
 	}
 	if _, err := w.tx.Exec(ctx, `ANALYZE parcels, parcel_sales`); err != nil {
