@@ -86,7 +86,7 @@ func saveBillBatch(ctx context.Context, tx pgx.Tx, rows []union.BillRow, meta ta
 			continue
 		}
 		if err != nil {
-			return result, fmt.Errorf("lookup billed parcel: %w", err)
+			return result, fmt.Errorf("lookup billed parcel PIN %q for tax year %d: %w", row.ParcelKey, row.Year, err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO billing_seen(parcel_id,tax_year) VALUES ($1,$2) ON CONFLICT DO NOTHING`, parcelID, row.Year); err != nil {
 			return result, err
@@ -116,7 +116,7 @@ WHERE (tax_bills.total_taxes, tax_bills.property_address, tax_bills.taxpayer_nam
 			billingNullable(row.MailingCity), billingNullable(row.MailingState), billingNullable(row.MailingPostalCode),
 			meta.URL, digest[:], meta.FetchedAt)
 		if err != nil {
-			return result, fmt.Errorf("save billed tax: %w", err)
+			return result, fmt.Errorf("save billed tax for PIN %q (parcel_id=%s, tax year %d): %w", row.ParcelKey, parcelID, row.Year, err)
 		}
 		result.Saved++
 	}

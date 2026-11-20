@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"slices"
@@ -101,6 +102,7 @@ func (j ScreeningJob) Import(ctx context.Context) (result jobs.Result, runErr er
 	if err := recorder.Record(ctx, setRequestPrefix+setID, "", 0, bytes.NewReader(keyBytes)); err != nil {
 		return jobs.Result{}, err
 	}
+	log.Printf("[union.soil.screening] soil_set=%s: Fetch USDA names for %d map units", setID, len(nameKeys))
 	var retentionError error
 	err = soil.CaptureNames(ctx, j.Client, soil.USDAEndpoint, nameKeys, func(query string, body []byte) error {
 		retentionError = recorder.Record(ctx, usdaRequest(query), namesRevision, 0, bytes.NewReader(body))
@@ -116,11 +118,12 @@ func (j ScreeningJob) Import(ctx context.Context) (result jobs.Result, runErr er
 	if err != nil && len(recorder.Manifest().Receipts) > 1 {
 		return jobs.Result{}, sealFailedCapture(ctx, j.Pool, j.Artifacts, recorder, err)
 	}
+	log.Printf("[union.soil.screening] soil_set=%s: Fetch USDA interpretations for %d map units", setID, len(keys))
 	_, err = soil.CaptureInterpretations(ctx, j.Client, soil.USDAEndpoint, keys, func(query string, body []byte) error {
 		return recorder.Record(ctx, usdaRequest(query), usdaRevision, 0, bytes.NewReader(body))
 	})
 	if err != nil {
-		return jobs.Result{}, sealFailedCapture(ctx, j.Pool, j.Artifacts, recorder, err)
+		return jobs.Result{}, sealFailedCapture(ctx, j.Pool, j.Artifacts, recorder, fmt.Errorf("soil_set=%s: fetch USDA interpretations: %w", setID, err))
 	}
 	_, err = (ingest.Engine{Pool: j.Pool, Store: j.Artifacts}).Ingest(ctx, recorder, &screeningPublication{interval: j.Interval})
 	return jobs.Result{Processed: len(polygons)}, err
@@ -339,10 +342,11 @@ WHERE m.set_id=$2::uuid AND m.map_unit_key=$3 AND d.survey_saved_on IS DISTINCT 
 		}
 	}
 	cause := soilChangeCause(previous, next, observation.Replay)
+	log.Printf("[union.soil.screening] capture=%s soil_set=%s: Evaluate screening publication for %d polygons", observation.ID, p.setID, len(polygons))
 	var runID *string
 	if surveyChanged || previous.Normalized != normalized || previous.NormalizedVersion != next.NormalizedVersion || previous.Geometry != geometry || previous.GeometryVersion != next.GeometryVersion {
 		if err := soil.PublishScreeningTx(ctx, tx, county.Union, polygonSource, p.setID, polygons, p.values, soil.USDAEndpoint, p.interval, observation.Manifest.ObservedAt); err != nil {
-			return err
+			return fmt.Errorf("soil_set=%s: calculate and store screening: %w", p.setID, err)
 		}
 		var id string
 		if err := tx.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&id); err != nil {
@@ -359,7 +363,7 @@ WHERE m.set_id=$2::uuid AND m.map_unit_key=$3 AND d.survey_saved_on IS DISTINCT 
 		}
 		if due {
 			if err := soil.PublishScreeningTx(ctx, tx, county.Union, polygonSource, p.setID, polygons, p.values, soil.USDAEndpoint, p.interval, observation.Manifest.ObservedAt); err != nil {
-				return err
+				return fmt.Errorf("soil_set=%s: refresh expired screening: %w", p.setID, err)
 			}
 			var id string
 			if err := tx.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&id); err != nil {

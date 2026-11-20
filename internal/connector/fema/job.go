@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,9 +32,10 @@ func (j Job) Import(ctx context.Context, catalogPath, archivePath string) (jobs.
 	if !ok {
 		return jobs.Result{}, errors.New("FEMA import requires a running job attempt")
 	}
+	log.Print("[union.fema] Read local FEMA catalog")
 	catalog, err := regularFile(catalogPath)
 	if err != nil {
-		return jobs.Result{}, err
+		return jobs.Result{}, fmt.Errorf("open FEMA catalog: %w", err)
 	}
 	defer catalog.Close()
 	body, err := io.ReadAll(io.LimitReader(catalog, catalogLimit+1))
@@ -50,9 +52,10 @@ func (j Job) Import(ctx context.Context, catalogPath, archivePath string) (jobs.
 	if filepath.Base(archivePath) != product.Filename {
 		return jobs.Result{}, errors.New("ZIP filename does not match the effective FEMA catalog product")
 	}
+	log.Printf("[union.fema] Retain effective product %s (product ID %d, archive %s)", product.Name, product.ID, product.Filename)
 	archive, err := regularFile(archivePath)
 	if err != nil {
-		return jobs.Result{}, err
+		return jobs.Result{}, fmt.Errorf("open FEMA archive: %w", err)
 	}
 	defer archive.Close()
 	recorder, err := ingest.NewRecorder(j.Artifacts, sourceName, time.Now().UTC())
@@ -211,22 +214,30 @@ func (p *publication) Apply(ctx context.Context, tx pgx.Tx, o ingest.Observation
 		}
 		batch.Queue(panelInsert, o.ID, panel.ID, shape, panel.Number, panel.Effective)
 	}
+	log.Printf("[union.fema] capture=%s: Store %d flood zones and %d map panels", o.ID, len(p.release.Zones), len(p.release.Panels))
 	results := tx.SendBatch(ctx, batch)
 	for i := 0; i < batch.Len(); i++ {
 		tag, e := results.Exec()
 		if e != nil || tag.RowsAffected() != 1 {
 			closeErr := results.Close()
-			if e != nil {
-				return errors.Join(e, closeErr)
+			var kind, id string
+			if i < len(p.release.Zones) {
+				kind, id = "flood zone", p.release.Zones[i].ID
+			} else {
+				kind, id = "map panel", p.release.Panels[i-len(p.release.Zones)].ID
 			}
-			return errors.Join(fmt.Errorf("FEMA geometry %d failed the repair limit", i+1), closeErr)
+			if e != nil {
+				return errors.Join(fmt.Errorf("store FEMA %s %q (row %d/%d): %w", kind, id, i+1, batch.Len(), e), closeErr)
+			}
+			return errors.Join(fmt.Errorf("FEMA %s %q (row %d/%d) failed the repair limit", kind, id, i+1, batch.Len()), closeErr)
 		}
 	}
 	if err := results.Close(); err != nil {
 		return err
 	}
+	log.Printf("[union.fema] capture=%s: Calculate panel coverage", o.ID)
 	if _, err := tx.Exec(ctx, coverageInsert, o.ID); err != nil {
-		return err
+		return fmt.Errorf("calculate FEMA panel coverage: %w", err)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO fema_release_head(study_id,capture_id,latest_observation_id,latest_observed_at) VALUES('37179C',$1,$1,$2) ON CONFLICT (study_id) DO UPDATE SET capture_id=EXCLUDED.capture_id,latest_observation_id=EXCLUDED.latest_observation_id,latest_observed_at=EXCLUDED.latest_observed_at`, o.ID, o.Manifest.ObservedAt)
 	if err == nil {

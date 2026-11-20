@@ -4,11 +4,20 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/JustinMonty20/landman/internal/county"
 	"github.com/twpayne/go-geom"
 )
+
+func TestSoilPageErrorIdentifiesFeature(t *testing.T) {
+	page := []byte(`{"features":[{"attributes":{"OBJECTID_1":123,"MUKEY":"1","MUSYM":"A"},"geometry":{"rings":[]}}]}`)
+	_, _, err := ParseSoilFeatures(page)
+	if err == nil || !strings.Contains(err.Error(), "soil page row 1: soil OBJECTID_1 123: no rings") {
+		t.Fatalf("expected row and source ID, got %v", err)
+	}
+}
 
 func TestParseSoilFeature(t *testing.T) {
 	data, err := os.ReadFile("testdata/soil/layer197-feature.json")

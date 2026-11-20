@@ -2,13 +2,14 @@
 
 ## Manual commands
 
-Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database migrated through `000023_qualification_conflict_topology.sql` for zoning and roads. The tax-only command needs migration `000018_tax_file_imports.sql`.
+Build with `go build -o landman ./cmd/landman`. Set `DATABASE_URL` to a PostGIS database with all repository migrations applied before the default command. The tax-only command needs migration `000018_tax_file_imports.sql`.
 
 Databases already at the API's migration 21 apply qualification migrations 22 and 23. Do not manually reset the Goose version table. Development databases that previously applied qualification migrations numbered 20 and 21 must not apply this sequence blindly; reconcile their migration history and schema separately before upgrading.
 The parcel and soil commands contact the live Union GIS or USDA services. The tax job reads operator files; it does not download county files. Do not use an operator database for tests. `make run` loads `.env` and can use that database.
 
 ```sh
-# Import parcels, then soil, then refresh derived screening, then import four tax files.
+# Import all manual sources in order: parcels, soil, zoning, roads, FEMA,
+# structures, assessed values, soil screening, qualification assessment, and tax files.
 # Set the five tax inputs below before this command.
 ./landman
 
@@ -31,15 +32,25 @@ The parcel and soil commands contact the live Union GIS or USDA services. The ta
 # Publish road centerlines as a separate group.
 ./landman run union.gis.roads
 
+# Import the saved official FEMA catalog and county archive.
+./landman run union.fema
+
+# Capture the county structures and assessed-value sources separately.
+./landman run union.gis.structures
+./landman run union.gis.assessed_value
+
 # Recompute stored qualification evidence without a county fetch.
 ./landman run union.qualification.assess
 ```
 
-Every source import and derived refresh uses `jobs.Runner.Run`. The default command keeps its ten-minute overall deadline. Each single-source command shares that deadline with its downstream refresh. The standalone `./landman run union.qualification.assess` command has a 60-minute limit, including the wait for the assessment lock. This does not change the limits for scheduled or automatic assessments. A source error or non-clean outcome stops dependent work. A derived error fails the command but does not change an already successful source attempt.
+Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt.
+
+The standalone `./landman run union.qualification.assess` command has a 60-minute limit for the full assessment. This limit includes the wait for the assessment lock. It does not change the limits for automatic assessments after imports or for scheduled assessments.
 
 A parcel-only run needs a stored soil set. If no set exists, the source can succeed while screening records `pending` and the command fails with the missing prerequisite. Run the soil source to ingest a set and refresh screening. A stored empty set is not a missing set.
 
 Derived refresh uses immutable members of the current stored set. It neither records a new county soil fetch nor changes soil fetch timestamps. It still contacts USDA for required interpretations. `SOIL_SCREENING_MAX_AGE` sets the maximum age of published evidence and defaults to `720h`. It is not a fetch-skipping interval.
+
 
 ## Quarantine and explicit parcel repair
 
@@ -87,7 +98,7 @@ export UNION_TAX_PIPELINE_PATH="$TAX_INPUT_DIR/foreclosure-pipeline.pdf"
 ./landman
 ```
 
-Set `TAX_INPUT_DIR` and `TAX_ARTIFACT_DIR` to directories you selected before you run these commands. `./landman` runs the parcel import, soil import, soil screening, and the four-file tax job once each. `./landman run union.tax` runs only the four tax files. Individual parcel, soil, and screening commands remain available for targeted runs. There is no `./landman run` command without a job ID.
+Set `TAX_INPUT_DIR` and `TAX_ARTIFACT_DIR` to directories you selected before you run these commands. Also set `UNION_FEMA_ARTIFACT_DIR`, `UNION_FEMA_CATALOG_PATH`, and `UNION_FEMA_ARCHIVE_PATH` to matching official FEMA files. `./landman` runs parcel, soil, zoning, roads, FEMA, structures, assessed-value, soil-screening, qualification-assessment, and four-file tax jobs once each. `./landman run union.tax` runs only the four tax files. Individual source and derived-job commands remain available for targeted runs. There is no `./landman run` command without a job ID.
 
 The job checks all four files before its first typed write. It retains and verifies their exact bytes, then imports delinquent, billing, foreclosure sales, and foreclosure pipeline in that order. The stored county URLs identify known source references; they are not proof that the application fetched these files. A changed file replaces its prior active version only after a complete successful publication. A failed file stops later files. A repeated identical file can link parcels added since the prior run. Check `job_attempts` for `union.tax` and the tax import records for source and storage evidence. Do not set a tax schedule in this local mode.
 
@@ -112,7 +123,28 @@ The example imports parcels on Sunday and Wednesday at 02:00 New York time, soil
 
 Parcel, soil, zoning, and roads have independent source schedules. Qualification also has an independent reconciliation schedule and runs once at scheduler startup. After parcel or soil succeeds cleanly, the executable runs both derived screening and qualification reconciliation. After zoning or roads succeeds cleanly, it runs qualification reconciliation only. A downstream failure does not erase a published source generation. No source import is retried automatically after a missed tick. There is no independent screening cron.
 
-The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its downstream work share a ten-minute deadline. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
+The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its ordered downstream work have separate ten-minute deadlines. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
+
+## Save a log for diagnosis
+
+The CLI logs the job ID, attempt ID, result, record counts, and elapsed time. Qualification source logs show the layer name and number. `union.qualification.assess` reports the active zoning and road generations, the number of parcels to assess, and the name of each database step. Jobs that use the shared import engine report the capture ID and the verification, preparation, and publication steps.
+
+To save a log for a standalone assessment, run these commands in Bash from the repository root:
+
+```sh
+mkdir -p artifacts
+set -o pipefail
+(
+  umask 077
+  set -a
+  . ./.env
+  set +a
+  ./landman run union.qualification.assess 2>&1 |
+    tee "$(mktemp artifacts/ingestion-assess.XXXXXX.log)"
+)
+```
+
+When you report a failure, include the command, the attempt ID, and the log lines from the start of the failed job through its error. Include the record identifier shown in the error, such as the county parcel ID, `OBJECTID`, or FEMA feature ID. If the failure occurred before the job could identify a record, include the capture ID, generation ID, or page shown in the log. Review the error text first. Remove any private paths or source values. Do not share `.env` or saved source files.
 
 ## Inspect incomplete work
 

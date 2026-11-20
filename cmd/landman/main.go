@@ -34,6 +34,34 @@ type requiredRunner interface {
 	Run(context.Context, jobs.Definition) (jobs.Outcome, jobs.Result, error)
 }
 
+type loggingRunner struct{ requiredRunner }
+
+func (r loggingRunner) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
+	start := time.Now()
+	kind := definition.Kind
+	if kind == "" {
+		kind = jobs.AttemptFullScan
+	}
+	log.Printf("[%s] Started: kind=%s", definition.ID, kind)
+	attemptID := "-"
+	if run := definition.Run; run != nil {
+		definition.Run = func(ctx context.Context) (jobs.Result, error) {
+			if id, ok := jobs.AttemptID(ctx); ok {
+				attemptID = id
+				log.Printf("[%s] Running: attempt=%s", definition.ID, id)
+			}
+			return run(ctx)
+		}
+	}
+	outcome, result, err := r.requiredRunner.Run(ctx, definition)
+	status := string(outcome)
+	if status == "" {
+		status = "error"
+	}
+	log.Printf("[%s] Finished: outcome=%s processed=%d quarantined=%d elapsed=%s attempt=%s", definition.ID, status, result.Processed, result.Quarantined, time.Since(start).Round(time.Millisecond), attemptID)
+	return outcome, result, err
+}
+
 func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Definition) error {
 	outcome, _, err := runner.Run(ctx, definition)
 	if err != nil {
@@ -67,17 +95,19 @@ type unionExecutor struct {
 }
 
 func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, jobTimeout)
-	defer cancel()
-	outcome, result, err := e.runner.Run(ctx, definition)
+	sourceCtx, sourceCancel := context.WithTimeout(ctx, jobTimeout)
+	outcome, result, err := e.runner.Run(sourceCtx, definition)
+	sourceCancel()
 	if err == nil && outcome == jobs.OutcomeSuccess {
 		if definition.ID == qualificationJobID {
 			return outcome, result, nil
 		}
+		downstreamCtx, downstreamCancel := context.WithTimeout(ctx, jobTimeout)
+		defer downstreamCancel()
 		if e.afterSource != nil {
-			err = e.afterSource(ctx, definition.ID)
+			err = e.afterSource(downstreamCtx, definition.ID)
 		} else {
-			err = e.refresh(ctx)
+			err = e.refresh(downstreamCtx)
 		}
 	}
 	return outcome, result, err
@@ -206,6 +236,13 @@ func run(ctx context.Context) error {
 			return err
 		}
 	}
+	var femaInputs femaInput
+	if mode == "all" {
+		femaInputs, err = manualFEMAInput(os.Getenv)
+		if err != nil {
+			return err
+		}
+	}
 	if mode == "tax-replay" {
 		taxInput.ArtifactDir = os.Getenv("UNION_TAX_ARTIFACT_DIR")
 		if taxInput.ArtifactDir == "" {
@@ -218,12 +255,12 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-	} else {
-		var cancel context.CancelFunc
+	} else if mode != "all" && mode != zoningJobID && mode != roadsJobID {
 		timeout := jobTimeout
 		if mode == qualificationJobID {
 			timeout = standaloneQualificationTimeout
 		}
+		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
@@ -234,13 +271,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer pool.Close()
-	runner, err := jobs.NewRunner(pool)
+	jobRunner, err := jobs.NewRunner(pool)
 	if err != nil {
 		return err
 	}
-	if err = runner.RecoverInterrupted(ctx); err != nil {
+	if err = jobRunner.RecoverInterrupted(ctx); err != nil {
 		return err
 	}
+	runner := loggingRunner{jobRunner}
 	interval := soil.DefaultFreshnessInterval
 	if text := os.Getenv("SOIL_SCREENING_MAX_AGE"); text != "" {
 		interval, err = time.ParseDuration(text)
@@ -306,7 +344,7 @@ func run(ctx context.Context) error {
 			})
 		}},
 	}
-	if mode == "schedule" || mode == zoningJobID || mode == roadsJobID {
+	if mode == "schedule" || mode == "all" || mode == zoningJobID || mode == roadsJobID {
 		for _, entry := range []struct{ id, group string }{{zoningJobID, union.QualificationZoning}, {roadsJobID, union.QualificationRoads}} {
 			group := entry.group
 			definitions = append(definitions, jobs.Definition{ID: entry.id, Schedule: calendar[entry.id], Run: func(ctx context.Context) (jobs.Result, error) {
@@ -318,6 +356,21 @@ func run(ctx context.Context) error {
 		}
 	}
 
+	if mode == "all" {
+		femaJobDefinition, err := femaDefinition(pool, femaInputs)
+		if err != nil {
+			return err
+		}
+		definitions = append(definitions,
+			femaJobDefinition,
+			jobs.Definition{ID: vacancyjob.StructuresID, Run: func(ctx context.Context) (jobs.Result, error) {
+				return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) { return structuresJob.Import(ctx) })
+			}},
+			jobs.Definition{ID: vacancyjob.AssessedValueID, Run: func(ctx context.Context) (jobs.Result, error) {
+				return countyRequest(ctx, func(ctx context.Context) (jobs.Result, error) { return assessmentsJob.Import(ctx) })
+			}},
+		)
+	}
 	if mode == taxJobID || mode == "all" {
 		definitions = append(definitions, jobs.Definition{ID: taxJobID, Run: func(ctx context.Context) (jobs.Result, error) {
 			return taxjob.Run(ctx, pool, taxInput)
@@ -343,6 +396,7 @@ func run(ctx context.Context) error {
 		})
 	}
 	qualificationRefresh := func(ctx context.Context) error {
+		log.Print("[union.qualification.assess] Wait for assessment lock")
 		return withQualificationLock(ctx, dsn, func(ctx context.Context) error {
 			requests, err := observedHandoffs(ctx, pool, "qualification_pending")
 			if err != nil {
@@ -515,27 +569,43 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 	if mode == screeningJobID {
 		return refresh(ctx)
 	}
-	for _, definition := range definitions {
-		if mode == "all" {
+	if mode == "all" {
+		for _, definition := range definitions {
 			if definition.ID == taxJobID {
-				if err := refresh(ctx); err != nil {
-					return err
-				}
-				return runRequired(ctx, runner, definition)
+				continue
 			}
-			if err := runRequired(ctx, runner, definition); err != nil {
+			if err := runManualStep(ctx, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) }); err != nil {
 				return err
 			}
-			if executor.qualify != nil {
-				if err := executor.qualify(ctx); err != nil {
-					return err
-				}
+		}
+		if err := runManualStep(ctx, refresh); err != nil {
+			return err
+		}
+		if executor.qualify != nil {
+			if err := runManualStep(ctx, executor.qualify); err != nil {
+				return err
 			}
-		} else if mode == definition.ID {
+		}
+		for _, definition := range definitions {
+			if definition.ID == taxJobID {
+				return runManualStep(ctx, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) })
+			}
+		}
+		return nil
+	}
+	for _, definition := range definitions {
+		if mode == definition.ID {
 			return runRequired(ctx, executor, definition)
 		}
 	}
 	return refresh(ctx)
+}
+
+// runManualStep gives each source and its downstream work the normal job limit.
+func runManualStep(ctx context.Context, run func(context.Context) error) error {
+	runCtx, cancel := context.WithTimeout(ctx, jobTimeout)
+	defer cancel()
+	return run(runCtx)
 }
 
 // Retry a derived overlap while the caller's deadline remains. A lost advisory-lock session must not discard a source success.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/url"
 	"strconv"
@@ -21,6 +22,9 @@ func AssessmentWhere(lo, hi int64) string {
 // CaptureAssessmentRanges partitions numeric OBJECTIDs without treating them as row keys.
 // Count checks detect observed drift, not a county snapshot or live query support.
 func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, total int64, save func(string, []byte, int, int, bool) error) error {
+	const label = "[union.gis.assessed_value] Assessed Value (layer 0)"
+	log.Printf("%s: Capture %d source rows by OBJECTID range", label, total)
+	var processed int64
 	receipts := 1 // the initial global count
 	query := func(q url.Values) ([]byte, error) {
 		if receipts >= AssessmentRangeLimit {
@@ -82,13 +86,19 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			return err
 		}
 		features, decodeErr := DecodeAssessmentPage(body)
-		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || decodeErr != nil || int64(len(features)) != n {
-			return errors.New("assessment page incomplete")
+		if decodeErr != nil {
+			return fmt.Errorf("decode assessment page for OBJECTID range %d–%d: %w", lo, hi, decodeErr)
 		}
-		for _, feature := range features {
+		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || int64(len(features)) != n {
+			return fmt.Errorf("assessment page incomplete for OBJECTID range %d–%d: got %d rows, expected %d", lo, hi, len(features), n)
+		}
+		for i, feature := range features {
 			oid, err := AssessmentObjectID(feature)
-			if err != nil || oid < lo || oid > hi {
-				return errors.New("assessment page outside partition")
+			if err != nil {
+				return fmt.Errorf("read assessment identity in range %d–%d, row %d: %w", lo, hi, i+1, err)
+			}
+			if oid < lo || oid > hi {
+				return fmt.Errorf("assessment OBJECTID %d at row %d is outside range %d–%d", oid, i+1, lo, hi)
 			}
 		}
 		after, err := count(where)
@@ -96,7 +106,12 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			return err
 		}
 		if after != n {
-			return errors.New("assessment partition count drift")
+			return fmt.Errorf("assessment partition %d–%d count drift: got %d after capture, expected %d", lo, hi, after, n)
+		}
+		previous := processed
+		processed += n
+		if processed/10000 > previous/10000 || (n > 0 && processed == total) {
+			log.Printf("%s: Checked %d/%d rows (%d requests)", label, processed, total, receipts)
 		}
 		return nil
 	}

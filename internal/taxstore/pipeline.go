@@ -47,7 +47,7 @@ func SavePipeline(ctx context.Context, tx pgx.Tx, rows []union.PipelineProperty,
 			continue
 		}
 		if err != nil {
-			return result, fmt.Errorf("lookup pipeline parcel: %w", err)
+			return result, fmt.Errorf("lookup pipeline parcel PIN %q: %w", row.ParcelKey, err)
 		}
 		if seen[parcelID] {
 			continue
@@ -66,7 +66,7 @@ func SavePipeline(ctx context.Context, tx pgx.Tx, rows []union.PipelineProperty,
  source_url=EXCLUDED.source_url,file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now() WHERE (tax_foreclosure_pipeline.owner_name,tax_foreclosure_pipeline.situs_line,tax_foreclosure_pipeline.township,tax_foreclosure_pipeline.acreage,tax_foreclosure_pipeline.tax_value,tax_foreclosure_pipeline.case_number,tax_foreclosure_pipeline.sale_on,tax_foreclosure_pipeline.schedule_text,tax_foreclosure_pipeline.status,tax_foreclosure_pipeline.redeemed) IS DISTINCT FROM (EXCLUDED.owner_name,EXCLUDED.situs_line,EXCLUDED.township,EXCLUDED.acreage,EXCLUDED.tax_value,EXCLUDED.case_number,EXCLUDED.sale_on,EXCLUDED.schedule_text,EXCLUDED.status,EXCLUDED.redeemed)`,
 			county.Union, meta.Name, parcelID, billingNullable(row.OwnerName), billingNullable(row.SitusLine), billingNullable(row.Township), billingNullable(row.Acreage), value, billingNullable(row.CaseNumber), row.SaleOn, billingNullable(row.ScheduleText), billingNullable(row.Status), row.Redeemed, meta.URL, digest[:], meta.FetchedAt)
 		if err != nil {
-			return result, fmt.Errorf("save pipeline parcel: %w", err)
+			return result, fmt.Errorf("save pipeline parcel PIN %q (parcel_id=%s, case=%q): %w", row.ParcelKey, parcelID, row.CaseNumber, err)
 		}
 		result.Saved++
 	}

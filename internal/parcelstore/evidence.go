@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
@@ -22,17 +23,7 @@ func (w *ShapeWriter) StageEvidencePart(ctx context.Context, parcel models.GISPa
 	if err != nil {
 		return err
 	}
-	if err := w.StagePart(ctx, parcel, vacant, rawKey); err != nil {
-		return err
-	}
-	tag, err := w.tx.Exec(ctx, `UPDATE parcel_import_parts SET source_feature=$1,source_hash=$2 WHERE ordinal=(SELECT max(ordinal) FROM parcel_import_parts)`, feature, hash)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("missing staged evidence part")
-	}
-	return nil
+	return w.stagePart(ctx, parcel, vacant, rawKey, feature, &hash)
 }
 
 // ApplyEvidence serializes source evidence, history and current rows in the caller's publication transaction.
@@ -133,7 +124,7 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	if _, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_evidence_groups ON COMMIT DROP AS SELECT p.source_parcel_id,min(p.ordinal) first_ordinal FROM parcel_import_parts p WHERE NOT EXISTS (SELECT 1 FROM parcel_import_rejected r WHERE r.source_parcel_id=p.source_parcel_id) GROUP BY p.source_parcel_id; CREATE UNIQUE INDEX ON parcel_evidence_groups(first_ordinal); ANALYZE parcel_evidence_groups`); err != nil {
 		return 0, err
 	}
-	processed := 0
+	processed, groupsChecked := 0, 0
 	var cursor int64
 	for {
 		rows, err := w.tx.Query(ctx, `SELECT source_parcel_id,first_ordinal FROM parcel_evidence_groups WHERE first_ordinal>$1 ORDER BY first_ordinal LIMIT 200`, cursor)
@@ -167,7 +158,11 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 			cursor = g.ordinal
 			n, err := w.publishEvidencePID(ctx, g.pid, observationID, manifest.CreatedAt, manifest.ID, correction, publicationKind, attemptID)
 			if err != nil {
-				return 0, err
+				return 0, fmt.Errorf("write parcel PID %q (group %d, first source part %d): %w", g.pid, groupsChecked+1, g.ordinal, err)
+			}
+			groupsChecked++
+			if groupsChecked%10000 == 0 {
+				log.Printf("[%s] capture=%s: Checked %d parcel groups in publication transaction", jobID, manifest.ID, groupsChecked)
 			}
 			processed += n
 			pids = append(pids, g.pid)
@@ -339,10 +334,10 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 		return 0, err
 	}
 	last.Geometry.Shape = &decoded
-	if err = w.SavePart(ctx, last, vacant); err != nil {
+	if err = w.saveParcelAndSales(ctx, last, vacant); err != nil {
 		return 0, err
 	}
-	if _, err = w.tx.Exec(ctx, `UPDATE parcels SET shape=ST_GeomFromEWKB($2),likely_vacant=$3,updated_at=now() WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, pid, shape, vacant); err != nil {
+	if err = w.analyzeAfterSavedPart(ctx); err != nil {
 		return 0, err
 	}
 	cause := "source_observation"
@@ -356,6 +351,12 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	}
 	if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 		return 0, err
+	}
+	// A cached lookup can keep scanning the whole table as an empty table grows.
+	if w.partsSaved == parcelAnalyzeInterval {
+		if _, err := w.tx.Exec(ctx, `ANALYZE parcel_evidence_current (county_id, source_name, source_parcel_id)`); err != nil {
+			return 0, fmt.Errorf("parcelstore: analyze current evidence keys: %w", err)
+		}
 	}
 	if oldGeometry == nil || *oldGeometry != geometryHash {
 		w.geometryChanged = true

@@ -11,6 +11,41 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type femaInput struct {
+	artifactDir string
+	catalogPath string
+	archivePath string
+}
+
+func manualFEMAInput(getenv func(string) string) (femaInput, error) {
+	input := femaInput{
+		artifactDir: getenv("UNION_FEMA_ARTIFACT_DIR"),
+		catalogPath: getenv("UNION_FEMA_CATALOG_PATH"),
+		archivePath: getenv("UNION_FEMA_ARCHIVE_PATH"),
+	}
+	for _, entry := range []struct{ name, value string }{
+		{"UNION_FEMA_ARTIFACT_DIR", input.artifactDir},
+		{"UNION_FEMA_CATALOG_PATH", input.catalogPath},
+		{"UNION_FEMA_ARCHIVE_PATH", input.archivePath},
+	} {
+		if entry.value == "" {
+			return femaInput{}, errors.New(entry.name + " is required")
+		}
+	}
+	return input, nil
+}
+
+func femaDefinition(pool *pgxpool.Pool, input femaInput) (jobs.Definition, error) {
+	store, err := taxartifact.NewLocal(input.artifactDir)
+	if err != nil {
+		return jobs.Definition{}, err
+	}
+	job := fema.Job{Pool: pool, Artifacts: store}
+	return jobs.Definition{ID: fema.JobID, Run: func(ctx context.Context) (jobs.Result, error) {
+		return job.Import(ctx, input.catalogPath, input.archivePath)
+	}}, nil
+}
+
 func runFEMA(ctx context.Context, mode string) error {
 	root := os.Getenv("UNION_FEMA_ARTIFACT_DIR")
 	if root == "" {
@@ -26,27 +61,31 @@ func runFEMA(ctx context.Context, mode string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, jobTimeout)
 	defer cancel()
-	store, err := taxartifact.NewLocal(root)
-	if err != nil {
-		return err
-	}
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	runner, err := jobs.NewRunner(pool)
+	jobRunner, err := jobs.NewRunner(pool)
 	if err != nil {
 		return err
 	}
-	if err := runner.RecoverInterrupted(ctx); err != nil {
+	if err := jobRunner.RecoverInterrupted(ctx); err != nil {
 		return err
 	}
-	job := fema.Job{Pool: pool, Artifacts: store}
-	def := jobs.Definition{ID: fema.JobID, Run: func(ctx context.Context) (jobs.Result, error) { return job.Import(ctx, catalog, archive) }}
+	runner := loggingRunner{jobRunner}
 	if mode == "fema-replay" {
-		def.Kind = jobs.AttemptReplay
-		def.Run = func(ctx context.Context) (jobs.Result, error) { return job.Replay(ctx, os.Args[4]) }
+		store, err := taxartifact.NewLocal(root)
+		if err != nil {
+			return err
+		}
+		job := fema.Job{Pool: pool, Artifacts: store}
+		def := jobs.Definition{ID: fema.JobID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return job.Replay(ctx, os.Args[4]) }}
+		return runRequired(ctx, runner, def)
 	}
-	return runRequired(ctx, runner, def)
+	def, err := femaDefinition(pool, femaInput{artifactDir: root, catalogPath: catalog, archivePath: archive})
+	if err != nil {
+		return err
+	}
+	return runRequired(ctx, loggingRunner{jobRunner}, def)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -105,7 +106,7 @@ func layerByID(id int) (qualificationLayer, error) {
 	return qualificationLayer{}, fmt.Errorf("unknown qualification layer %d", id)
 }
 
-func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, srid int) (QualificationFeature, error) {
+func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, srid int) (_ QualificationFeature, err error) {
 	var value map[string]interface{}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -124,6 +125,11 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 	if err != nil || id < 0 {
 		return nil, fmt.Errorf("invalid %s", spec.oid)
 	}
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("%s %d: %w", spec.oid, id, err)
+		}
+	}()
 	fields := []string{spec.code, spec.description, spec.caseField, spec.dateField}
 	if spec.kind == QualificationRoads {
 		fields = append(fields, "FTR_CODE", "RoadClass", "STATUS")
@@ -275,11 +281,21 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 
 // FetchQualificationLayer validates metadata, ordered pages, source IDs, and counts before return.
 // consume can stage rows; a failed scan must never publish its generation.
-func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume func(QualificationFeature) error) (QualificationReceipt, error) {
+func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume func(QualificationFeature) error) (_ QualificationReceipt, err error) {
 	spec, err := layerByID(id)
 	if err != nil {
 		return QualificationReceipt{}, err
 	}
+	name := spec.name
+	if spec.kind == QualificationZoning {
+		name += " Zoning"
+	}
+	label := fmt.Sprintf("%s (layer %d)", name, id)
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("%s: %w", label, err)
+		}
+	}()
 	if consume == nil {
 		return QualificationReceipt{}, errors.New("missing qualification consumer")
 	}
@@ -290,7 +306,7 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 	endpoint := root + "/" + strconv.Itoa(id)
 	meta, err := s.qualificationGet(ctx, endpoint+"?f=json")
 	if err != nil {
-		return QualificationReceipt{}, fmt.Errorf("layer %d metadata: %w", id, err)
+		return QualificationReceipt{}, fmt.Errorf("metadata: %w", err)
 	}
 	var m struct {
 		GeometryType string                        `json:"geometryType"`
@@ -308,14 +324,14 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 		return QualificationReceipt{}, err
 	}
 	if len(m.Error) > 0 && string(m.Error) != "null" {
-		return QualificationReceipt{}, fmt.Errorf("ArcGIS layer %d metadata error: %s", id, m.Error)
+		return QualificationReceipt{}, fmt.Errorf("ArcGIS metadata error: %s", m.Error)
 	}
 	expected := "esriGeometryPolygon"
 	if spec.kind == QualificationRoads {
 		expected = "esriGeometryPolyline"
 	}
 	if m.GeometryType != expected || m.MaxRecordCount < 1 {
-		return QualificationReceipt{}, fmt.Errorf("layer %d geometry or page schema changed", id)
+		return QualificationReceipt{}, errors.New("geometry or page schema changed")
 	}
 	required := []string{spec.oid}
 	for _, field := range []string{spec.code, spec.description, spec.caseField, spec.dateField} {
@@ -335,7 +351,7 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 			}
 		}
 		if !found {
-			return QualificationReceipt{}, fmt.Errorf("layer %d missing typed field %s", id, field)
+			return QualificationReceipt{}, fmt.Errorf("missing typed field %s", field)
 		}
 	}
 	sourceSRID := m.Extent.SpatialReference.WKID
@@ -343,13 +359,14 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 		sourceSRID = m.Extent.SpatialReference.LatestWKID
 	}
 	if sourceSRID != 3857 && sourceSRID != 102100 {
-		return QualificationReceipt{}, fmt.Errorf("layer %d unexpected native SRID %d", id, sourceSRID)
+		return QualificationReceipt{}, fmt.Errorf("unexpected native SRID %d", sourceSRID)
 	}
 	countURL := endpoint + "/query?" + (url.Values{"f": {"json"}, "where": {"1=1"}, "returnCountOnly": {"true"}}).Encode()
 	count, err := s.qualificationCount(ctx, countURL)
 	if err != nil {
 		return QualificationReceipt{}, err
 	}
+	log.Printf("[union.qualification] %s: %d source records", label, count)
 	size := qualificationPageSize
 	if m.MaxRecordCount < size {
 		size = m.MaxRecordCount
@@ -373,7 +390,7 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 				size = (size + 1) / 2
 				continue
 			}
-			return QualificationReceipt{}, fmt.Errorf("layer %d offset %d: %w", id, offset, err)
+			return QualificationReceipt{}, fmt.Errorf("offset %d: %w", offset, err)
 		}
 		var page struct {
 			Features         []json.RawMessage `json:"features"`
@@ -388,31 +405,31 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 			return QualificationReceipt{}, err
 		}
 		if len(page.Error) > 0 && string(page.Error) != "null" {
-			return QualificationReceipt{}, fmt.Errorf("ArcGIS layer %d error: %s", id, page.Error)
+			return QualificationReceipt{}, fmt.Errorf("ArcGIS error: %s", page.Error)
 		}
 		want := size
 		if count-offset < want {
 			want = count - offset
 		}
 		if page.Features == nil {
-			return QualificationReceipt{}, fmt.Errorf("layer %d offset %d response missing features", id, offset)
+			return QualificationReceipt{}, fmt.Errorf("offset %d: response missing features", offset)
 		}
 		if len(page.Features) != want {
 			if page.Exceeded && len(page.Features) < want && size > 1 {
 				size = (size + 1) / 2
 				continue
 			}
-			return QualificationReceipt{}, fmt.Errorf("layer %d offset %d page count mismatch: got %d want %d", id, offset, len(page.Features), want)
+			return QualificationReceipt{}, fmt.Errorf("offset %d: page count mismatch: got %d want %d", offset, len(page.Features), want)
 		}
 		if offset+want == count && page.Exceeded {
-			return QualificationReceipt{}, fmt.Errorf("layer %d final page exceeds transfer limit", id)
+			return QualificationReceipt{}, errors.New("final page exceeds transfer limit")
 		}
 		srid := page.SpatialReference.LatestWKID
 		if srid == 0 {
 			srid = page.SpatialReference.WKID
 		}
 		if srid != 3857 && srid != 102100 {
-			return QualificationReceipt{}, fmt.Errorf("layer %d unexpected output SRID %d", id, srid)
+			return QualificationReceipt{}, fmt.Errorf("unexpected output SRID %d", srid)
 		}
 		for _, raw := range page.Features {
 			if err := ctx.Err(); err != nil {
@@ -420,7 +437,7 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 			}
 			f, e := parseQualificationFeature(spec, raw, sourceSRID)
 			if e != nil {
-				return QualificationReceipt{}, fmt.Errorf("layer %d offset %d: %w", id, offset, e)
+				return QualificationReceipt{}, fmt.Errorf("offset %d: %w", offset, e)
 			}
 			var key SourceIdentity
 			switch x := f.(type) {
@@ -434,7 +451,7 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 				key = x.SourceIdentity
 			}
 			if seen[key.SourceID] {
-				return QualificationReceipt{}, fmt.Errorf("layer %d repeats source ID %d", id, key.SourceID)
+				return QualificationReceipt{}, fmt.Errorf("repeats source ID %d", key.SourceID)
 			}
 			seen[key.SourceID] = true
 			if err := consume(f); err != nil {
@@ -442,13 +459,14 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 			}
 		}
 		offset += want
+		log.Printf("[union.qualification] %s: processed %d/%d records", label, offset, count)
 	}
 	latest, err := s.qualificationCount(ctx, countURL)
 	if err != nil {
 		return QualificationReceipt{}, err
 	}
 	if latest != count {
-		return QualificationReceipt{}, fmt.Errorf("layer %d count drift: %d to %d", id, count, latest)
+		return QualificationReceipt{}, fmt.Errorf("count drift: %d to %d", count, latest)
 	}
 	return QualificationReceipt{Count: count, SourceSRID: sourceSRID, ServiceURL: endpoint, Metadata: meta}, nil
 }

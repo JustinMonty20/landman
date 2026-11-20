@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net/url"
 	"sort"
@@ -67,10 +68,16 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 	if err = recorder.BindAttempt(id, attempt, "full_scan", 0); err != nil {
 		return jobs.Result{}, err
 	}
+	name := "Structures (layer 171)"
+	if j.Layer == union.AssessedValueLayer {
+		name = "Assessed Value (layer 0)"
+	}
+	log.Printf("[%s] %s: Capture county records", id, name)
 	n, err := j.Source.CaptureVacancyLayer(ctx, j.Layer, func(request string, body []byte, crs, status int, complete bool) error {
 		return recorder.RecordHTTP(ctx, request, "", crs, status, complete, bytes.NewReader(body))
 	})
 	if err != nil {
+		err = fmt.Errorf("%s: capture county records: %w", name, err)
 		// Keep partial and rejected responses registered for offline diagnosis.
 		if len(recorder.Manifest().Receipts) > 0 {
 			sealCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -284,7 +291,11 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 			if structure {
 				v, e := parseStructure(feature, r.CRS)
 				if e != nil {
-					return e
+					oid := gjson.GetBytes(feature, "attributes.OBJECTID")
+					if oid.Type == gjson.Number {
+						return fmt.Errorf("decode structure OBJECTID %s: %w", oid.Raw, e)
+					}
+					return fmt.Errorf("decode structure receipt %d row %d: %w", i+1, n+1, e)
 				}
 				if legacyStructures {
 					if seenLegacy[v.ObjectID] {
@@ -296,12 +307,13 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 				}
 				p.structures = append(p.structures, v)
 			} else {
-				if _, e := union.AssessmentObjectID(feature); e != nil {
-					return e
+				oid, e := union.AssessmentObjectID(feature)
+				if e != nil {
+					return fmt.Errorf("decode assessment identity at receipt %d row %d: %w", i+1, n+1, e)
 				}
 				v, e := parseAssessment(feature)
 				if e != nil {
-					return e
+					return fmt.Errorf("decode assessment OBJECTID %d at receipt %d row %d: %w", oid, i+1, n+1, e)
 				}
 				p.assessments = append(p.assessments, v)
 			}
@@ -522,13 +534,13 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 	for i, v := range p.structures {
 		_, err = tx.Exec(ctx, `INSERT INTO vacancy_live_structures(generation_id,ordinal,object_id,outline_id,pin,status,geometry,source_crs) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, i, v.ObjectID, v.OutlineID, v.PIN, v.Status, v.Geometry, v.CRS)
 		if err != nil {
-			return err
+			return fmt.Errorf("store structure OBJECTID %q at row %d: %w", v.ObjectID, i+1, err)
 		}
 	}
 	for i, v := range p.assessments {
 		_, err = tx.Exec(ctx, `INSERT INTO vacancy_live_assessments(generation_id,ordinal,object_id,parcel_number,parcel_year,assess_category,market_building,market_land,market_total) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, i, v.ObjectID, v.ParcelNumber, v.Year, v.Category, v.Building, v.Land, v.Total)
 		if err != nil {
-			return err
+			return fmt.Errorf("store assessment OBJECTID %q (parcel_number=%q, row=%d): %w", v.ObjectID, v.ParcelNumber, i+1, err)
 		}
 	}
 	return nil
