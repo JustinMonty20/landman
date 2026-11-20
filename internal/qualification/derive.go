@@ -191,14 +191,14 @@ UNION ALL SELECT parcel_id,geom FROM qualification_jurisdiction_shapes WHERE nam
  CROSS JOIN LATERAL (SELECT CASE WHEN ST_Area(h.geom)*2<=ST_Area(p.analysis_geom)
  THEN ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))
  ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,p.precision_grid),0),10),2264)) END area_ft2) m
- WHERE ST_Area(p.geom)>0`, nil},
+ WHERE ST_Area(p.geom)>0 AND m.area_ft2>0`, nil},
 		{"Write jurisdiction matches", `INSERT INTO qualification_jurisdiction_hits(parcel_id,layer_id,source_id,name,acres,share)
 SELECT h.parcel_id,h.layer_id,h.source_id,h.name,m.area_ft2/43560,m.area_ft2/ST_Area(p.geom)
 FROM qualification_jurisdiction_shapes h JOIN qualification_targets p ON p.id=h.parcel_id
 CROSS JOIN LATERAL (SELECT CASE WHEN ST_Area(h.geom)*2<=ST_Area(p.analysis_geom)
 THEN ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))
 ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,p.precision_grid),0),10),2264)) END area_ft2) m
-WHERE ST_Area(p.geom)>0`, nil},
+WHERE ST_Area(p.geom)>0 AND m.area_ft2>0`, nil},
 		{"Check projected positive overlaps", precisionCheckSQL("qualification_zone_hits", "qualification_jurisdiction_hits", "h.acres IS NULL OR h.acres<=0 OR h.share<=0", "projected"), nil},
 	}
 	return runAssessmentSteps(ctx, tx, gen, statements)
