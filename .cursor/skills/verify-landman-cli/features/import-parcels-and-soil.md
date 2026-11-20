@@ -35,7 +35,7 @@ Preconditions:
 
 ## Gotchas
 
-- Soil runs before parcel fetch progress. `Fetch complete:` ends only parcel fetching, not derived refreshes. Quiet output is not proof of completion.
+- Soil runs before the parcel command. The parcel command prints nothing on stdout and does not print `[union_county_gis]` batch lines. Quiet output is not proof of completion. Derived screening and qualification still run after the source attempt.
 - The runner's two commands each have ten minutes. This does not verify the combined bare command's single ten-minute budget.
 - Quarantined parcel records can leave prior parcel values unchanged. `success_with_quarantine` is non-clean and stops that source's derived work.
 - A parcel command without an active soil set can publish parcels and then fail with pending screening. The seed alone does not supply an active soil set.

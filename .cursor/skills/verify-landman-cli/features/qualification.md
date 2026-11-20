@@ -67,6 +67,7 @@ Compare receipts with the client's scoped layer manifest. Require complete group
 
 ## Gotchas
 
+- `./landman run union.qualification.assess` waits up to 60 minutes, including the assessment lock. Scheduled and automatic assessments keep the 10-minute limit.
 - Live county-scale runtime and memory remain separate release gates. Fixture success cannot close them.
 - Road and zoning source data can be unavailable independently. Do not turn absent evidence into a favorable result.
 - The CLI GIS classifier checks soil and parcel publication, not qualification topology or freshness.

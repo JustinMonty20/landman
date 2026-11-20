@@ -7,11 +7,11 @@
 
 ## How to get to it (user POV)
 - At the repository root, run `make build`.
-- Set `DATABASE_URL` to the verify host URL in `SKILL.md`.
+- Set `DATABASE_URL` to the verify host URL in `live-gis.md`.
 - Set `UNION_PARCELS_CRON`, `UNION_SOIL_CRON`, `UNION_ZONING_CRON`, `UNION_ROADS_CRON`, and `UNION_QUALIFICATION_CRON`. Each value is `CRON_TZ=<zone>` plus five calendar fields.
 - Run `./landman schedule`. Stop only that process with `SIGTERM`.
 
-## Driving make and landman binary
+## Driving it with make and the landman binary
 Preconditions:
 - The verify database exists and all current migrations have been applied.
 - `./landman` exists after `make build`.

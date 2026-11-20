@@ -85,3 +85,23 @@ Did not run `./landman run union.gis.parcels` or `./landman run union.gis.soil`.
 ## Live proof
 
 On 2026-11-15 at 11:13:08Z, bare `./landman` against `landman-verify-postgis` fetched 118202 parcel records in 1m0s. Stdout was empty. `union.gis.parcels` and `union.gis.soil` recorded `full_scan` `success` with zero quarantine. `union.soil.screening` recorded `interrupted` at 11:23:08Z with `timeout: context deadline exceeded`. Probe pages were 510 ms and 969 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. `./landman reprocess union.gis.parcels --limit 1` then exited 0 with empty output and no parcel fetch. Its parcel attempt was `reprocess` `success` with processed 0, and screening recorded `success`. Evidence is `artifacts/verify/20261115T111044-10364`, which is gitignored.
+
+## Out-of-scope decision
+
+Edited `.cursor/skills/verify-landman-cli` because `04306a0` moved the feature map, seed, and launch out of `.cursor/skills/verify-landman`. That directory is now the router. The corrections belong in the map.
+
+## Out-of-scope decision
+
+Did not refresh `seed.sql`. After migrate to version 41, `check-schema` printed `schema: ok` and `check-loaded` printed `loaded: ok` for 36 parcels, 18 vacant and 18 built. The capture header is still 2026-11-14T23:06:21Z.
+
+## Out-of-scope decision
+
+Did not drive `union.gis.zoning`, `union.gis.roads`, `union.fema`, `union.gis.structures`, `union.gis.assessed_value`, or `replay`. This pass keeps one GIS journey, soil then parcels. The usage line now names the undriven commands. No new feature file without a live drive.
+
+## Product gap
+
+On 2026-11-20, `./landman run union.gis.parcels` against `landman-verify-postgis` committed `full_scan` `success` with processed 118204, then `union.soil.screening` recorded `interrupted` at the 10-minute deadline with `soil assessment map unit areas: timeout: context deadline exceeded`. Stderr also printed a Postgres dial timeout on that same cancelled context. Probe pages were 437 ms and 910 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. An empty `reprocess --limit 1` then finished screening and qualification. This pass does not change product code. Evidence is `artifacts/verify/20261120T035159Z-4781`, which is gitignored.
+
+## Out-of-scope decision
+
+`cursor-team-kit` `deslop` is not installed here. The helper tests and the live drive are the checks.
