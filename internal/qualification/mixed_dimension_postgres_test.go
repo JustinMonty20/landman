@@ -26,15 +26,18 @@ func TestReconcileMixedDimensionSourceContacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	const x, y = -8950000, 4180000
-	parcelShapes := []string{
-		"POLYGON((0 0,30 0,30 15,0 15,0 0))",
-		"POLYGON((1 6,5 6,5 9,1 9,1 6))",
-		"POLYGON((50 0,60 0,60 15,50 15,50 0))",
-		"POLYGON((40 0,50 0,50 15,40 15,40 0))",
+	parcelShapes := []struct{ name, wkt string }{
+		{"conflict", "POLYGON((0 0,30 0,30 15,0 15,0 0))"},
+		{"same-pair", "POLYGON((1 6,5 6,5 9,1 9,1 6))"},
+		{"touching", "POLYGON((50 0,60 0,60 15,50 15,50 0))"},
+		{"same-zone", "POLYGON((40 0,50 0,50 15,40 15,40 0))"},
+		{"missing-code", "POLYGON((100 0,130 0,130 10,100 10,100 0))"},
+		{"coarse-grid", "POLYGON((200 0,220 0,220 10,200 10,200 0))"},
+		{"fine-grid", "POLYGON((200 20,210.0000002 20,210.0000002 30,200 30,200 20))"},
 	}
 	parcels := make([]string, len(parcelShapes))
-	for i, wkt := range parcelShapes {
-		if err := pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,shape) VALUES('union','union','union_county_gis',$1,ST_Translate(ST_GeomFromText($2,3857),$3,$4)) RETURNING id::text`, t.Name()+[]string{"-conflict", "-same-pair", "-touching", "-same-zone"}[i], wkt, x, y).Scan(&parcels[i]); err != nil {
+	for i, p := range parcelShapes {
+		if err := pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,shape) VALUES('union','union','union_county_gis',$1,ST_Translate(ST_GeomFromText($2,3857),$3,$4)) RETURNING id::text`, t.Name()+"-"+p.name, p.wkt, x, y).Scan(&parcels[i]); err != nil {
 			t.Fatal(err)
 		}
 		parcel := parcels[i]
@@ -60,6 +63,15 @@ SELECT $1,190,$2,3857,g,g,'original',0,'Union',$3 FROM (SELECT ST_Multi(ST_Trans
 SELECT $1,195,$2,3857,g,g,'original',0,$3 FROM (SELECT ST_Multi(ST_Translate(ST_GeomFromText($4,3857),$5,$6)) g) s`, gen, id, string(rune('A'+i)), wkt, x, y); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2,jurisdiction,district_code)
+SELECT $1,190,source_id,3857,g,g,'original',0,'Union',code FROM (VALUES
+(5,NULL::text,ST_Multi(ST_MakeEnvelope($2::float8+100,$3::float8,$2+120,$3+10,3857))),
+(6,'A',ST_Multi(ST_MakeEnvelope($2+110,$3,$2+130,$3+10,3857))),
+(7,'A',ST_Multi(ST_MakeEnvelope($2+200,$3,$2+210.0000002,$3+30,3857))),
+(8,'B',ST_Multi(ST_MakeEnvelope($2+210,$3,$2+220,$3+30,3857)))
+) zones(source_id,code,g)`, gen, float64(x), float64(y)); err != nil {
+		t.Fatal(err)
 	}
 	var kind string
 	var polygonArea, lineLength, expectedAcres float64
@@ -90,11 +102,25 @@ FROM (SELECT ST_Translate(ST_GeomFromText('POLYGON((0 5,10 5,10 10,0 10,0 5))',3
 	if err != nil || !sharedPair.Available || len(sharedPair.Zones) != 2 || math.Abs(sharedPair.AmbiguousAcres-expectedAcres) > 1e-8 {
 		t.Fatalf("same source pair must cover only this parcel: %+v err=%v expected acres=%g", sharedPair, err, expectedAcres)
 	}
-	for _, parcel := range parcels[2:] {
+	for _, parcel := range parcels[2:4] {
 		independent, err := CurrentZoning(ctx, pool, parcel)
 		if err != nil || !independent.Available || independent.Freshness.Stale || independent.Split || len(independent.Zones) != 1 || len(independent.Jurisdictions) != 1 ||
 			independent.Zones[0].SourceID != 3 || independent.Jurisdictions[0].SourceID != 3 || independent.AmbiguousAcres != 0 || independent.JurisdictionAmbiguousAcres != 0 || independent.UnmappedAcres != 0 || independent.JurisdictionUnmappedAcres != 0 {
 			t.Fatalf("parcel fully covered by the shared zone: %+v err=%v", independent, err)
+		}
+	}
+	if err := pool.QueryRow(ctx, `SELECT ST_Area(ST_Transform(ST_Segmentize(shape,10),2264))/43560
+FROM qualification_zones WHERE generation_id=$1 AND source_id=5`, gen).Scan(&expectedAcres); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := CurrentZoning(ctx, pool, parcels[4])
+	if err != nil || !missing.Available || len(missing.Zones) != 2 || math.Abs(missing.AmbiguousAcres-expectedAcres) > 1e-8 {
+		t.Fatalf("missing-code area must include its overlap only once: %+v err=%v expected acres=%g", missing, err, expectedAcres)
+	}
+	for i, parcel := range parcels[5:] {
+		zoning, err := CurrentZoning(ctx, pool, parcel)
+		if err != nil || !zoning.Available || len(zoning.Zones) != 2 || (zoning.AmbiguousAcres > 0) != (i == 1) {
+			t.Fatalf("%s: source pair must use the parcel precision: %+v err=%v", parcelShapes[i+5].name, zoning, err)
 		}
 	}
 	if n, err := store.Reconcile(ctx); err != nil || n != 0 {

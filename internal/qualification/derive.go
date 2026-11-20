@@ -29,19 +29,20 @@ func runAssessmentSteps(ctx context.Context, tx pgx.Tx, gen string, steps []asse
 
 func (s Store) reconcileZoning(ctx context.Context, tx pgx.Tx, gen, method string) error {
 	initial := []assessmentStep{
-		// Reduce precision once per zone. Use the original shape for candidate matching and raw area checks.
+		// Match original shapes before testing the reduced clips for collapse.
 		{"Find zoning overlaps", `CREATE TEMP TABLE qualification_zone_sources ON COMMIT DROP AS
  WITH zones AS MATERIALIZED (
  SELECT layer_id,source_id,jurisdiction,district_code,shape,ST_ReducePrecision(shape,0.000001) geom
  FROM qualification_zones WHERE generation_id=$1 AND shape IS NOT NULL
  )
  SELECT p.id parcel_id,z.layer_id,z.source_id,z.jurisdiction,z.district_code,z.geom,
- ST_Area(ST_CollectionExtract(ST_Intersection(p.shape,z.shape),3)) original_area
+ NULL::double precision original_area
  FROM zones z CROSS JOIN LATERAL
- (SELECT id,shape FROM qualification_targets WHERE shape && z.shape AND geom IS NOT NULL AND ST_Intersects(shape,z.shape) OFFSET 0) p`, []any{gen}},
+ (SELECT id FROM qualification_targets WHERE shape && z.shape AND geom IS NOT NULL AND ST_Intersects(shape,z.shape) OFFSET 0) p`, []any{gen}},
 		{"Clip zones to parcels", `CREATE TEMP TABLE qualification_zone_shapes ON COMMIT DROP AS
  SELECT s.parcel_id,s.layer_id,s.source_id,s.jurisdiction,s.district_code,
- ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,p.precision_grid),3) geom
+ CASE WHEN ST_Covers(s.geom,p.analysis_geom) THEN p.analysis_geom
+ ELSE ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,p.precision_grid),3) END geom
  FROM qualification_zone_sources s JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
 		{"Find jurisdiction overlaps", `CREATE TEMP TABLE qualification_jurisdiction_sources ON COMMIT DROP AS
 WITH jurisdictions AS MATERIALIZED (
@@ -49,13 +50,15 @@ WITH jurisdictions AS MATERIALIZED (
  FROM qualification_jurisdictions WHERE generation_id=$1 AND shape IS NOT NULL
 )
 SELECT p.id parcel_id,j.layer_id,j.source_id,j.name,j.geom,
-ST_Area(ST_CollectionExtract(ST_Intersection(p.shape,j.shape),3)) original_area
+NULL::double precision original_area
 FROM jurisdictions j CROSS JOIN LATERAL
-(SELECT id,shape FROM qualification_targets WHERE shape && j.shape AND geom IS NOT NULL AND ST_Intersects(shape,j.shape) OFFSET 0) p`, []any{gen}},
+(SELECT id FROM qualification_targets WHERE shape && j.shape AND geom IS NOT NULL AND ST_Intersects(shape,j.shape) OFFSET 0) p`, []any{gen}},
 		{"Clip jurisdictions to parcels", `CREATE TEMP TABLE qualification_jurisdiction_shapes ON COMMIT DROP AS
 SELECT s.parcel_id,s.layer_id,s.source_id,s.name,
-ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,p.precision_grid),3) geom
+CASE WHEN ST_Covers(s.geom,p.analysis_geom) THEN p.analysis_geom
+ELSE ST_CollectionExtract(ST_Intersection(p.analysis_geom,s.geom,p.precision_grid),3) END geom
 FROM qualification_jurisdiction_sources s JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
+		{"Calculate raw areas for initial collapsed clips", rawAreaSQL("initial"), []any{gen}},
 		{"Register precision retry evidence", `CREATE TEMP TABLE qualification_precision_retry ON COMMIT DROP AS
 SELECT p.id parcel_id,'parcel'::text source_group,NULL::integer layer_id,NULL::bigint source_id,ST_Area(p.shape) original_area,'source'::text failure
 FROM qualification_targets p WHERE p.shape IS NOT NULL AND ST_Area(p.shape)>0 AND ST_Area(p.analysis_geom)=0
@@ -130,69 +133,34 @@ JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
 		if err := runAssessmentSteps(ctx, tx, gen, retry); err != nil {
 			return err
 		}
+		if err := runAssessmentSteps(ctx, tx, gen, []assessmentStep{{"Calculate raw areas after fine retry", rawAreaSQL("clipped"), []any{gen}}}); err != nil {
+			return err
+		}
 		if err := retryWithoutGrid(ctx, tx, gen); err != nil {
 			return err
 		}
 	}
 	statements := []assessmentStep{
+		{"Calculate raw areas for clipped validation", rawAreaSQL("clipped"), []any{gen}},
 		{"Check clipped positive overlaps", precisionCheckSQL("qualification_zone_shapes", "qualification_jurisdiction_shapes", "h.geom IS NULL OR ST_Area(h.geom)<=0", "clipped"), nil},
 		{"Remove zero-area zone overlaps", `DELETE FROM qualification_zone_shapes WHERE ST_Area(geom)=0`, nil},
 		{"Index zone overlaps", `CREATE INDEX ON qualification_zone_shapes(parcel_id)`, nil},
 		{"Analyze zone overlaps", `ANALYZE qualification_zone_shapes`, nil},
-		{"Calculate zoning coverage", `CREATE TEMP TABLE qualification_coverage ON COMMIT DROP AS
- SELECT s.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_UnaryUnion(ST_Collect(s.geom),p.precision_grid),p.precision_grid),3) geom
- FROM qualification_zone_sources s JOIN qualification_targets p ON p.id=s.parcel_id GROUP BY s.parcel_id,p.analysis_geom,p.precision_grid`, nil},
 		{"Index zone source lookup", `CREATE INDEX ON qualification_zone_sources(parcel_id,layer_id,source_id)`, nil},
 		{"Analyze zone source lookup", `ANALYZE qualification_zone_sources`, nil},
-		{"Find zoning conflict parcel pairs", `CREATE TEMP TABLE qualification_zone_pair_parcels ON COMMIT DROP AS
-SELECT a.parcel_id,a.layer_id a_layer,a.source_id a_source,b.layer_id b_layer,b.source_id b_source,p.precision_grid
-FROM qualification_zone_sources a JOIN qualification_zone_sources b ON a.parcel_id=b.parcel_id
-JOIN qualification_targets p ON p.id=a.parcel_id
-WHERE (a.layer_id,a.source_id)<(b.layer_id,b.source_id)
-AND (a.jurisdiction,a.district_code) IS DISTINCT FROM (b.jurisdiction,b.district_code)`, nil},
-		// Within one generation, source keys and precision identify the source shapes.
-		{"Cache zoning conflict source pairs", `CREATE TEMP TABLE qualification_zone_pair_overlaps ON COMMIT DROP AS
-WITH representatives AS MATERIALIZED (
-SELECT DISTINCT ON (a_layer,a_source,b_layer,b_source,precision_grid)
-a_layer,a_source,b_layer,b_source,precision_grid,parcel_id
-FROM qualification_zone_pair_parcels
-ORDER BY a_layer,a_source,b_layer,b_source,precision_grid,parcel_id
-)
-SELECT r.a_layer,r.a_source,r.b_layer,r.b_source,r.precision_grid,
-ST_CollectionExtract(ST_Intersection(a.geom,b.geom,r.precision_grid),3) geom
-FROM representatives r
-JOIN qualification_zone_sources a ON (a.parcel_id,a.layer_id,a.source_id)=(r.parcel_id,r.a_layer,r.a_source)
-JOIN qualification_zone_sources b ON (b.parcel_id,b.layer_id,b.source_id)=(r.parcel_id,r.b_layer,r.b_source)
-WHERE a.geom && b.geom AND ST_Intersects(a.geom,b.geom)`, nil},
-		{"Index cached zoning conflicts", `CREATE INDEX ON qualification_zone_pair_overlaps(a_layer,a_source,b_layer,b_source,precision_grid)`, nil},
-		{"Analyze cached zoning conflicts", `ANALYZE qualification_zone_pair_overlaps`, nil},
-		{"Clip zoning conflicts to parcels", `CREATE TEMP TABLE qualification_zone_pair_clips ON COMMIT DROP AS
-SELECT k.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,o.geom,p.precision_grid),3) geom
-FROM qualification_zone_pair_parcels k
-JOIN qualification_zone_pair_overlaps o ON (o.a_layer,o.a_source,o.b_layer,o.b_source,o.precision_grid)=
-(k.a_layer,k.a_source,k.b_layer,k.b_source,k.precision_grid)
-JOIN qualification_targets p ON p.id=k.parcel_id
-WHERE NOT ST_IsEmpty(o.geom)`, nil},
-		{"Calculate zoning conflicts", `CREATE TEMP TABLE qualification_ambiguity ON COMMIT DROP AS
-SELECT conflicts.parcel_id,ST_UnaryUnion(ST_Collect(conflicts.geom),p.precision_grid) geom FROM (
-SELECT parcel_id,geom FROM qualification_zone_pair_clips
-UNION ALL SELECT parcel_id,geom FROM qualification_zone_shapes WHERE district_code IS NULL
-) conflicts JOIN qualification_targets p ON p.id=conflicts.parcel_id WHERE ST_Area(conflicts.geom)>0 GROUP BY conflicts.parcel_id,p.precision_grid`, nil},
+		{"Calculate zoning coverage", coverageSQL("qualification_zone", "qualification_coverage"), nil},
 		{"Remove zero-area jurisdiction overlaps", `DELETE FROM qualification_jurisdiction_shapes WHERE ST_Area(geom)=0`, nil},
 		{"Index jurisdiction overlaps", `CREATE INDEX ON qualification_jurisdiction_shapes(parcel_id)`, nil},
 		{"Analyze jurisdiction overlaps", `ANALYZE qualification_jurisdiction_shapes`, nil},
-		{"Calculate jurisdiction coverage", `CREATE TEMP TABLE qualification_jurisdiction_coverage ON COMMIT DROP AS
-SELECT s.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_UnaryUnion(ST_Collect(s.geom),p.precision_grid),p.precision_grid),3) geom
- FROM qualification_jurisdiction_sources s JOIN qualification_targets p ON p.id=s.parcel_id GROUP BY s.parcel_id,p.analysis_geom,p.precision_grid`, nil},
-		{"Calculate jurisdiction conflicts", `CREATE TEMP TABLE qualification_jurisdiction_conflicts ON COMMIT DROP AS
-SELECT pairs.parcel_id,ST_UnaryUnion(ST_Collect(pairs.geom),p.precision_grid) geom FROM (
-SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_CollectionExtract(ST_Intersection(a.geom,b.geom,p.precision_grid),3),p.precision_grid),3) geom
-FROM qualification_jurisdiction_sources a JOIN qualification_jurisdiction_sources b ON a.parcel_id=b.parcel_id
-JOIN qualification_targets p ON p.id=a.parcel_id AND
-(a.layer_id,a.source_id)<(b.layer_id,b.source_id) AND (a.layer_id,a.name) IS DISTINCT FROM (b.layer_id,b.name)
-WHERE a.geom && b.geom AND ST_Intersects(a.geom,b.geom)
-UNION ALL SELECT parcel_id,geom FROM qualification_jurisdiction_shapes WHERE name IS NULL OR name=''
-) pairs JOIN qualification_targets p ON p.id=pairs.parcel_id WHERE ST_Area(pairs.geom)>0 GROUP BY pairs.parcel_id,p.precision_grid`, nil},
+		{"Index jurisdiction source lookup", `CREATE INDEX ON qualification_jurisdiction_sources(parcel_id,layer_id,source_id)`, nil},
+		{"Analyze jurisdiction source lookup", `ANALYZE qualification_jurisdiction_sources`, nil},
+		{"Calculate jurisdiction coverage", coverageSQL("qualification_jurisdiction", "qualification_jurisdiction_coverage"), nil},
+	}
+	statements = append(statements, conflictSteps("zoning", "qualification_zone", "qualification_ambiguity",
+		"(a.jurisdiction,a.district_code) IS DISTINCT FROM (b.jurisdiction,b.district_code)", "district_code IS NULL")...)
+	statements = append(statements, conflictSteps("jurisdiction", "qualification_jurisdiction", "qualification_jurisdiction_conflicts",
+		"(a.layer_id,a.name) IS DISTINCT FROM (b.layer_id,b.name)", "name IS NULL OR name=''")...)
+	statements = append(statements, []assessmentStep{
 		{"Write zoning assessments", `INSERT INTO qualification_assessments(parcel_id,source_group,generation_id,geometry_fingerprint,method_version,total_acres,unmapped_acres,ambiguous_acres,jurisdiction_unmapped_acres,jurisdiction_ambiguous_acres,has_zone_conflict)
  SELECT p.id,'zoning',$1,p.fingerprint,$2,NULLIF(ST_Area(p.geom)/43560,0),
  CASE WHEN p.geom IS NULL THEN 0 ELSE ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(CASE WHEN c.geom IS NULL THEN p.analysis_geom ELSE ST_Difference(p.analysis_geom,c.geom,p.precision_grid) END,0),10),2264))/43560 END,
@@ -216,18 +184,57 @@ UNION ALL SELECT parcel_id,geom FROM qualification_jurisdiction_shapes WHERE nam
  FROM qualification_zone_shapes h JOIN qualification_targets p ON p.id=h.parcel_id
  CROSS JOIN LATERAL (SELECT CASE WHEN ST_Area(h.geom)*2<=ST_Area(p.analysis_geom)
  THEN ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))
- ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,p.precision_grid),0),10),2264)) END area_ft2) m
+ ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,p.precision_grid),0),10),2264)) END area_ft2 OFFSET 0) m
  WHERE ST_Area(p.geom)>0 AND m.area_ft2>0`, nil},
 		{"Write jurisdiction matches", `INSERT INTO qualification_jurisdiction_hits(parcel_id,layer_id,source_id,name,acres,share)
 SELECT h.parcel_id,h.layer_id,h.source_id,h.name,m.area_ft2/43560,m.area_ft2/ST_Area(p.geom)
 FROM qualification_jurisdiction_shapes h JOIN qualification_targets p ON p.id=h.parcel_id
 CROSS JOIN LATERAL (SELECT CASE WHEN ST_Area(h.geom)*2<=ST_Area(p.analysis_geom)
 THEN ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(h.geom,0),10),2264))
-ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,p.precision_grid),0),10),2264)) END area_ft2) m
+ELSE ST_Area(p.geom)-ST_Area(ST_Transform(ST_Segmentize(ST_Simplify(ST_Difference(p.analysis_geom,h.geom,p.precision_grid),0),10),2264)) END area_ft2 OFFSET 0) m
 WHERE ST_Area(p.geom)>0 AND m.area_ft2>0`, nil},
+		{"Calculate raw areas for projected validation", rawAreaSQL("projected"), []any{gen}},
 		{"Check projected positive overlaps", precisionCheckSQL("qualification_zone_hits", "qualification_jurisdiction_hits", "h.acres IS NULL OR h.acres<=0 OR h.share<=0", "projected"), nil},
-	}
+	}...)
 	return runAssessmentSteps(ctx, tx, gen, statements)
+}
+
+// rawAreaSQL materializes only missing source keys before touching retained raw geometry.
+// The parcel is the first overlay operand, matching the original discovery calculation.
+func rawAreaSQL(stage string) string {
+	predicate := "h.geom IS NULL OR ST_Area(h.geom)<=0"
+	hits := "shapes"
+	if stage == "initial" {
+		predicate = "ST_Area(s.geom)=0 OR " + predicate
+	}
+	if stage == "projected" {
+		predicate = "h.acres IS NULL OR h.acres<=0 OR h.share<=0"
+		hits = "hits"
+	}
+	return fmt.Sprintf(`WITH zone_missing AS MATERIALIZED (
+SELECT s.parcel_id,s.layer_id,s.source_id FROM qualification_zone_sources s
+LEFT JOIN qualification_zone_%s h USING(parcel_id,layer_id,source_id)
+WHERE s.original_area IS NULL AND (%s)
+), jurisdiction_missing AS MATERIALIZED (
+SELECT s.parcel_id,s.layer_id,s.source_id FROM qualification_jurisdiction_sources s
+LEFT JOIN qualification_jurisdiction_%s h USING(parcel_id,layer_id,source_id)
+WHERE s.original_area IS NULL AND (%s)
+), zone_area AS MATERIALIZED (
+SELECT m.parcel_id,m.layer_id,m.source_id,
+ST_Area(ST_CollectionExtract(ST_Intersection(p.shape,z.shape),3)) area
+FROM zone_missing m JOIN qualification_targets p ON p.id=m.parcel_id
+JOIN qualification_zones z ON z.generation_id=$1 AND z.layer_id=m.layer_id AND z.source_id=m.source_id
+), jurisdiction_area AS MATERIALIZED (
+SELECT m.parcel_id,m.layer_id,m.source_id,
+ST_Area(ST_CollectionExtract(ST_Intersection(p.shape,j.shape),3)) area
+FROM jurisdiction_missing m JOIN qualification_targets p ON p.id=m.parcel_id
+JOIN qualification_jurisdictions j ON j.generation_id=$1 AND j.layer_id=m.layer_id AND j.source_id=m.source_id
+), zones_updated AS (
+UPDATE qualification_zone_sources s SET original_area=a.area FROM zone_area a
+WHERE (s.parcel_id,s.layer_id,s.source_id)=(a.parcel_id,a.layer_id,a.source_id)
+)
+UPDATE qualification_jurisdiction_sources s SET original_area=a.area FROM jurisdiction_area a
+WHERE (s.parcel_id,s.layer_id,s.source_id)=(a.parcel_id,a.layer_id,a.source_id)`, hits, predicate, hits, predicate)
 }
 
 // PostGIS uses floating-point overlay when gridSize is -1. This preserves
@@ -316,16 +323,7 @@ END $$`, zones, missing, jurisdictions, missing, stage)
 }
 
 func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string) error {
-	statements := []assessmentStep{
-		{"Calculate distances to Road Centerlines", `CREATE TEMP TABLE qualification_distances ON COMMIT DROP AS
- SELECT p.id parcel_id,r.source_id,r.name,r.road_class,r.status,
- CASE WHEN ST_Intersects(p.shape,r.shape) THEN 0 ELSE ST_Distance(p.geom,ST_Transform(ST_Segmentize(r.shape,10),2264)) END feet
- FROM qualification_targets p CROSS JOIN LATERAL (
- SELECT source_id,name,road_class,status,shape FROM qualification_roads
- WHERE generation_id=$1 AND p.geom IS NOT NULL AND ST_Area(p.geom)>0
- AND shape && ST_Expand(p.shape,8000)
- AND ST_DWithin(p.shape,shape,8000) OFFSET 0
- ) r`, []any{gen}},
+	statements := append(roadDistanceSteps(gen), []assessmentStep{
 		{"Remove roads outside the search radius", `DELETE FROM qualification_distances WHERE feet>5280`, nil},
 		{"Index road distances", `CREATE INDEX ON qualification_distances(parcel_id)`, nil},
 		{"Analyze road distances", `ANALYZE qualification_distances`, nil},
@@ -348,6 +346,6 @@ func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string
  SELECT d.parcel_id,d.source_id,d.name,d.road_class,d.status,d.feet
  FROM qualification_distances d JOIN qualification_assessments a ON a.parcel_id=d.parcel_id AND a.source_group='roads'
  WHERE d.feet <= a.road_distance_feet+0.01`, nil},
-	}
+	}...)
 	return runAssessmentSteps(ctx, tx, gen, statements)
 }

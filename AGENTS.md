@@ -113,7 +113,8 @@ When the operator corrects you ("wrong," "no, do X," restated intent), classify:
 
 ## Scope Discipline
 
-- Don't expand scope. Log tangents to the diary (what, why, where).
+- Keep implementation within the requested scope. Log unrelated findings in the diary.
+- For performance work, examine adjacent stages in the same pipeline. Rank slow stages with timings when available. Mark stages without timings as unmeasured and give the next check. A narrow code change does not limit this investigation.
 - When the operator asks for a PR with the current updates, include every current working-tree change unless the operator excludes it explicitly.
 - When the operator asks for Poteto mode on a code change, finish the Opening a PR step before reporting the change complete. If a PR cannot be created, name the exact blocker; do not report local tests as a PR handoff.
 
