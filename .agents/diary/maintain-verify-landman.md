@@ -145,3 +145,11 @@ Did not edit `docs/union-qualification-verification.md`. It still says zoning me
 ## Out-of-scope decision
 
 `cmd/owner-label-backfill` prints a stored-parcel classification count and does not fetch the county. The router selects the CLI skill for it. This pass does not add a feature file for it.
+
+## Out-of-scope decision
+
+Did not edit `docs/union-jobs.md`. The scheduler section says to set both calendar expressions, while `cmd/landman/main.go` requires five. The same section says a clean parcel run always screens. A parcel command screens only when stored screening is due.
+
+## Out-of-scope decision
+
+Edited the bare-command paragraph in `verify-landman-tax` because the CLI map sends `./landman` with no arguments there. That paragraph still said the combined process has one ten-minute deadline and listed only parcels, soil, screening, and tax. The command checks the three FEMA paths before it opens the database, then gives each later step its own ten minutes. This pass did not run that full command.

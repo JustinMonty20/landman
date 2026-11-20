@@ -16,7 +16,7 @@ The isolated GIS journey runs soil first and parcels second. A clean soil comman
 - Use `./landman run union.gis.soil` and then `./landman run union.gis.parcels` with the isolated host database URL.
 - Use `./landman run union.soil.screening` to screen stored soil only.
 - Use `./landman reprocess union.gis.parcels --limit N` to repair at most `N` pending records. A successful repair also refreshes derived evidence.
-- Use `verify-landman-tax` for bare `./landman`. That path also requires four manual tax files.
+- Use `verify-landman-tax` for bare `./landman`. That command requires the five tax inputs and the three FEMA paths named in `live-gis.md`.
 
 ## Driving it with make and the landman binary
 
