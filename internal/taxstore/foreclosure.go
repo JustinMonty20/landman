@@ -77,7 +77,7 @@ file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now()
 			err = tx.QueryRow(ctx, `SELECT id::text FROM tax_foreclosure_cases WHERE county_id=$1 AND source_name=$2 AND ((case_number=$3 AND case_number IS NOT NULL) OR (case_number IS NULL AND $3::text IS NULL AND parcel_set_sha256=$4 AND legal_sha256=$5))`, county.Union, meta.Name, identity.number, identity.pinHash[:], identity.legalHash[:]).Scan(&caseID)
 		}
 		if err != nil {
-			return result, fmt.Errorf("save foreclosure case: %w", err)
+			return result, fmt.Errorf("save foreclosure case number=%q parcel_set_sha256=%x: %w", sale.CaseNumber, identity.pinHash, err)
 		}
 		result.SavedCases++
 		seenCases = append(seenCases, caseID)
@@ -90,7 +90,7 @@ file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now()
 				continue
 			}
 			if err != nil {
-				return result, fmt.Errorf("lookup foreclosure parcel: %w", err)
+				return result, fmt.Errorf("lookup foreclosure parcel PIN %q (case_id=%s): %w", pin.ParcelKey, caseID, err)
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO tax_foreclosure_parcels (case_id,parcel_id,tax_value,situs_line,legal_description)
 VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
@@ -98,7 +98,7 @@ VALUES ($1,$2,$3,$4,$5) ON CONFLICT (case_id,parcel_id) DO UPDATE SET
  legal_description=EXCLUDED.legal_description,updated_at=now() WHERE (tax_foreclosure_parcels.tax_value,tax_foreclosure_parcels.situs_line,tax_foreclosure_parcels.legal_description) IS DISTINCT FROM (EXCLUDED.tax_value,EXCLUDED.situs_line,EXCLUDED.legal_description)`, caseID, parcelID,
 				foreclosureDollars(pin.TaxValue), foreclosureNullable(pin.SitusLine), foreclosureNullable(pin.LegalDescription))
 			if err != nil {
-				return result, fmt.Errorf("save foreclosure parcel: %w", err)
+				return result, fmt.Errorf("save foreclosure parcel PIN %q (parcel_id=%s, case_id=%s): %w", pin.ParcelKey, parcelID, caseID, err)
 			}
 			result.SavedJoins++
 			matched = append(matched, parcelID)

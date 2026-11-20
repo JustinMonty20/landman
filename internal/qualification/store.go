@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/connector/union"
@@ -12,7 +13,7 @@ import (
 )
 
 const (
-	ZoningMethod = "stored-overlay-measured/5; EPSG:3857 grid=0.000001m retry=0.0000001m; EPSG:2264 acres=ftUS^2/43560"
+	ZoningMethod = "stored-overlay-measured/4; EPSG:3857 grid=0.000001m; EPSG:2264 acres=ftUS^2/43560"
 	RoadsMethod  = "stored-nearest-measured/3; EPSG:2264; radius=5280ft; ties<=0.01ft"
 	maxSourceAge = 90 * 24 * time.Hour
 )
@@ -81,7 +82,7 @@ func (s Store) refresh(ctx context.Context, source *union.GISSource, group strin
 		var receipt union.QualificationReceipt
 		receipt, err = source.FetchQualificationLayer(ctx, id, func(f union.QualificationFeature) error { return s.insertFeature(ctx, gen, f) })
 		if err != nil {
-			return processed, fmt.Errorf("qualification layer %d: %w", id, err)
+			return processed, err
 		}
 		if id == 221 && receipt.Count == 0 {
 			return processed, errors.New("county boundary is empty")
@@ -187,57 +188,66 @@ func (s Store) Reconcile(ctx context.Context) (int, error) {
 }
 
 func (s Store) reconcileOne(ctx context.Context, group, method string) (int, error) {
+	name := "Zoning and jurisdictions"
+	if group == union.QualificationRoads {
+		name = "Road Centerlines"
+	}
+	log.Printf("[union.qualification.assess] %s: Find active generation", name)
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("begin assessment transaction: %w", err)
 	}
 	defer tx.Rollback(context.Background())
 	var gen string
 	err = tx.QueryRow(ctx, `SELECT generation_id::text FROM qualification_heads WHERE source_group=$1 FOR SHARE`, group).Scan(&gen)
 	if errors.Is(err, pgx.ErrNoRows) {
+		log.Printf("[union.qualification.assess] %s: No active generation; skip", name)
 		return 0, nil
 	}
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("read active generation: %w", err)
 	}
+	log.Printf("[union.qualification.assess] %s generation=%s: Find parcels that need assessment", name, gen)
 	count, err := s.reconcileGroup(ctx, tx, group, method, gen)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%s generation=%s: %w", name, gen, err)
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%s generation=%s: commit assessments: %w", name, gen, err)
 	}
+	log.Printf("[union.qualification.assess] %s generation=%s: Committed assessments for %d parcels", name, gen, count)
 	return count, nil
 }
 
 func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen string) (int, error) {
 	rows, err := tx.Query(ctx, `SELECT p.id FROM parcels p LEFT JOIN qualification_assessments a ON a.parcel_id=p.id AND a.source_group=$1 WHERE p.county_id='union' AND (a.parcel_id IS NULL OR a.generation_id<>$2 OR a.method_version<>$3 OR a.geometry_fingerprint IS DISTINCT FROM COALESCE(md5(ST_AsEWKB(p.shape)),'missing') OR ($1='roads' AND a.boundary_generation_id IS DISTINCT FROM (SELECT generation_id FROM qualification_heads WHERE source_group='zoning'))) FOR SHARE OF p`, group, gen, method)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("select parcel targets: %w", err)
 	}
 	ids := []string{}
 	for rows.Next() {
 		var id string
 		if err = rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, fmt.Errorf("decode parcel target: %w", err)
 		}
 		ids = append(ids, id)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("read parcel targets: %w", err)
 	}
+	log.Printf("[union.qualification.assess] generation=%s: %d parcels need assessment", gen, len(ids))
 	if len(ids) == 0 {
 		return 0, nil
 	}
 	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE qualification_targets ON COMMIT DROP AS SELECT id,shape,COALESCE(md5(ST_AsEWKB(shape)),'missing') fingerprint,CASE WHEN shape IS NOT NULL AND ST_IsValid(shape) THEN ST_CollectionExtract(ST_Transform(ST_Segmentize(ST_Simplify(shape,0),10),2264),3) END geom,CASE WHEN $2='zoning' AND shape IS NOT NULL AND ST_IsValid(shape) THEN ST_ReducePrecision(shape,0.000001) END analysis_geom,CASE WHEN $2='zoning' THEN 0.000001::float8 END precision_grid FROM parcels WHERE id=ANY($1::uuid[])`, ids, group); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("prepare geometry for %d parcel targets: %w", len(ids), err)
 	}
 	for _, sql := range []string{`CREATE UNIQUE INDEX ON qualification_targets(id)`, `CREATE INDEX ON qualification_targets USING GIST(shape)`, `ANALYZE qualification_targets`} {
 		if _, err = tx.Exec(ctx, sql); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("index or analyze parcel targets: %w", err)
 		}
 	}
 	if group == union.QualificationZoning {
@@ -249,7 +259,7 @@ func (s Store) reconcileGroup(ctx context.Context, tx pgx.Tx, group, method, gen
 		return 0, err
 	}
 	if _, err = tx.Exec(ctx, `DROP TABLE qualification_targets`); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("remove temporary parcel targets: %w", err)
 	}
 	return len(ids), nil
 }

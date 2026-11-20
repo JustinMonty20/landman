@@ -3,6 +3,7 @@ package union
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/JustinMonty20/landman/internal/soil"
@@ -45,6 +46,7 @@ func (s *GISSource) CaptureSoilPolygons(ctx context.Context, save func(string, [
 		return nil, nil, fmt.Errorf("soil response missing non-negative integer count")
 	}
 
+	log.Printf("[union.gis.soil] Soil Polygons (layer 197): %d source records", count)
 	var polygons []soil.Polygon
 	var units []soil.MapUnit
 	seen := make(map[string]bool)
@@ -89,6 +91,7 @@ func (s *GISSource) CaptureSoilPolygons(ctx context.Context, save func(string, [
 		}
 		polygons = append(polygons, pagePolygons...)
 		units = append(units, pageUnits...)
+		log.Printf("[union.gis.soil] Soil Polygons (layer 197): captured %d/%d records", len(polygons), count)
 		if len(pagePolygons) < soilPageSize {
 			break
 		}

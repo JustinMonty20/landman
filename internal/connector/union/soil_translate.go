@@ -30,11 +30,11 @@ func ParseSoilFeature(data []byte) (soil.Polygon, soil.MapUnit, error) {
 	key := strings.TrimSpace(str(attrs, "MUKEY"))
 	symbol := strings.TrimSpace(str(attrs, "MUSYM"))
 	if key == "" || symbol == "" {
-		return soil.Polygon{}, soil.MapUnit{}, fmt.Errorf("soil feature missing MUKEY or MUSYM")
+		return soil.Polygon{}, soil.MapUnit{}, fmt.Errorf("soil OBJECTID_1 %d: missing MUKEY or MUSYM", objectID)
 	}
 	shape := geometryShape(feature)
 	if shape == nil {
-		return soil.Polygon{}, soil.MapUnit{}, fmt.Errorf("soil feature has no rings")
+		return soil.Polygon{}, soil.MapUnit{}, fmt.Errorf("soil OBJECTID_1 %d: no rings", objectID)
 	}
 	polygon := soil.Polygon{
 		County: county.Union, SourceName: "union_county_gis",
@@ -64,10 +64,10 @@ func ParseSoilFeatures(data []byte) ([]soil.Polygon, []soil.MapUnit, error) {
 	}
 	polygons := make([]soil.Polygon, 0, len(response.Features))
 	units := make([]soil.MapUnit, 0, len(response.Features))
-	for _, raw := range response.Features {
+	for i, raw := range response.Features {
 		polygon, unit, err := ParseSoilFeature(raw)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("soil page row %d: %w", i+1, err)
 		}
 		polygons = append(polygons, polygon)
 		units = append(units, unit)

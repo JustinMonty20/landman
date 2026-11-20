@@ -3,6 +3,7 @@ package vacancyjob
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/url"
@@ -103,14 +104,17 @@ func (p *publisher) prepareAssessmentRanges(ctx context.Context, capture ingest.
 		if err != nil || int64(len(features)) != n {
 			return errors.New("assessment partition page count mismatch")
 		}
-		for _, feature := range features {
+		for i, feature := range features {
 			oid, err := union.AssessmentObjectID(feature)
-			if err != nil || oid < lo || oid > hi {
-				return errors.New("assessment row outside partition")
+			if err != nil {
+				return fmt.Errorf("read assessment identity at partition %d–%d row %d: %w", lo, hi, i+1, err)
+			}
+			if oid < lo || oid > hi {
+				return fmt.Errorf("assessment OBJECTID %d outside partition %d–%d", oid, lo, hi)
 			}
 			row, err := parseAssessment(feature)
 			if err != nil {
-				return err
+				return fmt.Errorf("decode assessment OBJECTID %d at partition %d–%d row %d: %w", oid, lo, hi, i+1, err)
 			}
 			if row.ObjectID != strconv.FormatInt(oid, 10) {
 				return errors.New("assessment published OBJECTID differs from partition identity")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -116,7 +117,7 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 			return 0, responseErr
 		}
 		if layer == StructuresLayer && crs == 0 {
-			return 0, errors.New("structure response missing or invalid CRS")
+			return 0, fmt.Errorf("structure page at offset %d: missing or invalid CRS", offset)
 		}
 		features := gjson.GetBytes(body, "features")
 		expected := count.Int() - offset
@@ -124,15 +125,16 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 			expected = 2000
 		}
 		if gjson.GetBytes(body, "error").Exists() || !features.IsArray() || int64(len(features.Array())) != expected || gjson.GetBytes(body, "exceededTransferLimit").Bool() {
-			return 0, errors.New("vacancy page incomplete")
+			return 0, fmt.Errorf("vacancy page at offset %d incomplete: got %d rows, expected %d", offset, len(features.Array()), expected)
 		}
 		if layer == StructuresLayer {
 			for i, feature := range features.Array() {
 				v := feature.Get("attributes.OBJECTID")
 				if v.Type != gjson.Number || v.Raw != strconv.FormatInt(ids[int(offset)+i], 10) {
-					return 0, errors.New("structure source ID membership drift")
+					return 0, fmt.Errorf("structure source ID membership drift at offset %d, row %d (expected OBJECTID %d)", offset, i+1, ids[int(offset)+i])
 				}
 			}
+			log.Printf("[union.gis.structures] Structures (layer 171): checked %d/%d records", offset+expected, count.Int())
 		}
 	}
 	if layer == StructuresLayer {

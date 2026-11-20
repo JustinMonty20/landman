@@ -340,6 +340,7 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 
 func ingestFile(ctx context.Context, pool *pgxpool.Pool, store taxartifact.Store, dir, source, url, path string) (jobs.Result, error) {
 	var result jobs.Result
+	log.Printf("[union.tax] source=%s: Retain local input file", source)
 	recorder, err := ingest.NewRecorder(store, source, time.Now().UTC().Truncate(time.Microsecond))
 	if err != nil {
 		return result, err
