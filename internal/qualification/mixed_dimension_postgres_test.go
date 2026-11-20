@@ -26,12 +26,13 @@ func TestReconcileMixedDimensionSourceContacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	const x, y = -8950000, 4180000
-	parcels := make([]string, 2)
+	parcels := make([]string, 3)
 	for i, wkt := range []string{
 		"POLYGON((0 0,30 0,30 15,0 15,0 0))",
-		"POLYGON((40 0,60 0,60 15,40 15,40 0))",
+		"POLYGON((50 0,60 0,60 15,50 15,50 0))",
+		"POLYGON((40 0,50 0,50 15,40 15,40 0))",
 	} {
-		if err := pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,shape) VALUES('union','union','union_county_gis',$1,ST_Translate(ST_GeomFromText($2,3857),$3,$4)) RETURNING id::text`, t.Name()+[]string{"-conflict", "-independent"}[i], wkt, x, y).Scan(&parcels[i]); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,shape) VALUES('union','union','union_county_gis',$1,ST_Translate(ST_GeomFromText($2,3857),$3,$4)) RETURNING id::text`, t.Name()+[]string{"-conflict", "-touching", "-same-zone"}[i], wkt, x, y).Scan(&parcels[i]); err != nil {
 			t.Fatal(err)
 		}
 		parcel := parcels[i]
@@ -72,18 +73,20 @@ WHERE a.generation_id=$1 AND a.source_id=1 AND b.source_id=2) s`, gen).Scan(&kin
 FROM (SELECT ST_Translate(ST_GeomFromText('POLYGON((0 5,10 5,10 10,0 10,0 5))',3857),$1,$2) g) s`, x, y).Scan(&expectedAcres); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.Reconcile(ctx); err != nil || n != 2 {
-		t.Fatalf("reconcile both parcels: count=%d err=%v", n, err)
+	if n, err := store.Reconcile(ctx); err != nil || n != len(parcels) {
+		t.Fatalf("reconcile fixture parcels: count=%d err=%v", n, err)
 	}
 	conflict, err := CurrentZoning(ctx, pool, parcels[0])
 	if err != nil || !conflict.Available || conflict.Freshness.Stale || conflict.Split || len(conflict.Zones) != 2 || len(conflict.Jurisdictions) != 2 ||
 		math.Abs(conflict.AmbiguousAcres-expectedAcres) > 1e-8 || math.Abs(conflict.JurisdictionAmbiguousAcres-expectedAcres) > 1e-8 {
 		t.Fatalf("50m² mixed-contact conflict: %+v err=%v expected acres=%g", conflict, err, expectedAcres)
 	}
-	independent, err := CurrentZoning(ctx, pool, parcels[1])
-	if err != nil || !independent.Available || independent.Freshness.Stale || independent.Split || len(independent.Zones) != 1 || len(independent.Jurisdictions) != 1 ||
-		independent.Zones[0].SourceID != 3 || independent.Jurisdictions[0].SourceID != 3 || independent.AmbiguousAcres != 0 || independent.JurisdictionAmbiguousAcres != 0 || independent.UnmappedAcres != 0 || independent.JurisdictionUnmappedAcres != 0 {
-		t.Fatalf("unaffected parcel with edge-only neighbor: %+v err=%v", independent, err)
+	for _, parcel := range parcels[1:] {
+		independent, err := CurrentZoning(ctx, pool, parcel)
+		if err != nil || !independent.Available || independent.Freshness.Stale || independent.Split || len(independent.Zones) != 1 || len(independent.Jurisdictions) != 1 ||
+			independent.Zones[0].SourceID != 3 || independent.Jurisdictions[0].SourceID != 3 || independent.AmbiguousAcres != 0 || independent.JurisdictionAmbiguousAcres != 0 || independent.UnmappedAcres != 0 || independent.JurisdictionUnmappedAcres != 0 {
+			t.Fatalf("parcel fully covered by the shared zone: %+v err=%v", independent, err)
+		}
 	}
 	if n, err := store.Reconcile(ctx); err != nil || n != 0 {
 		t.Fatalf("clean replay: count=%d err=%v", n, err)
