@@ -6,6 +6,7 @@ Qualification jobs publish zoning and road generations and derive stored parcel 
 
 - `qualification-publication` checks complete-group publication and prior-head retention after failure.
 - `qualification-spatial` checks stored topology, gaps, conflicts, holes, and projected measurement limits.
+- `qualification-precision` checks a fine-grid miss, a retry that keeps the stored shapes, and an assessment failure that keeps the previous rows.
 - `qualification-refresh` checks source and parcel changes, stale evidence, independent group failures, and attempt ordering.
 - `qualification-locks` checks county-host exclusion, cooldown, cancellation, and lost sessions.
 
@@ -39,7 +40,7 @@ DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres \
   ./cmd/landman -count=1 -v
 ```
 
-Require the captured full stored replay, group publication/retirement, failed repair, stored-topology, long-edge distance, failure-order, and host-lock tests to execute. Save verbose output. Read `docs/union-qualification-verification.md` for the approximation limits; do not claim exact curved-edge measurements.
+Require the captured full stored replay, group publication/retirement, failed repair, stored-topology, long-edge distance, failure-order, host-lock, `TestPrecisionRetryPartition`, and `TestNoGridRetryPreservesSliverAndRollsBackOnFailure` tests to execute. Save verbose output. A positive overlap that the 0.0000001 m grid removes is retried from the stored parcel, zoning, and jurisdiction shapes with no coordinate grid. Stderr then contains `retry=no-grid`. If that retry still has no positive area or share, the assessment attempt fails and the previous assessment rows stay. The published source generation stays. Read `docs/union-qualification-verification.md` for the curved-edge approximation limits. Do not claim exact curved-edge measurements. Older paragraphs in that file still describe a two-grid stop and a generation rollback. Those sentences are not the current job.
 
 - Check the real no-source path in a new setup database, not the fixture database:
 

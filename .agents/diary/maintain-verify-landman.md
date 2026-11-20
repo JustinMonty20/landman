@@ -153,3 +153,15 @@ Did not edit `docs/union-jobs.md`. The scheduler section says to set both calend
 ## Out-of-scope decision
 
 Edited the bare-command paragraph in `verify-landman-tax` because the CLI map sends `./landman` with no arguments there. That paragraph still said the combined process has one ten-minute deadline and listed only parcels, soil, screening, and tax. The command checks the three FEMA paths before it opens the database, then gives each later step its own ten minutes. This pass did not run that full command.
+
+## Live proof
+
+On 2026-11-20 at 04:41:21Z, the seed still loaded after goose version 41. `check-schema` printed `schema: ok`. `check-loaded` printed 36 parcels, 18 vacant and 18 built. One `run-gis.sh` drive on `landman-verify-postgis` logged `Parcel capture page` and no `Batch` lines. Soil exited 0, including screening. The parcel command committed `full_scan` `success` with processed 118204, then screening recorded `interrupted` at that command's 10-minute deadline. Qualification on that failure printed `Wait for assessment lock` and did not print `Finished`. Probe pages were 481 ms and 947 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. Empty `reprocess --limit 1` exited 0 with no parcel capture line. Screening then finished in 4m32s. Evidence is `artifacts/verify/20261120T044121Z-5952`, which is gitignored.
+
+## Out-of-scope decision
+
+Did not edit `docs/union-qualification-verification.md`. Its older paragraphs still say a two-grid stop and a generation rollback. `TestPrecisionRetryPartition` and `TestNoGridRetryPreservesSliverAndRollsBackOnFailure` passed on `landman_tax_integration`. A fine-grid miss logs `retry=no-grid` and uses the stored shapes. A required hit that still has no positive area or share fails the assessment attempt and keeps the previous rows. The published generation stays. The map now says that. The doc stays out of this PR.
+
+## Out-of-scope decision
+
+`cursor-team-kit` `deslop` is not installed here. The live drive and the precision tests are the checks. Claude Opus and Sonnet were rejected for weekly quota, so the source readers ran on Grok.
