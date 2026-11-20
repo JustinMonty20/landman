@@ -51,7 +51,7 @@ docker exec "$VERIFY_CONTAINER" psql -X -U verify -d "$VERIFY_DB_NAME" \
   -c 'SELECT count(*) FROM qualification_heads; SELECT count(*) FROM qualification_assessments;'
 ```
 
-Require a successful assessment attempt and zero heads/assessments on this empty database. This proves the unavailable-source path, not county source completeness.
+Require a successful assessment attempt and zero heads and assessments on this empty database. The command does not read a parcel when no zoning or roads head exists. The unavailable-source result is a parcel read with no head, so this empty command does not prove that result.
 
 - Only with explicit live approval, use another fresh setup database populated with verified parcel inputs. Build the CLI, run zoning once, roads once, and assessment once. Capture each exit and query:
 

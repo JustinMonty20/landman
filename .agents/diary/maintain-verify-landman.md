@@ -105,3 +105,19 @@ On 2026-11-20, `./landman run union.gis.parcels` against `landman-verify-postgis
 ## Out-of-scope decision
 
 `cursor-team-kit` `deslop` is not installed here. The helper tests and the live drive are the checks.
+
+## Out-of-scope decision
+
+Did not edit `.cursor/skills/verify-landman-api`, `.cursor/skills/verify-landman-tax`, or `.cursor/skills/verify-landman-ui`. The sweep named `GET /api/v1/flood/map`, `GET /api/v1/qualification/map`, `GET /api/v1/parcels/{id}/flood`, `GET /api/v1/parcels/{id}/vacancy`, and `owner_labels` on the parcel read in `internal/parcelapi/api.go`, plus stored shapes on `ui/src/routes/+page.svelte` and the `/coverage` route. This pass did not drive those skills.
+
+## Out-of-scope decision
+
+Did not start a second GIS import after the assessment count joined `soil_screening_heads`. The helper test checks that join. The 2026-11-20 journey remains the one county drive.
+
+## Skipped refactor
+
+Did not rewrite `features/import-journey.md` into the four-heading contract. The drive followed `live-gis.md`.
+
+## Out-of-scope decision
+
+Left the journey sentence that screening and assessment print no lines. `internal/qualification/derive.go` logs step lines when a qualification head exists. Soil stderr on this drive was empty, and parcel stderr contained only the deadline.

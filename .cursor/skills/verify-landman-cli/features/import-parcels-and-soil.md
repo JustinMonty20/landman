@@ -1,6 +1,6 @@
 # Import parcels and soil
 
-The isolated GIS journey runs soil first and parcels second. Each successful source command screens stored soil and reconciles stored qualification data. Soil must run first because the seed has polygons but no active soil set. The combined bare command belongs to the tax skill.
+The isolated GIS journey runs soil first and parcels second. The soil command screens stored soil. The parcel command screens stored soil only when that screen is due. Both reconcile stored qualification data. Soil must run first because the seed has polygons but no active soil set. The combined bare command belongs to the tax skill.
 
 ## Sub-features
 

@@ -8,7 +8,7 @@ Select every skill that covers the changed user path. Default to small seeded da
 
 ## Select
 
-- Use [CLI verification](../verify-landman-cli/SKILL.md) for `cmd/landman`, parcel or soil ingestion, GIS, scheduler, qualification jobs, CLI migrations, and CLI storage.
+- Use [CLI verification](../verify-landman-cli/SKILL.md) for `cmd/landman`, `cmd/owner-label-backfill`, parcel or soil ingestion, GIS, scheduler, qualification jobs, CLI migrations, and CLI storage.
 - Use [tax verification](../verify-landman-tax/SKILL.md) for `union.tax`, manual tax-file inputs, tax artifacts, tax parsers, tax tables, and tax publication.
 - Use [API verification](../verify-landman-api/SKILL.md) for `cmd/api`, `internal/auth`, `internal/parcelapi`, API migrations, Google sign-in, sessions, and API routes.
 - Use [UI verification](../verify-landman-ui/SKILL.md) for `ui/`, SvelteKit, MapLibre, browser routing, browser authentication behavior, and Playwright tests.

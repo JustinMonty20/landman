@@ -57,7 +57,9 @@ FROM soil_screening_heads
 WHERE county_id = 'union' AND source_name = 'union_county_gis'
 UNION ALL
 SELECT 'assessments', count(*)::text
-FROM soil_parcel_assessments`
+FROM soil_parcel_assessments AS a
+JOIN soil_screening_heads AS h ON h.run_id = a.run_id
+WHERE h.county_id = 'union' AND h.source_name = 'union_county_gis'`
 
 func saleQuerySQL(ids []string) (string, error) {
 	array, err := sqlTextArray(ids)

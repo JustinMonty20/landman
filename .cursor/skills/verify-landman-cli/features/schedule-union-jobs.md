@@ -1,5 +1,5 @@
 # Schedule Union jobs
-`./landman schedule` waits until parcel, soil, zoning, road, and qualification calendars are due. At startup it reconciles stored qualification data without a county fetch. It does not import source data until a calendar is due. A due source runs through the job runner. Parcel and soil runs also screen the stored soil set and reconcile qualification data. There is no screening calendar.
+`./landman schedule` waits until parcel, soil, zoning, road, and qualification calendars are due. At startup it reconciles stored qualification data without a county fetch. It does not import source data until a calendar is due. A due source runs through the job runner. A soil run screens stored soil. A parcel run screens stored soil only when that screen is due. Both reconcile qualification data. There is no screening calendar.
 
 ## Sub-features
 - `schedule-env` rejects start when any required calendar is absent or invalid.
@@ -25,4 +25,4 @@ Preconditions:
 - A calendar without `CRON_TZ` and five fields exits 1 before the database opens. The error names the variable.
 - A calendar in `.env.example` can be due during a drive. Use a date that is not today, such as `CRON_TZ=UTC 0 0 1 1 *`, so the process does not fetch county data.
 - `SIGINT` and `SIGTERM` cancel the scheduler. Kill only that PID. Do not use `pkill landman`.
-- A due tick uses the same ten-minute deadline as a manual run and contacts the county. Do not use a calendar due now for this wait check.
+- A due parcel, soil, zoning, or road tick uses the ten-minute deadline and contacts the county. A due qualification tick stays at ten minutes and only reconciles stored rows. Do not use a calendar due now for this wait check.
