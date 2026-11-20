@@ -1,0 +1,2 @@
+- **Out of scope.** The jurisdiction conflict query has a similar overlay pattern. Leave it unchanged because this task measures zoning conflicts only.
+- **Out of scope.** Keep the local zoning coverage and job wiring changes in the original worktree. Measure and review the conflict change separately.

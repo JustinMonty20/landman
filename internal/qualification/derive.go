@@ -142,16 +142,42 @@ JOIN qualification_targets p ON p.id=s.parcel_id`, nil},
 		{"Calculate zoning coverage", `CREATE TEMP TABLE qualification_coverage ON COMMIT DROP AS
  SELECT s.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_UnaryUnion(ST_Collect(s.geom),p.precision_grid),p.precision_grid),3) geom
  FROM qualification_zone_sources s JOIN qualification_targets p ON p.id=s.parcel_id GROUP BY s.parcel_id,p.analysis_geom,p.precision_grid`, nil},
+		{"Index zone source lookup", `CREATE INDEX ON qualification_zone_sources(parcel_id,layer_id,source_id)`, nil},
+		{"Analyze zone source lookup", `ANALYZE qualification_zone_sources`, nil},
+		{"Find zoning conflict parcel pairs", `CREATE TEMP TABLE qualification_zone_pair_parcels ON COMMIT DROP AS
+SELECT a.parcel_id,a.layer_id a_layer,a.source_id a_source,b.layer_id b_layer,b.source_id b_source,p.precision_grid
+FROM qualification_zone_sources a JOIN qualification_zone_sources b ON a.parcel_id=b.parcel_id
+JOIN qualification_targets p ON p.id=a.parcel_id
+WHERE (a.layer_id,a.source_id)<(b.layer_id,b.source_id)
+AND (a.jurisdiction,a.district_code) IS DISTINCT FROM (b.jurisdiction,b.district_code)`, nil},
+		// Within one generation, source keys and precision identify the source shapes.
+		{"Cache zoning conflict source pairs", `CREATE TEMP TABLE qualification_zone_pair_overlaps ON COMMIT DROP AS
+WITH representatives AS MATERIALIZED (
+SELECT DISTINCT ON (a_layer,a_source,b_layer,b_source,precision_grid)
+a_layer,a_source,b_layer,b_source,precision_grid,parcel_id
+FROM qualification_zone_pair_parcels
+ORDER BY a_layer,a_source,b_layer,b_source,precision_grid,parcel_id
+)
+SELECT r.a_layer,r.a_source,r.b_layer,r.b_source,r.precision_grid,
+ST_CollectionExtract(ST_Intersection(a.geom,b.geom,r.precision_grid),3) geom
+FROM representatives r
+JOIN qualification_zone_sources a ON (a.parcel_id,a.layer_id,a.source_id)=(r.parcel_id,r.a_layer,r.a_source)
+JOIN qualification_zone_sources b ON (b.parcel_id,b.layer_id,b.source_id)=(r.parcel_id,r.b_layer,r.b_source)
+WHERE a.geom && b.geom AND ST_Intersects(a.geom,b.geom)`, nil},
+		{"Index cached zoning conflicts", `CREATE INDEX ON qualification_zone_pair_overlaps(a_layer,a_source,b_layer,b_source,precision_grid)`, nil},
+		{"Analyze cached zoning conflicts", `ANALYZE qualification_zone_pair_overlaps`, nil},
+		{"Clip zoning conflicts to parcels", `CREATE TEMP TABLE qualification_zone_pair_clips ON COMMIT DROP AS
+SELECT k.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,o.geom,p.precision_grid),3) geom
+FROM qualification_zone_pair_parcels k
+JOIN qualification_zone_pair_overlaps o ON (o.a_layer,o.a_source,o.b_layer,o.b_source,o.precision_grid)=
+(k.a_layer,k.a_source,k.b_layer,k.b_source,k.precision_grid)
+JOIN qualification_targets p ON p.id=k.parcel_id
+WHERE NOT ST_IsEmpty(o.geom)`, nil},
 		{"Calculate zoning conflicts", `CREATE TEMP TABLE qualification_ambiguity ON COMMIT DROP AS
- SELECT conflicts.parcel_id,ST_UnaryUnion(ST_Collect(conflicts.geom),p.precision_grid) geom FROM (
- SELECT a.parcel_id,ST_CollectionExtract(ST_Intersection(p.analysis_geom,ST_CollectionExtract(ST_Intersection(a.geom,b.geom,p.precision_grid),3),p.precision_grid),3) geom
- FROM qualification_zone_sources a JOIN qualification_zone_sources b ON a.parcel_id=b.parcel_id
- JOIN qualification_targets p ON p.id=a.parcel_id AND
- (a.layer_id,a.source_id)<(b.layer_id,b.source_id)
- WHERE (a.jurisdiction,a.district_code) IS DISTINCT FROM (b.jurisdiction,b.district_code)
- AND a.geom && b.geom AND ST_Intersects(a.geom,b.geom)
- UNION ALL SELECT parcel_id,geom FROM qualification_zone_shapes WHERE district_code IS NULL
- ) conflicts JOIN qualification_targets p ON p.id=conflicts.parcel_id WHERE ST_Area(conflicts.geom)>0 GROUP BY conflicts.parcel_id,p.precision_grid`, nil},
+SELECT conflicts.parcel_id,ST_UnaryUnion(ST_Collect(conflicts.geom),p.precision_grid) geom FROM (
+SELECT parcel_id,geom FROM qualification_zone_pair_clips
+UNION ALL SELECT parcel_id,geom FROM qualification_zone_shapes WHERE district_code IS NULL
+) conflicts JOIN qualification_targets p ON p.id=conflicts.parcel_id WHERE ST_Area(conflicts.geom)>0 GROUP BY conflicts.parcel_id,p.precision_grid`, nil},
 		{"Remove zero-area jurisdiction overlaps", `DELETE FROM qualification_jurisdiction_shapes WHERE ST_Area(geom)=0`, nil},
 		{"Index jurisdiction overlaps", `CREATE INDEX ON qualification_jurisdiction_shapes(parcel_id)`, nil},
 		{"Analyze jurisdiction overlaps", `ANALYZE qualification_jurisdiction_shapes`, nil},

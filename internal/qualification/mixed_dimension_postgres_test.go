@@ -26,13 +26,15 @@ func TestReconcileMixedDimensionSourceContacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	const x, y = -8950000, 4180000
-	parcels := make([]string, 3)
-	for i, wkt := range []string{
+	parcelShapes := []string{
 		"POLYGON((0 0,30 0,30 15,0 15,0 0))",
+		"POLYGON((1 6,5 6,5 9,1 9,1 6))",
 		"POLYGON((50 0,60 0,60 15,50 15,50 0))",
 		"POLYGON((40 0,50 0,50 15,40 15,40 0))",
-	} {
-		if err := pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,shape) VALUES('union','union','union_county_gis',$1,ST_Translate(ST_GeomFromText($2,3857),$3,$4)) RETURNING id::text`, t.Name()+[]string{"-conflict", "-touching", "-same-zone"}[i], wkt, x, y).Scan(&parcels[i]); err != nil {
+	}
+	parcels := make([]string, len(parcelShapes))
+	for i, wkt := range parcelShapes {
+		if err := pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,shape) VALUES('union','union','union_county_gis',$1,ST_Translate(ST_GeomFromText($2,3857),$3,$4)) RETURNING id::text`, t.Name()+[]string{"-conflict", "-same-pair", "-touching", "-same-zone"}[i], wkt, x, y).Scan(&parcels[i]); err != nil {
 			t.Fatal(err)
 		}
 		parcel := parcels[i]
@@ -81,7 +83,14 @@ FROM (SELECT ST_Translate(ST_GeomFromText('POLYGON((0 5,10 5,10 10,0 10,0 5))',3
 		math.Abs(conflict.AmbiguousAcres-expectedAcres) > 1e-8 || math.Abs(conflict.JurisdictionAmbiguousAcres-expectedAcres) > 1e-8 {
 		t.Fatalf("50m² mixed-contact conflict: %+v err=%v expected acres=%g", conflict, err, expectedAcres)
 	}
-	for _, parcel := range parcels[1:] {
+	if err := pool.QueryRow(ctx, `SELECT ST_Area(ST_Transform(ST_Segmentize(shape,10),2264))/43560 FROM parcels WHERE id=$1`, parcels[1]).Scan(&expectedAcres); err != nil {
+		t.Fatal(err)
+	}
+	sharedPair, err := CurrentZoning(ctx, pool, parcels[1])
+	if err != nil || !sharedPair.Available || len(sharedPair.Zones) != 2 || math.Abs(sharedPair.AmbiguousAcres-expectedAcres) > 1e-8 {
+		t.Fatalf("same source pair must cover only this parcel: %+v err=%v expected acres=%g", sharedPair, err, expectedAcres)
+	}
+	for _, parcel := range parcels[2:] {
 		independent, err := CurrentZoning(ctx, pool, parcel)
 		if err != nil || !independent.Available || independent.Freshness.Stale || independent.Split || len(independent.Zones) != 1 || len(independent.Jurisdictions) != 1 ||
 			independent.Zones[0].SourceID != 3 || independent.Jurisdictions[0].SourceID != 3 || independent.AmbiguousAcres != 0 || independent.JurisdictionAmbiguousAcres != 0 || independent.UnmappedAcres != 0 || independent.JurisdictionUnmappedAcres != 0 {
