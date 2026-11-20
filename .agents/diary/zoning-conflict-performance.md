@@ -1,0 +1,2 @@
+- **Scope.** Keep the local job wiring changes in the original worktree. This PR includes the zoning coverage approach with new assessment benchmarks.
+- **Rejected change.** Extra retry indexes did not save time after index construction. Keep the existing retry index strategy.
