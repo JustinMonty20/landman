@@ -169,3 +169,19 @@ Did not edit `docs/union-qualification-verification.md`. Its older paragraphs st
 ## Index and doctor correction
 
 `features/README.md` said `import-journey.md` keeps the heading `Reset through classify`. That file uses the four feature sections. The CLI doctor paragraph said exit 0 also calls the USDA tabular endpoint. `probe` requests only layers 215 and 197. The soil command logs `Fetch USDA names` and `Fetch USDA interpretations` during screening. An interpretation fetch error fails screening. A map-unit name error during soil store does not fail that store. Evidence is `artifacts/verify/20261120T044121Z-5952/soil.stderr.txt`.
+
+## Live proof
+
+On 2026-11-20 at 21:31:06Z, after merging `cebc5db`, the 2026-11-14 seed still loaded on goose version 41. `check-schema` printed `schema: ok`. `check-loaded` printed `loaded: ok`. One `run-gis.sh` drive on `landman-verify-postgis` logged `Checked` at every 10000 parcel groups through 110000, then `Parcel publication complete: processed=118205`. Soil exited 0. The parcel command committed `full_scan` `success` in 8m22s, then `union.soil.screening` recorded `interrupted` at that command's 10-minute deadline. Qualification on that failure printed `Wait for assessment lock` and did not print `Finished`. Probe pages were 214 ms, 49 ms, 492 ms, and 1093 ms. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. Pending parcel quarantine was 0. Empty `reprocess --limit 1` exited 0 with `Repair: 0 pending records selected` and no `Parcel capture` line. Screening was still due, so it printed `Finished` after 4m19s, and qualification printed `Finished`. A second empty reprocess exited 0, printed qualification `Finished`, and did not print a screening line. Missing calendars and a missing `UNION_QUALIFICATION_CRON` each exited 1 before the database opened. A not-due `./landman schedule` printed the startup reconcile, did not fetch the county, and exited 0 on SIGTERM. `TestPrecisionRetryPartition` and `TestNoGridRetryPreservesSliverAndRollsBackOnFailure` passed. Empty `union.qualification.assess` printed the no-head skip and exited 0. Evidence is `artifacts/verify/20261120T212924Z-18426`, which is gitignored.
+
+## Product gap
+
+The same parcel deadline remains after the assessment speedup. `./landman run union.gis.parcels` still shares one 10-minute limit with derived screening. Publication can succeed and screening can still be interrupted. The cancelled context still logs a Postgres dial timeout. This pass does not change product code.
+
+## Out-of-scope decision
+
+Did not add headed assessment step lines, including `Release source geometry views`, to `qualification.md`. Those lines print when a generation exists. This journey has no zoning or road head. The no-head order still matches. Live zoning and roads stay behind explicit live approval.
+
+## Out-of-scope decision
+
+Did not refresh `seed.sql`. Goose version 41 applied, `check-schema` and `check-loaded` passed, and `classify` reported `seededSales` `met`. The capture header is still 2026-11-14T23:06:21Z.

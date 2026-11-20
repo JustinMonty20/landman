@@ -55,4 +55,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Journey
 
-- [Import journey](./import-journey.md) runs reset, migrate, `check-schema`, seed, `check-loaded`, `probe`, import, and `classify` in that order.
+- [Import journey](./import-journey.md) runs reset, migrate, `check-schema`, seed, `check-loaded`, the database doctor, migration status, the CLI doctor, `probe`, `run-gis.sh`, and `classify` in that order.

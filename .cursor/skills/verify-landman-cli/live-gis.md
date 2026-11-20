@@ -177,7 +177,7 @@ Stable handles:
 - CLI stderr parcel capture: `[union_county_gis] Parcel capture: <n> records across <m> pages`
 - CLI stderr parcel capture: `[union_county_gis] Parcel capture page <i>/<m>: <got>/<n> records`
 - CLI stderr parcel capture: `[union_county_gis] Parcel capture complete: <n> records`
-- CLI stderr publication: `[union.gis.parcels] capture=<id>: Checked <n> parcel groups in publication transaction` and `Parcel publication complete: processed=<n> quarantined=<n>`
+- CLI stderr publication: `[union.gis.parcels] capture=<id>: Checked <n> parcel groups in publication transaction` when the group count crosses a multiple of 10000, and `Parcel publication complete: processed=<n> quarantined=<n>` after every successful publication
 - CLI stderr job boundary: `[<job ID>] Started: kind=<kind>`, `Running: attempt=<id>`, `Finished: outcome=<outcome> processed=<n> quarantined=<n> elapsed=<duration> attempt=<id>`
 - CLI stderr soil: `[union.gis.soil] Soil Polygons (layer 197):`
 - CLI stderr screening: `[union.soil.screening]` USDA name and interpretation lines
