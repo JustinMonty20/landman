@@ -46,15 +46,16 @@ func runRequired(ctx context.Context, runner requiredRunner, definition jobs.Def
 }
 
 const (
-	parcelJobID        = parceljob.JobID
-	soilJobID          = "union.gis.soil"
-	screeningJobID     = "union.soil.screening"
-	taxJobID           = "union.tax"
-	vacancyJobID       = vacancy.JobID
-	zoningJobID        = "union.gis.zoning"
-	roadsJobID         = "union.gis.roads"
-	qualificationJobID = "union.qualification.assess"
-	jobTimeout         = 10 * time.Minute
+	parcelJobID                    = parceljob.JobID
+	soilJobID                      = "union.gis.soil"
+	screeningJobID                 = "union.soil.screening"
+	taxJobID                       = "union.tax"
+	vacancyJobID                   = vacancy.JobID
+	zoningJobID                    = "union.gis.zoning"
+	roadsJobID                     = "union.gis.roads"
+	qualificationJobID             = "union.qualification.assess"
+	jobTimeout                     = 10 * time.Minute
+	standaloneQualificationTimeout = time.Hour
 )
 
 // unionExecutor preserves source outcomes when a separate downstream attempt fails.
@@ -219,7 +220,11 @@ func run(ctx context.Context) error {
 		}
 	} else {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, jobTimeout)
+		timeout := jobTimeout
+		if mode == qualificationJobID {
+			timeout = standaloneQualificationTimeout
+		}
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
