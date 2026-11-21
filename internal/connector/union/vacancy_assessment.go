@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/tidwall/gjson"
 )
 
@@ -25,7 +26,10 @@ func AssessmentWhere(lo, hi int64) string {
 // CaptureAssessmentRanges partitions numeric OBJECTIDs without treating them as row keys.
 // Count checks detect observed drift, not a county snapshot or live query support.
 func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, total int64, save func(string, []byte, int, int, bool) error) error {
-	const label = "[union.gis.assessed_value] Assessed Value (layer 0)"
+	label := "[union.gis.assessed_value] Assessed Value (layer 0)"
+	if attempt, ok := jobs.AttemptID(ctx); ok {
+		label += " attempt=" + attempt
+	}
 	log.Printf("%s: Capture %d source rows by OBJECTID range", label, total)
 	var processed int64
 	receipts := 1 // the initial global count
