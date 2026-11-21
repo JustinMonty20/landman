@@ -85,6 +85,7 @@ const (
 	qualificationJobID             = "union.qualification.assess"
 	jobTimeout                     = 10 * time.Minute
 	standaloneQualificationTimeout = time.Hour
+	standaloneAssessmentTimeout    = 3 * time.Hour
 )
 
 // unionExecutor preserves source outcomes when a separate downstream attempt fails.
@@ -94,10 +95,15 @@ type unionExecutor struct {
 	afterSource           func(context.Context, string) error
 	qualify               func(context.Context) error
 	roadAssessmentTimeout time.Duration
+	sourceTimeout         time.Duration
 }
 
 func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
-	sourceCtx, sourceCancel := context.WithTimeout(ctx, jobTimeout)
+	timeout := jobTimeout
+	if e.sourceTimeout > 0 {
+		timeout = e.sourceTimeout
+	}
+	sourceCtx, sourceCancel := context.WithTimeout(ctx, timeout)
 	outcome, result, err := e.runner.Run(sourceCtx, definition)
 	sourceCancel()
 	if err == nil && outcome == jobs.OutcomeSuccess {
@@ -271,6 +277,8 @@ func run(ctx context.Context) error {
 		timeout := jobTimeout
 		if mode == qualificationJobID {
 			timeout = standaloneQualificationTimeout
+		} else if mode == vacancyjob.AssessedValueID {
+			timeout = standaloneAssessmentTimeout
 		}
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -428,7 +436,11 @@ func run(ctx context.Context) error {
 	if mode == roadsJobID {
 		roadAssessmentTimeout = standaloneQualificationTimeout
 	}
-	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, roadAssessmentTimeout: roadAssessmentTimeout, afterSource: func(ctx context.Context, id string) error {
+	sourceTimeout := jobTimeout
+	if mode == vacancyjob.AssessedValueID {
+		sourceTimeout = standaloneAssessmentTimeout
+	}
+	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, roadAssessmentTimeout: roadAssessmentTimeout, sourceTimeout: sourceTimeout, afterSource: func(ctx context.Context, id string) error {
 		switch id {
 		case parcelJobID:
 			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())

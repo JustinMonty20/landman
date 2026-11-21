@@ -117,6 +117,38 @@ func TestManualRoadAssessmentGetsIndependentHour(t *testing.T) {
 	}
 }
 
+func TestStandaloneAssessmentSourceDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit time.Duration
+	}{
+		{"standalone assessed value", standaloneAssessmentTimeout},
+		{"other source", jobTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor := unionExecutor{runner: &executingRunner{}}
+			if tc.limit == standaloneAssessmentTimeout {
+				executor.sourceTimeout = standaloneAssessmentTimeout
+			}
+			var remaining time.Duration
+			definition := jobs.Definition{ID: vacancyjob.AssessedValueID, Run: func(ctx context.Context) (jobs.Result, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatal("assessment has no deadline")
+				}
+				remaining = time.Until(deadline)
+				return jobs.Result{}, nil
+			}}
+			if err := runRequired(context.Background(), executor, definition); err != nil {
+				t.Fatal(err)
+			}
+			if remaining < tc.limit-time.Second || remaining > tc.limit {
+				t.Fatalf("deadline %s, want %s", remaining, tc.limit)
+			}
+		})
+	}
+}
+
 func TestRunRequired(t *testing.T) {
 	definition := jobs.Definition{ID: "union.gis.soil", Run: func(context.Context) (jobs.Result, error) {
 		return jobs.Result{}, nil

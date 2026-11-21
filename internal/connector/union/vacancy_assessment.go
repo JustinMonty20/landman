@@ -15,6 +15,9 @@ import (
 // AssessmentRangeLimit bounds the number of retained partition and page receipts.
 const AssessmentRangeLimit = 2048
 
+// AssessmentRowLimit bounds a full assessed-value capture and its partition counts.
+const AssessmentRowLimit int64 = 500000
+
 func AssessmentWhere(lo, hi int64) string {
 	return fmt.Sprintf("OBJECTID >= %d AND OBJECTID <= %d", lo, hi)
 }
@@ -47,7 +50,7 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			return 0, err
 		}
 		v := gjson.GetBytes(body, "count")
-		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > 250000 {
+		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > AssessmentRowLimit {
 			return 0, errors.New("invalid assessment partition count")
 		}
 		return v.Int(), nil
