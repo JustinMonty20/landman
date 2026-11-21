@@ -3,8 +3,10 @@
 package main
 
 import (
-	"github.com/JustinMonty20/landman/internal/parcelevidence"
 	"testing"
+
+	"github.com/JustinMonty20/landman/internal/jobs"
+	"github.com/JustinMonty20/landman/internal/parcelevidence"
 )
 
 func TestParcelPersistedGeometryAndNormalizedFingerprintStable(t *testing.T) {
