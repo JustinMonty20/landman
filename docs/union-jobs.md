@@ -43,9 +43,9 @@ The parcel and soil commands contact the live Union GIS or USDA services. The ta
 ./landman run union.qualification.assess
 ```
 
-Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt.
+Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline, except the automatic assessment after a manual `./landman run union.gis.roads`. That assessment gets a new 60-minute limit. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt.
 
-The standalone `./landman run union.qualification.assess` command has a 60-minute limit for the full assessment. This limit includes the wait for the assessment lock. It does not change the limits for automatic assessments after imports or for scheduled assessments.
+The standalone `./landman run union.qualification.assess` command also has a 60-minute limit for the full assessment. This limit includes the wait for the assessment lock. Scheduled assessments and automatic assessments after other imports keep their ten-minute limits.
 
 A parcel-only run needs a stored soil set. If no set exists, the source can succeed while screening records `pending` and the command fails with the missing prerequisite. Run the soil source to ingest a set and refresh screening. A stored empty set is not a missing set.
 

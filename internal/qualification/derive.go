@@ -338,16 +338,26 @@ func (s Store) reconcileRoads(ctx context.Context, tx pgx.Tx, gen, method string
 		{"Remove roads outside the search radius", `DELETE FROM qualification_distances WHERE feet>5280`, nil},
 		{"Index road distances", `CREATE INDEX ON qualification_distances(parcel_id)`, nil},
 		{"Analyze road distances", `ANALYZE qualification_distances`, nil},
-		{"Write road assessments", `INSERT INTO qualification_assessments(parcel_id,source_group,generation_id,boundary_generation_id,geometry_fingerprint,method_version,total_acres,road_state,road_distance_feet,road_search_radius_feet,county_edge_warning)
+		{"Prepare county boundary edges", `CREATE TEMP TABLE qualification_boundary_edges ON COMMIT DROP AS
+ SELECT ST_Subdivide(ST_Transform(ST_Segmentize(ST_Boundary(source.shape),10),2264),256) geom
+ FROM (SELECT ST_UnaryUnion(ST_Collect(b.shape)) shape FROM qualification_boundaries b
+ JOIN qualification_heads h ON h.source_group='zoning' AND h.generation_id=b.generation_id) source`, nil},
+		{"Index county boundary edges", `CREATE INDEX ON qualification_boundary_edges USING GIST(geom)`, nil},
+		{"Analyze county boundary edges", `ANALYZE qualification_boundary_edges`, nil},
+		{"Write road assessments", `WITH boundary AS MATERIALIZED (
+ SELECT ST_UnaryUnion(ST_Collect(b.shape)) shape FROM qualification_boundaries b
+ JOIN qualification_heads h ON h.source_group='zoning' AND h.generation_id=b.generation_id
+)
+ INSERT INTO qualification_assessments(parcel_id,source_group,generation_id,boundary_generation_id,geometry_fingerprint,method_version,total_acres,road_state,road_distance_feet,road_search_radius_feet,county_edge_warning)
  SELECT p.id,'roads',$1,(SELECT generation_id FROM qualification_heads WHERE source_group='zoning'),p.fingerprint,$2,
  NULLIF(ST_Area(p.geom)/43560,0),
  CASE WHEN p.geom IS NULL OR ST_Area(p.geom)=0 THEN 'missing_parcel_geometry'
  WHEN d.feet IS NULL THEN 'none_within_radius' ELSE 'nearest' END,d.feet,5280,
- EXISTS (SELECT 1 FROM (SELECT ST_UnaryUnion(ST_Collect(b.shape)) shape FROM qualification_boundaries b
- JOIN qualification_heads h ON h.source_group='zoning' AND h.generation_id=b.generation_id) b
- WHERE p.geom IS NOT NULL AND (b.shape IS NULL OR NOT ST_Covers(b.shape,p.shape)
- OR ST_Distance(p.geom,ST_Transform(ST_Segmentize(ST_Boundary(b.shape),10),2264))<=5280))
- FROM qualification_targets p LEFT JOIN (SELECT parcel_id,min(feet) feet FROM qualification_distances GROUP BY parcel_id) d ON d.parcel_id=p.id
+ p.geom IS NOT NULL AND (b.shape IS NULL OR NOT ST_Covers(b.shape,p.shape)
+ OR EXISTS (SELECT 1 FROM qualification_boundary_edges e
+ WHERE e.geom && ST_Expand(p.geom,5280) AND ST_DWithin(p.geom,e.geom,5280)))
+ FROM qualification_targets p CROSS JOIN boundary b
+ LEFT JOIN (SELECT parcel_id,min(feet) feet FROM qualification_distances GROUP BY parcel_id) d ON d.parcel_id=p.id
  ON CONFLICT(parcel_id,source_group) DO UPDATE SET generation_id=excluded.generation_id,boundary_generation_id=excluded.boundary_generation_id,
  geometry_fingerprint=excluded.geometry_fingerprint,method_version=excluded.method_version,calculated_at=now(),
  total_acres=excluded.total_acres,road_state=excluded.road_state,road_distance_feet=excluded.road_distance_feet,
