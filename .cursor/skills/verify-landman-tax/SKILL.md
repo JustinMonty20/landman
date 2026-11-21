@@ -93,7 +93,7 @@ Require the latest attempt to be `union.tax` with outcome `failed`. Automated st
 
 ## Optional combined bare-command drive
 
-This is a separate opt-in check, not the tax-only drive. Require all four files and explicit approval for county GIS and USDA requests. Use a new empty migrated database. Do not also run the separate GIS journey in this pass.
+This is a separate opt-in check, not the tax-only drive. Require the five tax inputs, the three FEMA paths, and explicit approval for the county requests this command makes. Use a new empty migrated database. Do not also run the separate GIS journey in this pass.
 
 Repeat the operator-file block through `run_tax_cli` definition in this new shell. Run without arguments:
 
@@ -109,7 +109,7 @@ docker exec "$VERIFY_CONTAINER" psql -X -U verify -d "$VERIFY_DB_NAME" \
   >"$EVIDENCE/all-attempts.txt"
 ```
 
-Require exit 0, empty stdout, and clean full-scan attempts for parcels, soil, screening, and tax. Confirm parcel precedes soil, screening precedes tax, and qualification reconciliation occurs after successful sources. The combined process retains its single ten-minute deadline. A failed or quarantined required job must stop later jobs. Use `go test ./cmd/landman -count=1 -v` for controlled failure-order tests; do not damage a live source to force failure.
+Require exit 0 and empty stdout. Require clean full-scan attempts in this order: parcels, soil, zoning, roads, FEMA, structures, assessed value, soil screening, and tax. Do not require a `union.qualification.assess` row. Each of those steps has its own ten-minute limit. A failed or quarantined required job stops later jobs. Use `go test ./cmd/landman -count=1 -v` for controlled failure-order tests; do not damage a live source to force failure.
 
 ## Completion and cleanup
 

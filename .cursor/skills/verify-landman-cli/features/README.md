@@ -40,6 +40,8 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 Keep implementation details out of the map. Name only user paths, stable handles, required state, commands, and observable proof.
 
+`import-journey.md` is the ordered pass. It uses these four sections.
+
 ## Database
 
 - [Bootstrap the verify database](./local-database-bootstrap.md) covers the verify container, the `landman` database, goose migrations, and the captured Union County sample.
@@ -47,10 +49,10 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## CLI import
 
-- [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman` writing parcels, joining soil, and running screening against the verify database. It also covers `./landman run` and `./landman reprocess`.
+- [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman run union.gis.soil`, `./landman run union.gis.parcels`, screening, and `./landman reprocess` against the verify database. Bare `./landman` belongs to the tax skill.
 - [Schedule Union jobs](./schedule-union-jobs.md) covers `./landman schedule` and all five cron variables.
 - [Qualification checks](./qualification.md) cover source publication, spatial evidence, refresh failures, and optional live zoning and road jobs.
 
 ## Journey
 
-- [Import journey](./import-journey.md) runs reset, migrate, `check-schema`, seed, `check-loaded`, `probe`, import, and `classify` in that order.
+- [Import journey](./import-journey.md) runs reset, migrate, `check-schema`, seed, `check-loaded`, the database doctor, migration status, the CLI doctor, `probe`, `run-gis.sh`, and `classify` in that order.

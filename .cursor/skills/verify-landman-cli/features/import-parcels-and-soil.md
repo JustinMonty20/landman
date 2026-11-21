@@ -1,6 +1,6 @@
 # Import parcels and soil
 
-The isolated GIS journey runs soil first and parcels second. Each successful source command screens stored soil and reconciles stored qualification data. Soil must run first because the seed has polygons but no active soil set. The combined bare command belongs to the tax skill.
+The isolated GIS journey runs soil first and parcels second. A clean soil command screens stored soil and does not run `union.qualification.assess`. A clean parcel command screens only when stored screening is due, and it does not run `union.qualification.assess`. Soil must run first because the seed has polygons but no active soil set. The combined bare command belongs to the tax skill.
 
 ## Sub-features
 
@@ -15,8 +15,8 @@ The isolated GIS journey runs soil first and parcels second. Each successful sou
 
 - Use `./landman run union.gis.soil` and then `./landman run union.gis.parcels` with the isolated host database URL.
 - Use `./landman run union.soil.screening` to screen stored soil only.
-- Use `./landman reprocess union.gis.parcels --limit N` to repair at most `N` pending records. A successful repair also refreshes derived evidence.
-- Use `verify-landman-tax` for bare `./landman`. That path also requires four manual tax files.
+- Use `./landman reprocess union.gis.parcels --limit N` to repair at most `N` pending records. A successful repair screens stored soil when that screen is due. It does not run `union.qualification.assess`.
+- Use `verify-landman-tax` for bare `./landman`. That command requires the five tax inputs and the three FEMA paths named in `live-gis.md`.
 
 ## Driving it with make and the landman binary
 
@@ -27,19 +27,20 @@ Preconditions:
 - Ensure no other verification import runs. Preserve source request budgets.
 
 - Follow the exact runner command in `live-gis.md`. It invokes soil, then parcels. It stops on the first failure and captures each command's stdout, stderr, and exit status. Do not run additional bare imports.
-- Run `classify` even after a failed runner. A pass requires empty stdout, published parcel and soil full scans, successful screening, a screening head, and one assessment per county parcel. Soil and overlap counts must exceed the seed. Seeded sale slots must match current county evidence. Do not query a county-wide sale total.
+- Run `classify` even after a failed runner. GIS command stdout is empty. A pass requires published parcel and soil full scans, successful screening, a screening head, and one soil assessment per county parcel on that head. County parcel, soil, and overlap counts must exceed the seed. Seeded sale slots must match current county evidence. Do not query a county-wide sale total. `classify` does not read `union.qualification.assess`.
 - Keep source-specific logs, combined `import.*` logs, `page-timings.json`, and `drive-outcome.json` under `artifacts/verify/$RUN_ID/`. Require `import.exit.txt` to match the runner exit.
 - Run `env -u DATABASE_URL ./landman import`. Require exit 1 and usage text containing `run <job ID>`.
 - Run `env -u DATABASE_URL ./landman reprocess union.gis.parcels --limit 0`. Require exit 1 and `reprocess limit must be between 1 and 100`.
-- After classification, query `SELECT count(*) FROM quarantined_records WHERE job_id='union.gis.parcels' AND reprocessed_at IS NULL`. If zero, run `DATABASE_URL="$HOST_DATABASE_URL" ./landman reprocess union.gis.parcels --limit 1`. Require no parcel fetch lines and successful derived attempts. If pending rows exist, report the empty-repair check as not run; a repair would fetch county data again.
+- After classification, query `SELECT count(*) FROM quarantined_records WHERE job_id='union.gis.parcels' AND reprocessed_at IS NULL`. If zero, run `DATABASE_URL="$HOST_DATABASE_URL" ./landman reprocess union.gis.parcels --limit 1`. Stdout is empty. Stderr contains `Repair: 0 pending records selected` and does not contain `Parcel capture` or `[union.qualification.assess]`. Screening prints `Finished` only when stored screening is due. The command exits 0 when the attempts that run succeed. If pending rows exist, report the empty-repair check as not run. A repair would fetch county data again.
 
 ## Gotchas
 
-- Soil runs before parcel fetch progress. `Fetch complete:` ends only parcel fetching, not derived refreshes. Quiet output is not proof of completion.
-- The runner's two commands each have ten minutes. This does not verify the combined bare command's single ten-minute budget.
+- Soil runs before parcel progress. Parcel progress is `Parcel capture`, `Parcel capture page`, and `Parcel capture complete`. Do not require `Fetch complete:` or the batch-size lines. A source `Finished: outcome=success` line is not the end of the command. Screening prints its own lines when screening runs. These commands do not print `[union.qualification.assess]`. Quiet output is not proof of completion.
+- `./landman run union.gis.soil` and `./landman run union.gis.parcels` each have one ten-minute deadline, and that deadline includes derived screening. Bare `./landman` gives each source and each derived step its own ten minutes, and it also requires the three FEMA paths. This journey does not run the bare command.
 - Quarantined parcel records can leave prior parcel values unchanged. `success_with_quarantine` is non-clean and stops that source's derived work.
 - A parcel command without an active soil set can publish parcels and then fail with pending screening. The seed alone does not supply an active soil set.
 - `classify` reports `inconclusive: county-source-slow` only for its existing deadline and timed-probe conditions. USDA HTTP 502 is an external drive failure, not a slow-county pass. Keep the helper verdict distinct from the maintenance outcome `blocked`.
-- Qualification failures can make a source command fail after source publication. The GIS classifier does not prove qualification correctness; run the qualification recipe separately.
+- A screening failure can make a source command fail after source publication. The GIS classifier does not prove qualification correctness. Run the qualification recipe separately.
 - Likely vacancy is provisional. Missing tax data is not zero debt. The GIS journey does not verify tax ingestion.
 - `make run` loads `.env`. Never use it for verification. Keep verify database overrides on every database Make command.
+- Leave `LANDMAN_HEAP_PROFILE_DIR` unset. A directory value adds `Heap profile socket` before the job lines and removes its private socket directory on exit. A missing path or a file exits 1 with `create heap profile directory` and does not start the job.
