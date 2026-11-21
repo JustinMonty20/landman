@@ -12,11 +12,11 @@ Qualification jobs publish zoning and road generations and derive stored parcel 
 
 ## How to get to it (user POV)
 
-- `./landman run union.gis.zoning` fetches the zoning source group. A clean success then reconciles stored qualification evidence. Any other outcome exits 1 and leaves the previous head in place.
-- `./landman run union.gis.roads` fetches roads within ten minutes. A clean success then reconciles stored qualification evidence under a separate sixty-minute deadline.
+- `./landman run union.gis.zoning` fetches the zoning source group. A clean success publishes that generation and does not reconcile parcel assessments. Any other outcome exits 1 and leaves the previous head in place.
+- `./landman run union.gis.roads` fetches roads within ten minutes. A clean success publishes that generation and does not reconcile parcel assessments.
 - `./landman run union.qualification.assess` reconciles stored data without a county fetch. Its deadline is one hour.
-- A clean parcel run, soil run, and `./landman reprocess union.gis.parcels --limit N` also reconcile qualification. Bare `./landman` does too. The tax skill owns that command.
-- The scheduler uses separate zoning, road, and qualification calendars. It reconciles stored qualification evidence once at startup before calendar dispatch. That startup reconcile prints `[union.qualification.assess]` lines and does not fetch the county.
+- A clean parcel run screens stored soil only when that screen is due. A clean soil run screens stored soil. `./landman reprocess union.gis.parcels --limit N` uses that same parcel follow-on. None of those commands run `union.qualification.assess`. Bare `./landman` runs the source imports, one soil screening, and tax. It does not run `union.qualification.assess`. The tax skill owns that command.
+- The scheduler uses separate zoning, road, and qualification calendars. Startup does not reconcile qualification and does not print `[union.qualification.assess]`. A due qualification calendar reconciles stored data and does not fetch the county.
 
 ## Driving it with make and the landman binary
 
@@ -69,7 +69,7 @@ Compare receipts with the client's scoped layer manifest. Require complete group
 
 ## Gotchas
 
-- `./landman run union.qualification.assess` waits up to 60 minutes, including the assessment lock. The assessment after `./landman run union.gis.roads` also waits up to 60 minutes, including the lock. Scheduled assessments and automatic assessments after other imports keep the ten-minute limit.
+- `./landman run union.qualification.assess` waits up to 60 minutes, including the assessment lock. A scheduled qualification tick stays within ten minutes. Source imports, bare `./landman`, and schedule startup do not run that assessment.
 - Live county-scale runtime and memory remain separate release gates. Fixture success cannot close them.
 - Road and zoning source data can be unavailable independently. Do not turn absent evidence into a favorable result.
 - The CLI GIS classifier checks soil and parcel publication, not qualification topology or freshness.

@@ -209,3 +209,15 @@ On 2026-11-21 at 01:44Z, after merging `23f1f22`, the 2026-11-14 seed still load
 ## Tool failure
 
 The Task tool rejected `comment-sicko` as a subagent type. The map diff has no code comments, so nothing was deleted from that review.
+
+## Product gap
+
+PR 98's merge commit `e7f4aa0` left `cmd/landman/main.go` unable to compile. `afterSource` still opens with `if id == parcelJobID` and then uses `case soilJobID`. Commit `bb3da92` had `switch id` and `case parcelJobID`. `go test ./cmd/landman` fails at `main.go:438`. Main's Go checks for that merge failed the same way. This pass does not edit product code, so it cannot build `./landman` or record a qualification attempt.
+
+## Live proof
+
+PR 100 restored `switch id` in `afterSource`. On 2026-11-21 the 2026-11-14 seed still loaded on goose version 41 in `landman-verify-postgis`. `check-schema` printed `schema: ok`. `check-loaded` printed `loaded: ok` for 36 parcels. `go build -o ./landman ./cmd/landman` exited 0. `go test ./cmd/landman -count=1` passed. A not-due `./landman schedule` stayed running, wrote no stderr, inserted no `job_attempts` row, and exited 0 on SIGTERM. `run-gis.sh` published 11250 soil polygons and finished screening in 15s. The parcel command published 118205 parcels in 7m43s, then screening recorded `interrupted` at that command's ten-minute deadline. Neither GIS log contained `[union.qualification.assess]`. `job_attempts` after the runner had soil success, screening success, parcel success, and screening interrupted. `./landman run union.qualification.assess` then printed the no-head skip and added one `full_scan` `success` row with `processed_count` 0. Pending parcel quarantine was 0. Empty `reprocess --limit 1` printed `Repair: 0 pending records selected`, did not print `Parcel capture`, finished screening in 4m13s, and did not print `[union.qualification.assess]`. `classify` printed `fail`, with `seededSales` `met` and `fullImport` `missed`. Evidence is `artifacts/verify/20261121T031500Z-qualify`, which is gitignored.
+
+## Product gap
+
+`./landman run union.gis.parcels` still shares one ten-minute limit with the following soil screening. Publication can succeed and that screening can still be interrupted. `docs/union-jobs.md` line 49 still says a manual roads command gets an automatic 60-minute assessment. Line 127 says qualification does not run after source imports. Those product sentences stay out of this pass. The roads command still builds a one-hour downstream context whose callback returns immediately.

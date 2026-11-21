@@ -49,7 +49,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## CLI import
 
-- [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman` writing parcels, joining soil, and running screening against the verify database. It also covers `./landman run` and `./landman reprocess`.
+- [Import parcels and soil](./import-parcels-and-soil.md) covers `./landman run union.gis.soil`, `./landman run union.gis.parcels`, screening, and `./landman reprocess` against the verify database. Bare `./landman` belongs to the tax skill.
 - [Schedule Union jobs](./schedule-union-jobs.md) covers `./landman schedule` and all five cron variables.
 - [Qualification checks](./qualification.md) cover source publication, spatial evidence, refresh failures, and optional live zoning and road jobs.
 

@@ -109,7 +109,7 @@ docker exec "$VERIFY_CONTAINER" psql -X -U verify -d "$VERIFY_DB_NAME" \
   >"$EVIDENCE/all-attempts.txt"
 ```
 
-Require exit 0 and empty stdout. Require clean full-scan attempts in this order: parcels, soil, zoning, roads, FEMA, structures, assessed value, soil screening, qualification, and tax. Each of those steps has its own ten-minute limit. A failed or quarantined required job stops later jobs. Use `go test ./cmd/landman -count=1 -v` for controlled failure-order tests; do not damage a live source to force failure.
+Require exit 0 and empty stdout. Require clean full-scan attempts in this order: parcels, soil, zoning, roads, FEMA, structures, assessed value, soil screening, and tax. Do not require a `union.qualification.assess` row. Each of those steps has its own ten-minute limit. A failed or quarantined required job stops later jobs. Use `go test ./cmd/landman -count=1 -v` for controlled failure-order tests; do not damage a live source to force failure.
 
 ## Completion and cleanup
 
