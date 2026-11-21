@@ -1,0 +1,2 @@
+- **Unrelated bug or code smell:** `go test ./...` discovers `artifacts/verify/parcel-publish-oQb7aI/baseline-src` as a Go package. That saved baseline has undefined parcel-store helpers. Keep verification artifacts outside Go package discovery or make the baseline complete.
+- **Out-of-scope decision with rationale:** A local binary invocation without arguments began a live parcel import while checking the build. It was stopped by the closed log pipe. Do not invoke the default command for a compile check; use `go build` only.
