@@ -257,7 +257,7 @@ func TestAssessmentCountProgressBeforeAdmission(t *testing.T) {
 		if lo <= 1 && 1 <= hi {
 			n += 2001
 		}
-		if lo <= math.MaxInt64 && math.MaxInt64 <= hi {
+		if hi == math.MaxInt64 {
 			n++
 		}
 		fmt.Fprintf(w, `{"count":%d}`, n)
@@ -309,7 +309,7 @@ func TestAssessmentInvalidTenthCountReportsValidatedProgress(t *testing.T) {
 		if lo <= 1 && 1 <= hi {
 			n += 2001
 		}
-		if lo <= math.MaxInt64 && math.MaxInt64 <= hi {
+		if hi == math.MaxInt64 {
 			n++
 		}
 		fmt.Fprintf(w, `{"count":%d}`, n)
