@@ -278,3 +278,40 @@ func TestAssessmentCountProgressBeforeAdmission(t *testing.T) {
 		t.Fatalf("verified without pages: %s", output.String())
 	}
 }
+
+func TestAssessmentRejectedSplitDoesNotCreditRows(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	var counts, pages int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("resultRecordCount") {
+			pages++
+			return
+		}
+		counts++
+		n := 2002
+		switch counts {
+		case 4, 6, 8:
+			n = 0
+		case 9:
+			n = 1001
+		case 10:
+			n = 1002
+		}
+		fmt.Fprintf(w, `{"count":%d}`, n)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "partition sum mismatch") || counts != 10 || pages != 0 {
+		t.Fatalf("err=%v counts=%d pages=%d", err, counts, pages)
+	}
+	if !strings.Contains(output.String(), "Count ranges: checked 0/2002 rows; requests=10/2048; resolved leaves=0; resolved rows=0") {
+		t.Fatalf("rejected split credited rows: %s", output.String())
+	}
+}

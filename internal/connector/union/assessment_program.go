@@ -68,22 +68,29 @@ func planAssessment(total int64, count func(url.Values) (int64, error), report f
 		}
 		receipts++
 		progress.requests++
+		return n, nil
+	}
+	credit := func(n int64) {
 		if n > 0 && n <= 2000 {
 			progress.resolvedLeaves++
 			progress.resolvedRows += n
 		}
+	}
+	publish := func() {
 		if report != nil {
 			report(progress)
 		}
-		return n, nil
 	}
 	rootCount, err := query(0, math.MaxInt64)
 	if err != nil {
 		return AssessmentProgram{}, err
 	}
 	if rootCount != total {
+		publish()
 		return AssessmentProgram{}, errors.New("assessment partition count drift")
 	}
+	credit(rootCount)
+	publish()
 	var build func(assessmentRange) (*assessmentNode, error)
 	build = func(r assessmentRange) (*assessmentNode, error) {
 		node := &assessmentNode{rangeEvidence: r}
@@ -98,13 +105,18 @@ func planAssessment(total int64, count func(url.Values) (int64, error), report f
 		if err != nil {
 			return nil, err
 		}
+		publish()
 		right, err := query(mid+1, r.high)
 		if err != nil {
 			return nil, err
 		}
 		if left > r.count || right > r.count || left+right != r.count {
+			publish()
 			return nil, errors.New("assessment partition sum mismatch")
 		}
+		credit(left)
+		credit(right)
+		publish()
 		node.left, err = build(assessmentRange{r.low, mid, left})
 		if err != nil {
 			return nil, err
