@@ -13,7 +13,7 @@ Qualification jobs publish zoning and road generations and derive stored parcel 
 ## How to get to it (user POV)
 
 - `./landman run union.gis.zoning` fetches the zoning source group. A clean success then reconciles stored qualification evidence. Any other outcome exits 1 and leaves the previous head in place.
-- `./landman run union.gis.roads` fetches roads. A clean success then reconciles stored qualification evidence.
+- `./landman run union.gis.roads` fetches roads within ten minutes. A clean success then reconciles stored qualification evidence under a separate sixty-minute deadline.
 - `./landman run union.qualification.assess` reconciles stored data without a county fetch. Its deadline is one hour.
 - A clean parcel run, soil run, and `./landman reprocess union.gis.parcels --limit N` also reconcile qualification. Bare `./landman` does too. The tax skill owns that command.
 - The scheduler uses separate zoning, road, and qualification calendars. It reconciles stored qualification evidence once at startup before calendar dispatch. That startup reconcile prints `[union.qualification.assess]` lines and does not fetch the county.
@@ -40,7 +40,7 @@ DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres \
   ./cmd/landman -count=1 -v
 ```
 
-Require the captured full stored replay, group publication/retirement, failed repair, stored-topology, long-edge distance, failure-order, host-lock, `TestPrecisionRetryPartition`, and `TestNoGridRetryPreservesSliverAndRollsBackOnFailure` tests to execute. Save verbose output. A positive overlap that the 0.0000001 m grid removes is retried from the stored parcel, zoning, and jurisdiction shapes with no coordinate grid. Stderr then contains `retry=no-grid`. If that retry still has no positive area or share, the assessment attempt fails and the previous assessment rows stay. The published source generation stays. Read `docs/union-qualification-verification.md` for the curved-edge approximation limits. Do not claim exact curved-edge measurements. Older paragraphs in that file still describe a two-grid stop and a generation rollback. Those sentences are not the current job.
+Require the captured full stored replay, group publication/retirement, failed repair, stored-topology, long-edge distance, failure-order, host-lock, `TestPrecisionRetryPartition`, and `TestNoGridRetryPreservesSliverAndRollsBackOnFailure` tests to execute. Save verbose output. A positive overlap that the 0.0000001 m grid removes is retried from the stored parcel, zoning, and jurisdiction shapes with no coordinate grid. Stderr then contains `retry=no-grid`. If that retry still has no positive area or share, the assessment attempt fails and the previous assessment rows stay. The published source generation stays. Read `docs/union-qualification-verification.md` for the curved-edge approximation limits. Do not claim exact curved-edge measurements. Older paragraphs in that file still describe a two-grid stop and a generation rollback. They also describe nearest segments chosen before projection and an EPSG:3857 8 km candidate filter. Those sentences are not the current job. Candidate search uses the projected centerlines and a 5,280-foot limit.
 
 - Check the real no-source path in a new setup database, not the fixture database:
 
@@ -69,7 +69,7 @@ Compare receipts with the client's scoped layer manifest. Require complete group
 
 ## Gotchas
 
-- `./landman run union.qualification.assess` waits up to 60 minutes, including the assessment lock. Scheduled and automatic assessments keep the 10-minute limit.
+- `./landman run union.qualification.assess` waits up to 60 minutes, including the assessment lock. The assessment after `./landman run union.gis.roads` also waits up to 60 minutes, including the lock. Scheduled assessments and automatic assessments after other imports keep the ten-minute limit.
 - Live county-scale runtime and memory remain separate release gates. Fixture success cannot close them.
 - Road and zoning source data can be unavailable independently. Do not turn absent evidence into a favorable result.
 - The CLI GIS classifier checks soil and parcel publication, not qualification topology or freshness.

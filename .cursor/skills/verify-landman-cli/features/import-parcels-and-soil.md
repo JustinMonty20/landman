@@ -27,7 +27,7 @@ Preconditions:
 - Ensure no other verification import runs. Preserve source request budgets.
 
 - Follow the exact runner command in `live-gis.md`. It invokes soil, then parcels. It stops on the first failure and captures each command's stdout, stderr, and exit status. Do not run additional bare imports.
-- Run `classify` even after a failed runner. A pass requires empty stdout, published parcel and soil full scans, successful screening, a screening head, and one assessment per county parcel. Soil and overlap counts must exceed the seed. Seeded sale slots must match current county evidence. Do not query a county-wide sale total.
+- Run `classify` even after a failed runner. A pass requires empty stdout, published parcel and soil full scans, successful screening, a screening head, and one assessment per county parcel. County parcel, soil, and overlap counts must exceed the seed. Seeded sale slots must match current county evidence. Do not query a county-wide sale total.
 - Keep source-specific logs, combined `import.*` logs, `page-timings.json`, and `drive-outcome.json` under `artifacts/verify/$RUN_ID/`. Require `import.exit.txt` to match the runner exit.
 - Run `env -u DATABASE_URL ./landman import`. Require exit 1 and usage text containing `run <job ID>`.
 - Run `env -u DATABASE_URL ./landman reprocess union.gis.parcels --limit 0`. Require exit 1 and `reprocess limit must be between 1 and 100`.

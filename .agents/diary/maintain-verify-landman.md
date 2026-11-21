@@ -193,3 +193,19 @@ On 2026-11-20 at 22:05Z, after merging `9735872`, the 2026-11-14 seed still load
 ## Out-of-scope decision
 
 Did not add `.agents/skills/landman-heap-profile` or `.agents/skills/landman-ui-cdp` to the verify feature map. Those are operator capture skills. The verify map records the `LANDMAN_HEAP_PROFILE_DIR` startup contract on the CLI. The API process recipe already starts with `env -i` and does not set the variable. This pass did not start `cmd/api`.
+
+## Out-of-scope decision
+
+Did not edit `docs/union-qualification-verification.md` after the roads assessment change. That file still says nearest segments are chosen before projection, and it still says the EPSG:3857 8 km candidate filter remains. Current code projects centerlines once and searches a 5,280-foot radius. The map now says those sentences are not the current job. `docs/union-jobs.md` still says to set both calendar expressions and that a clean parcel run always screens. Those product sentences stay out of this PR.
+
+## Out-of-scope decision
+
+Did not start `./landman run union.gis.parcels` after `run-gis.sh` stopped. The runner stops on the first nonzero status. That stop is the one import drive.
+
+## Live proof
+
+On 2026-11-21 at 01:44Z, after merging `23f1f22`, the 2026-11-14 seed still loaded on goose version 41. `check-schema` printed `schema: ok`. `check-loaded` printed 36 parcels, 18 vacant and 18 built. `TestManualRoadAssessmentGetsIndependentHour` passed. Empty `union.qualification.assess` printed the no-head skip and exited 0. Missing calendars and a missing `UNION_QUALIFICATION_CRON` each exited 1. A not-due `./landman schedule` printed the startup reconcile, did not fetch the county, and exited 0 on SIGTERM. Probe metadata was 135 ms and 41 ms. Probe pages were 415 ms and 985 ms. `run-gis.sh` published 11250 soil polygons in 2m58s, then USDA interpretation fetch used the rest of the shared ten-minute deadline. Screening recorded `interrupted` at 7m2s. Qualification printed `Wait for assessment lock` and did not print `Finished`. The process also logged a Postgres dial timeout on the cancelled context. The runner exited 1 and did not start parcels. `classify` printed `fail`, with `seededSales` `not-run` and `fullImport` `missed`. Pending parcel quarantine was 0. Empty `reprocess --limit 1` exited 0, printed `Repair: 0 pending records selected`, did not print `Parcel capture`, and finished screening in 4m55s. Qualification then printed `Finished`. Evidence is `artifacts/verify/20261121T014246Z-9802`, which is gitignored.
+
+## Tool failure
+
+The Task tool rejected `comment-sicko` as a subagent type. The map diff has no code comments, so nothing was deleted from that review.
