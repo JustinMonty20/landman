@@ -74,7 +74,11 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 	}
 	log.Printf("[%s] %s: Capture county records attempt=%s", id, name, attempt)
 	n, err := j.Source.CaptureVacancyLayer(ctx, j.Layer, func(request string, body []byte, crs, status int, complete bool) error {
-		return recorder.RecordHTTP(ctx, request, "", crs, status, complete, bytes.NewReader(body))
+		revision := ""
+		if j.Layer == union.AssessedValueLayer {
+			revision = union.AssessmentProtocolRevision
+		}
+		return recorder.RecordHTTP(ctx, request, revision, crs, status, complete, bytes.NewReader(body))
 	})
 	if err != nil {
 		err = fmt.Errorf("%s: capture county records: %w", name, err)
@@ -143,8 +147,16 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 	if m.Source != source || m.Kind != "full_scan" || len(m.Receipts) < 2 {
 		return errors.New("invalid vacancy capture manifest")
 	}
-	if p.layer == union.AssessedValueLayer && len(m.Receipts) > 2 {
-		return p.prepareAssessmentRanges(ctx, capture)
+	if p.layer == union.AssessedValueLayer {
+		if m.Receipts[0].Revision == union.AssessmentProtocolRevision {
+			return p.prepareAdmittedAssessment(ctx, capture)
+		}
+		if m.Receipts[0].Revision != "" {
+			return errors.New("unsupported assessment revision")
+		}
+		if len(m.Receipts) > 2 {
+			return p.prepareAssessmentRanges(ctx, capture)
+		}
 	}
 	structure := p.layer == union.StructuresLayer
 	var ids []int64
@@ -156,6 +168,9 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 	var aggregateBytes int64
 	seenLegacy := make(map[string]bool)
 	for i, r := range m.Receipts {
+		if r.Revision != "" {
+			return errors.New("unsupported vacancy receipt revision")
+		}
 		if r.HTTPStatus < 200 || r.HTTPStatus >= 300 || !r.ResponseComplete {
 			return errors.New("vacancy response lacks successful complete HTTP outcome")
 		}
