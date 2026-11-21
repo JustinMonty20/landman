@@ -122,6 +122,12 @@ func TestAssessmentVerifiedProgress(t *testing.T) {
 				t.Fatalf("capture error=%v", err)
 			}
 			logs := output.String()
+			if !strings.Contains(logs, "Admitted count plan: receipts=9/2048; count requests=4; resolved leaves=2; resolved rows=2002; checked 0/2002 rows") {
+				t.Fatalf("missing resolved planning progress: %s", logs)
+			}
+			if strings.Contains(logs, "Count ranges: checked 1001") {
+				t.Fatalf("planning claimed verified rows: %s", logs)
+			}
 			if !strings.Contains(logs, "Range checked: 1001/2002 rows") {
 				t.Fatalf("missing nonzero verified progress: %s", logs)
 			}
@@ -224,5 +230,51 @@ func TestAssessmentProgramReceiptAccounting(t *testing.T) {
 	plan, err := PlanAssessment(2002, func(q url.Values) (int64, error) { return counts[q.Get("where")], nil })
 	if err != nil || plan.receipts != 9 {
 		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+}
+
+func TestAssessmentCountProgressBeforeAdmission(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("resultRecordCount") {
+			t.Error("page requested before admission")
+			return
+		}
+		where := r.URL.Query().Get("where")
+		if where == "1=1" {
+			fmt.Fprint(w, `{"count":2002}`)
+			return
+		}
+		var lo, hi int64
+		if _, err := fmt.Sscanf(where, "OBJECTID >= %d AND OBJECTID <= %d", &lo, &hi); err != nil {
+			t.Error(err)
+			return
+		}
+		n := 0
+		if lo <= 1 && 1 <= hi {
+			n += 2001
+		}
+		if lo <= math.MaxInt64 && math.MaxInt64 <= hi {
+			n++
+		}
+		fmt.Fprintf(w, `{"count":%d}`, n)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "indivisible") {
+		t.Fatalf("expected census rejection: %v", err)
+	}
+	if !strings.Contains(output.String(), "Count ranges: checked 0/2002 rows; requests=10/2048; resolved leaves=1; resolved rows=1") {
+		t.Fatalf("count progress misstates resolved work: %s", output.String())
+	}
+	if strings.Contains(output.String(), "Range checked:") {
+		t.Fatalf("verified without pages: %s", output.String())
 	}
 }
