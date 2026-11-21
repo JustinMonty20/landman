@@ -39,7 +39,7 @@ func TestAssessmentAdmissionAndDrift(t *testing.T) {
 				n := tc.total
 				if receipts == 3 {
 					n = tc.post
-				} // global, root, then leaf post-count
+				}
 				if receipts == 4 {
 					n = tc.final
 				}
@@ -136,8 +136,6 @@ func TestAssessmentVerifiedProgress(t *testing.T) {
 }
 
 func TestAssessmentOverBudgetNeverPages(t *testing.T) {
-	// Each populated group needs a deep split to separate 2000 duplicates from one adjacent row.
-	// A complete census of these groups cannot fit the receipt budget.
 	var pages, counts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -222,8 +220,6 @@ func TestAssessmentProgramAdmissionBoundary(t *testing.T) {
 }
 
 func TestAssessmentProgramReceiptAccounting(t *testing.T) {
-	// 2002 rows split into two populated leaves: global, root, two children,
-	// two pages, two post-page counts, and final global count.
 	counts := map[string]int64{AssessmentWhere(0, math.MaxInt64): 2002, AssessmentWhere(0, math.MaxInt64/2): 1001, AssessmentWhere(math.MaxInt64/2+1, math.MaxInt64): 1001}
 	plan, err := PlanAssessment(2002, func(q url.Values) (int64, error) { return counts[q.Get("where")], nil })
 	if err != nil || plan.receipts != 9 {

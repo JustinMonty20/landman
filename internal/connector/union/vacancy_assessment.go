@@ -17,7 +17,7 @@ func AssessmentWhere(lo, hi int64) string {
 	return fmt.Sprintf("OBJECTID >= %d AND OBJECTID <= %d", lo, hi)
 }
 
-// CaptureAssessmentRanges plans all counts before requesting a feature page.
+// CaptureAssessmentRanges plans the complete range tree before requesting a feature page.
 func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, total int64, save func(string, []byte, int, int, bool) error) error {
 	label := "[union.gis.assessed_value] Assessed Value (layer 0)"
 	if attempt, ok := jobs.AttemptID(ctx); ok {
