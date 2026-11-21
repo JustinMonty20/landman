@@ -429,7 +429,8 @@ func run(ctx context.Context) error {
 		roadAssessmentTimeout = standaloneQualificationTimeout
 	}
 	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, roadAssessmentTimeout: roadAssessmentTimeout, afterSource: func(ctx context.Context, id string) error {
-		if id == parcelJobID {
+		switch id {
+		case parcelJobID:
 			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
 			if err != nil || !due {
 				return err
