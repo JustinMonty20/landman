@@ -1,8 +1,10 @@
 package union
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -31,6 +33,7 @@ func TestVacancyCaptureFailClosed(t *testing.T) {
 	}{
 		{"complete", `{"count":2}`, `{"features":[{"attributes":{"OBJECTID":1}},{"attributes":{"OBJECTID":1}}]}`, 5, false},
 		{"unsupported range", `{"count":2001}`, `{}`, 128, true},
+		{"over row gate", `{"count":500001}`, `{}`, 1, true},
 		{"partial", `{"count":2}`, `{"features":[{}]}`, 3, true},
 		{"transfer limit", `{"count":1}`, `{"features":[{}],"exceededTransferLimit":true}`, 3, true},
 		{"server error", `{"error":{"message":"denied"}}`, ``, 1, true},
@@ -59,6 +62,48 @@ func TestVacancyCaptureFailClosed(t *testing.T) {
 				t.Fatalf("err=%v calls=%d captured=%d", err, calls, captured)
 			}
 		})
+	}
+}
+
+func TestAssessmentRangeLogsProgressBeforeRows(t *testing.T) {
+	var output bytes.Buffer
+	logger := log.Default()
+	previous := logger.Writer()
+	logger.SetOutput(&output)
+	t.Cleanup(func() { logger.SetOutput(previous) })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"count":2001}`)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+	if err == nil || !strings.Contains(output.String(), "Count ranges: checked 0/2001 rows; requests=10/2048") {
+		t.Fatalf("missing progress before first page: err=%v logs=%s", err, output.String())
+	}
+}
+
+func TestAssessmentCountAboveOldGateReachesPartitionCheck(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Query().Get("where") == "1=1" {
+			fmt.Fprint(w, `{"count":490180}`)
+		} else {
+			fmt.Fprint(w, `{"count":0}`)
+		}
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "partition count drift") || calls != 2 {
+		t.Fatalf("expected partition drift after accepted initial count; err=%v calls=%d", err, calls)
 	}
 }
 

@@ -117,6 +117,38 @@ func TestManualRoadAssessmentGetsIndependentHour(t *testing.T) {
 	}
 }
 
+func TestStandaloneAssessmentSourceDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit time.Duration
+	}{
+		{"standalone assessed value", standaloneAssessmentTimeout},
+		{"other source", jobTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor := unionExecutor{runner: &executingRunner{}}
+			if tc.limit == standaloneAssessmentTimeout {
+				executor.sourceTimeout = standaloneAssessmentTimeout
+			}
+			var remaining time.Duration
+			definition := jobs.Definition{ID: vacancyjob.AssessedValueID, Run: func(ctx context.Context) (jobs.Result, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatal("assessment has no deadline")
+				}
+				remaining = time.Until(deadline)
+				return jobs.Result{}, nil
+			}}
+			if err := runRequired(context.Background(), executor, definition); err != nil {
+				t.Fatal(err)
+			}
+			if remaining < tc.limit-time.Second || remaining > tc.limit {
+				t.Fatalf("deadline %s, want %s", remaining, tc.limit)
+			}
+		})
+	}
+}
+
 func TestRunRequired(t *testing.T) {
 	definition := jobs.Definition{ID: "union.gis.soil", Run: func(context.Context) (jobs.Result, error) {
 		return jobs.Result{}, nil
@@ -491,6 +523,56 @@ func TestDefaultManualRunsImportsAndScreeningWithoutAssessment(t *testing.T) {
 	want := strings.Join([]string{parcelJobID, soilJobID, zoningJobID, roadsJobID, fema.JobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID, screeningJobID, taxJobID}, ",")
 	if got := strings.Join(runner.ids, ","); got != want {
 		t.Fatalf("default job order %q, want %q", got, want)
+	}
+}
+
+func TestDefaultManualAssessmentHasStandaloneLimit(t *testing.T) {
+	runner := &executingRunner{}
+	limits := make(map[string]time.Duration)
+	definition := func(id string) jobs.Definition {
+		return jobs.Definition{ID: id, Run: func(ctx context.Context) (jobs.Result, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatalf("%s has no deadline", id)
+			}
+			limits[id] = time.Until(deadline)
+			return jobs.Result{}, nil
+		}}
+	}
+	definitions := []jobs.Definition{definition(parcelJobID), definition(vacancyjob.AssessedValueID), definition(taxJobID)}
+	refresh := func(ctx context.Context) error {
+		_, _, err := runner.Run(ctx, definition(screeningJobID))
+		return err
+	}
+	if err := runManual(context.Background(), "all", runner, unionExecutor{}, definitions, refresh); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]time.Duration{
+		parcelJobID: jobTimeout, vacancyjob.AssessedValueID: standaloneAssessmentTimeout,
+		screeningJobID: jobTimeout, taxJobID: jobTimeout,
+	} {
+		if got := limits[id]; got < want-time.Second || got > want {
+			t.Errorf("%s deadline %s, want %s", id, got, want)
+		}
+	}
+}
+
+func TestScheduledQualificationHasStandaloneLimit(t *testing.T) {
+	var remaining time.Duration
+	executor := unionExecutor{runner: &executingRunner{}, sourceTimeout: jobTimeout}
+	definition := jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("scheduled qualification has no deadline")
+		}
+		remaining = time.Until(deadline)
+		return jobs.Result{}, nil
+	}}
+	if outcome, _, err := executor.Run(context.Background(), definition); err != nil || outcome != jobs.OutcomeSuccess {
+		t.Fatalf("scheduled qualification: %s %v", outcome, err)
+	}
+	if remaining < standaloneQualificationTimeout-time.Second || remaining > standaloneQualificationTimeout {
+		t.Fatalf("qualification deadline %s, want %s", remaining, standaloneQualificationTimeout)
 	}
 }
 

@@ -85,6 +85,7 @@ const (
 	qualificationJobID             = "union.qualification.assess"
 	jobTimeout                     = 10 * time.Minute
 	standaloneQualificationTimeout = time.Hour
+	standaloneAssessmentTimeout    = 3 * time.Hour
 )
 
 // unionExecutor preserves source outcomes when a separate downstream attempt fails.
@@ -94,10 +95,18 @@ type unionExecutor struct {
 	afterSource           func(context.Context, string) error
 	qualify               func(context.Context) error
 	roadAssessmentTimeout time.Duration
+	sourceTimeout         time.Duration
 }
 
 func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
-	sourceCtx, sourceCancel := context.WithTimeout(ctx, jobTimeout)
+	timeout := jobTimeout
+	if e.sourceTimeout > 0 {
+		timeout = e.sourceTimeout
+	}
+	if definition.ID == qualificationJobID {
+		timeout = standaloneQualificationTimeout
+	}
+	sourceCtx, sourceCancel := context.WithTimeout(ctx, timeout)
 	outcome, result, err := e.runner.Run(sourceCtx, definition)
 	sourceCancel()
 	if err == nil && outcome == jobs.OutcomeSuccess {
@@ -271,6 +280,8 @@ func run(ctx context.Context) error {
 		timeout := jobTimeout
 		if mode == qualificationJobID {
 			timeout = standaloneQualificationTimeout
+		} else if mode == vacancyjob.AssessedValueID {
+			timeout = standaloneAssessmentTimeout
 		}
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -428,7 +439,11 @@ func run(ctx context.Context) error {
 	if mode == roadsJobID {
 		roadAssessmentTimeout = standaloneQualificationTimeout
 	}
-	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, roadAssessmentTimeout: roadAssessmentTimeout, afterSource: func(ctx context.Context, id string) error {
+	sourceTimeout := jobTimeout
+	if mode == vacancyjob.AssessedValueID {
+		sourceTimeout = standaloneAssessmentTimeout
+	}
+	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, roadAssessmentTimeout: roadAssessmentTimeout, sourceTimeout: sourceTimeout, afterSource: func(ctx context.Context, id string) error {
 		switch id {
 		case parcelJobID:
 			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
@@ -580,16 +595,16 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 			if definition.ID == taxJobID {
 				continue
 			}
-			if err := runManualStep(ctx, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) }); err != nil {
+			if err := runManualStep(ctx, manualImportTimeout(definition.ID), func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) }); err != nil {
 				return err
 			}
 		}
-		if err := runManualStep(ctx, refresh); err != nil {
+		if err := runManualStep(ctx, jobTimeout, refresh); err != nil {
 			return err
 		}
 		for _, definition := range definitions {
 			if definition.ID == taxJobID {
-				return runManualStep(ctx, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) })
+				return runManualStep(ctx, jobTimeout, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) })
 			}
 		}
 		return nil
@@ -602,9 +617,16 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 	return refresh(ctx)
 }
 
-// runManualStep gives each source and its downstream work the normal job limit.
-func runManualStep(ctx context.Context, run func(context.Context) error) error {
-	runCtx, cancel := context.WithTimeout(ctx, jobTimeout)
+func manualImportTimeout(id string) time.Duration {
+	if id == vacancyjob.AssessedValueID {
+		return standaloneAssessmentTimeout
+	}
+	return jobTimeout
+}
+
+// runManualStep bounds one source or derived job independently.
+func runManualStep(ctx context.Context, timeout time.Duration, run func(context.Context) error) error {
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return run(runCtx)
 }

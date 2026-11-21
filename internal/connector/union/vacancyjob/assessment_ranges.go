@@ -60,7 +60,7 @@ func (p *publisher) prepareAssessmentRanges(ctx context.Context, capture ingest.
 			return 0, err
 		}
 		v := gjson.GetBytes(raw, "count")
-		if v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > 250000 {
+		if v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > union.AssessmentRowLimit {
 			return 0, errors.New("invalid assessment partition count")
 		}
 		return v.Int(), nil

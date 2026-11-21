@@ -9,11 +9,15 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/tidwall/gjson"
 )
 
 // AssessmentRangeLimit bounds the number of retained partition and page receipts.
 const AssessmentRangeLimit = 2048
+
+// AssessmentRowLimit bounds a full assessed-value capture and its partition counts.
+const AssessmentRowLimit int64 = 500000
 
 func AssessmentWhere(lo, hi int64) string {
 	return fmt.Sprintf("OBJECTID >= %d AND OBJECTID <= %d", lo, hi)
@@ -22,7 +26,10 @@ func AssessmentWhere(lo, hi int64) string {
 // CaptureAssessmentRanges partitions numeric OBJECTIDs without treating them as row keys.
 // Count checks detect observed drift, not a county snapshot or live query support.
 func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, total int64, save func(string, []byte, int, int, bool) error) error {
-	const label = "[union.gis.assessed_value] Assessed Value (layer 0)"
+	label := "[union.gis.assessed_value] Assessed Value (layer 0)"
+	if attempt, ok := jobs.AttemptID(ctx); ok {
+		label += " attempt=" + attempt
+	}
 	log.Printf("%s: Capture %d source rows by OBJECTID range", label, total)
 	var processed int64
 	receipts := 1 // the initial global count
@@ -39,6 +46,13 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			}
 		}
 		receipts++
+		if receipts%10 == 0 {
+			stage := "Count ranges"
+			if q.Get("returnCountOnly") != "true" {
+				stage = "Read range page"
+			}
+			log.Printf("%s: %s: checked %d/%d rows; requests=%d/%d", label, stage, processed, total, receipts, AssessmentRangeLimit)
+		}
 		return body, err
 	}
 	count := func(where string) (int64, error) {
@@ -47,7 +61,7 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			return 0, err
 		}
 		v := gjson.GetBytes(body, "count")
-		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > 250000 {
+		if gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || v.Type != gjson.Number || v.Raw != strconv.FormatInt(v.Int(), 10) || v.Int() < 0 || v.Int() > AssessmentRowLimit {
 			return 0, errors.New("invalid assessment partition count")
 		}
 		return v.Int(), nil
@@ -111,13 +125,14 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 		previous := processed
 		processed += n
 		if processed/10000 > previous/10000 || (n > 0 && processed == total) {
-			log.Printf("%s: Checked %d/%d rows (%d requests)", label, processed, total, receipts)
+			log.Printf("%s: Range checked: %d/%d rows; requests=%d/%d", label, processed, total, receipts, AssessmentRangeLimit)
 		}
 		return nil
 	}
 	if err := walk(0, math.MaxInt64, total); err != nil {
 		return err
 	}
+	log.Printf("%s: Verify final county count: checked %d/%d rows; requests=%d/%d", label, processed, total, receipts, AssessmentRangeLimit)
 	final, err := count("1=1")
 	if err != nil {
 		return err
@@ -125,5 +140,6 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 	if final != total {
 		return errors.New("assessment total count drift")
 	}
+	log.Printf("%s: Capture complete: checked %d/%d rows; requests=%d/%d", label, processed, total, receipts, AssessmentRangeLimit)
 	return nil
 }

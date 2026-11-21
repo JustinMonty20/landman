@@ -75,8 +75,12 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 	if !gjson.ValidBytes(body) || gjson.GetBytes(body, "error").Exists() || gjson.GetBytes(body, "exceededTransferLimit").Bool() || count.Type != gjson.Number || count.Raw != strconv.FormatInt(count.Int(), 10) || count.Int() < 0 {
 		return 0, errors.New("invalid vacancy count")
 	}
-	if count.Int() > 250000 {
-		return 0, fmt.Errorf("%s count %d exceeds safe capture gate", layer, count.Int())
+	limit := int64(250000)
+	if layer == AssessedValueLayer {
+		limit = AssessmentRowLimit
+	}
+	if count.Int() > limit {
+		return 0, fmt.Errorf("%s count %d exceeds safe capture gate %d", layer, count.Int(), limit)
 	}
 	if layer == AssessedValueLayer {
 		return int(count.Int()), s.CaptureAssessmentRanges(ctx, base, count.Int(), save)
