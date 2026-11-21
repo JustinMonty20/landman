@@ -11,14 +11,14 @@ import (
 )
 
 type unmatchedTaxRecord struct {
-	ID         int64     `json:"id"`
-	CaptureID  *string   `json:"capture_id"`
-	AttemptID  *string   `json:"attempt_id"`
-	ParcelKey  string    `json:"parcel_key"`
-	TaxYear    *int16    `json:"tax_year"`
-	Reason     string    `json:"reason"`
-	RecordedAt time.Time `json:"recorded_at"`
-	MatchedNow bool      `json:"matched_now"`
+	ID               int64     `json:"id"`
+	CaptureID        *string   `json:"capture_id"`
+	CaptureAttemptID *string   `json:"capture_attempt_id"`
+	ParcelKey        string    `json:"parcel_key"`
+	TaxYear          *int16    `json:"tax_year"`
+	Reason           string    `json:"reason"`
+	RecordedAt       time.Time `json:"recorded_at"`
+	MatchedNow       bool      `json:"matched_now"`
 }
 
 func (h *Handler) taxUnmatched(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +65,7 @@ func (h *Handler) taxUnmatched(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(context.Background())
 	var sourceURL string
 	var fetchedAt time.Time
-	err = tx.QueryRow(r.Context(), `SELECT id::text,source_url,fetched_at FROM tax_file_imports WHERE county_id=$1 AND source_name=$2 AND (($3='' AND active) OR id::text=$3)`, countyID, source, importID).Scan(&importID, &sourceURL, &fetchedAt)
+	err = tx.QueryRow(r.Context(), `SELECT id::text,source_url,fetched_at FROM tax_file_imports WHERE county_id=$1 AND source_name=$2 AND (($3='' AND active) OR id=NULLIF($3,'')::uuid)`, countyID, source, importID).Scan(&importID, &sourceURL, &fetchedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -84,7 +84,7 @@ func (h *Handler) taxUnmatched(w http.ResponseWriter, r *http.Request) {
 	records := make([]unmatchedTaxRecord, 0)
 	for rows.Next() {
 		var item unmatchedTaxRecord
-		if err := rows.Scan(&item.ID, &item.ParcelKey, &item.TaxYear, &item.Reason, &item.RecordedAt, &item.CaptureID, &item.AttemptID, &item.MatchedNow); err != nil {
+		if err := rows.Scan(&item.ID, &item.ParcelKey, &item.TaxYear, &item.Reason, &item.RecordedAt, &item.CaptureID, &item.CaptureAttemptID, &item.MatchedNow); err != nil {
 			rows.Close()
 			unavailable(w)
 			return

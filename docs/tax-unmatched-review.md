@@ -6,7 +6,7 @@ A PIN is the county parcel identifier. An unmatched PIN has no exact match in th
 
 All four tax feeds save unmatched PINs in the same transaction as the file publication. A failed transaction saves no findings. Each import keeps one finding per normalized PIN and tax year. Foreclosure feeds have no tax year; the API returns `null`.
 
-Findings include the import, capture, source, PIN, year, reason, and observation time. A capture identifies the retained input. The capture also identifies the job attempt. Direct storage calls without a capture return null capture and attempt IDs. Findings contain no owner names, addresses, balances, or private file paths.
+Findings include the import, capture, source, PIN, year, reason, and observation time. A capture identifies the retained input. `capture_attempt_id` identifies the attempt that registered the capture. It is not the attempt that later replayed it. Direct storage calls without a capture return null capture and capture-attempt IDs. Findings contain no owner names, addresses, balances, or private file paths.
 
 Historical findings remain attached to their import. Repeated storage of the same import does not create duplicate findings. `matched_now` reports whether a stored parcel now has the PIN. It does not prove that tax data has been linked or that the county PIN is correct.
 

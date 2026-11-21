@@ -44,6 +44,9 @@ func TestTaxUnmatchedReview(t *testing.T) {
 		return w
 	}
 	base := "/api/v1/tax/unmatched?source=union_billing&import_id=" + id
+	if w := get("/api/v1/tax/unmatched?source=union_billing&import_id=" + strings.ToUpper(id)); w.Code != 200 {
+		t.Fatalf("uppercase UUID: %d %s", w.Code, w.Body)
+	}
 	w := get(base + "&limit=1")
 	var result struct {
 		Records []unmatchedTaxRecord `json:"records"`

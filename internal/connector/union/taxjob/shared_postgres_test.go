@@ -5,7 +5,9 @@ package taxjob
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union"
 	"github.com/JustinMonty20/landman/internal/ingest"
 	"github.com/JustinMonty20/landman/internal/jobs"
+	"github.com/JustinMonty20/landman/internal/parcelapi"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -241,6 +244,14 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var priorImport string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM tax_file_imports WHERE source_name='union_delinquent' AND active`).Scan(&priorImport); err != nil {
+		t.Fatal(err)
+	}
+	priorFindings := taxCount(t, pool, `SELECT count(*) FROM tax_unmatched_records WHERE import_id=$1`, priorImport)
+	if priorFindings == 0 {
+		t.Fatal("fixture must retain unmatched PINs")
+	}
 	formatted := filepath.Join(root, "formatted-delinquent.csv")
 	if err := os.WriteFile(formatted, append(append([]byte(nil), data...), '\n'), 0600); err != nil {
 		t.Fatal(err)
@@ -250,6 +261,16 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	}
 	if got := taxCount(t, pool, `SELECT count(*) FROM tax_ingest_history`); got != before+2 {
 		t.Fatalf("format-only change wrote business values: %d", got)
+	}
+	for _, suffix := range []string{"", "&import_id=" + priorImport} {
+		w := httptest.NewRecorder()
+		parcelapi.New(pool).ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/tax/unmatched?source=union_delinquent"+suffix, nil))
+		var body struct {
+			Records []json.RawMessage `json:"records"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Records) != priorFindings {
+			t.Fatalf("equivalent file lost review findings: %d %s", w.Code, w.Body)
+		}
 	}
 	broken := filepath.Join(root, "broken-delinquent.csv")
 	if err := os.WriteFile(broken, []byte("invalid header\n"), 0600); err != nil {
