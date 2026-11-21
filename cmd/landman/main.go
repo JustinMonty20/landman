@@ -241,6 +241,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := checkParcelRepairVerificationMode(ctx, mode, os.Getenv("DATABASE_URL")); err != nil {
+		return err
+	}
 	stopProfile, err := heapprof.Start(os.Getenv("LANDMAN_HEAP_PROFILE_DIR"))
 	if err != nil {
 		return err

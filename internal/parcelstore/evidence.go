@@ -31,6 +31,15 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	if _, err := w.tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('union.parcel.evidence.publication'))`); err != nil {
 		return 0, err
 	}
+	if verifyParcelGeometryRepair {
+		var disposable bool
+		if err := w.tx.QueryRow(ctx, `SELECT current_database() = 'landman_parcel_repair_test'`).Scan(&disposable); err != nil {
+			return 0, fmt.Errorf("check repair verification database: %w", err)
+		}
+		if !disposable || !correction {
+			return 0, fmt.Errorf("parcel repair verification requires replay in landman_parcel_repair_test")
+		}
+	}
 	if manifest.ArtifactHashVersion != "ordered-response-bytes-v1" || !digest.MatchString(manifest.ArtifactHash) {
 		return 0, fmt.Errorf("invalid artifact digest")
 	}
@@ -244,16 +253,6 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	if err = rows.Err(); err != nil {
 		return 0, err
 	}
-	var shape []byte
-	err = w.tx.QueryRow(ctx, `SELECT ST_AsEWKB(ST_Normalize(ST_Multi(ST_Union(ST_GeomFromEWKB(shape))))) FROM parcel_import_parts WHERE source_parcel_id=$1`, pid).Scan(&shape)
-	if err != nil {
-		return 0, err
-	}
-	geometryHash := parcelevidence.GeometryHash(shape)
-	normalizedHash, err := parcelevidence.NormalizedHash(last, vacant, geometryHash)
-	if err != nil {
-		return 0, err
-	}
 	sourceHash, err := parcelevidence.SourcePartHash(features)
 	if err != nil {
 		return 0, err
@@ -290,6 +289,33 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 			}
 			return 0, fmt.Errorf("source observation is not newer for %s", pid)
 		}
+	}
+	var shape []byte
+	if verifyParcelGeometryRepair {
+		var repaired []int64
+		if err := w.tx.QueryRow(ctx, repairParcelGeometrySQL, pid).Scan(&shape, &repaired); err != nil {
+			return 0, fmt.Errorf("check parcel geometry: %w", err)
+		}
+		if len(shape) == 0 {
+			return 0, fmt.Errorf("parcel geometry does not meet the zero-movement rule")
+		}
+		if len(repaired) > 0 {
+			log.Printf("parcel geometry verification: capture=%s attempt=%s PID=%q repaired_parts=%d", artifactID, attemptID, pid, len(repaired))
+			if correction && publicationKind == "" {
+				if err := w.tx.QueryRow(ctx, `SELECT CASE WHEN (ST_IsValidDetail(shape)).valid THEN
+ CASE WHEN ST_Equals(shape,ST_GeomFromEWKB($2)) THEN ST_AsEWKB(shape) ELSE $2 END ELSE $2 END
+ FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1`, pid, shape).Scan(&shape); err != nil {
+					return 0, fmt.Errorf("compare prior parcel geometry: %w", err)
+				}
+			}
+		}
+	} else if err := w.tx.QueryRow(ctx, `SELECT ST_AsEWKB(ST_Normalize(ST_Multi(ST_Union(ST_GeomFromEWKB(shape))))) FROM parcel_import_parts WHERE source_parcel_id=$1`, pid).Scan(&shape); err != nil {
+		return 0, err
+	}
+	geometryHash := parcelevidence.GeometryHash(shape)
+	normalizedHash, err := parcelevidence.NormalizedHash(last, vacant, geometryHash)
+	if err != nil {
+		return 0, err
 	}
 	unchanged := oldHash != nil && *oldHash == normalizedHash && oldHashVersion != nil && *oldHashVersion == parcelevidence.NormalizedHashVersion && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion
 	if !unchanged && oldHash != nil && oldHashVersion != nil && *oldHashVersion != parcelevidence.NormalizedHashVersion && oldGeometry != nil && *oldGeometry == geometryHash && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion {
