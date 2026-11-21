@@ -89,9 +89,11 @@ const (
 
 // unionExecutor preserves source outcomes when a separate downstream attempt fails.
 type unionExecutor struct {
-	runner      requiredRunner
-	refresh     func(context.Context) error
-	afterSource func(context.Context, string) error
+	runner                requiredRunner
+	refresh               func(context.Context) error
+	afterSource           func(context.Context, string) error
+	qualify               func(context.Context) error
+	roadAssessmentTimeout time.Duration
 }
 
 func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
@@ -102,7 +104,11 @@ func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (job
 		if definition.ID == qualificationJobID {
 			return outcome, result, nil
 		}
-		downstreamCtx, downstreamCancel := context.WithTimeout(ctx, jobTimeout)
+		timeout := jobTimeout
+		if definition.ID == roadsJobID && e.roadAssessmentTimeout > 0 {
+			timeout = e.roadAssessmentTimeout
+		}
+		downstreamCtx, downstreamCancel := context.WithTimeout(ctx, timeout)
 		defer downstreamCancel()
 		if e.afterSource != nil {
 			err = e.afterSource(downstreamCtx, definition.ID)
@@ -418,9 +424,12 @@ func run(ctx context.Context) error {
 			return acknowledgeHandoffs(ctx, pool, "qualification_pending", requests)
 		})
 	}
-	executor := unionExecutor{runner: runner, afterSource: func(ctx context.Context, id string) error {
-		switch id {
-		case parcelJobID:
+	roadAssessmentTimeout := jobTimeout
+	if mode == roadsJobID {
+		roadAssessmentTimeout = standaloneQualificationTimeout
+	}
+	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, roadAssessmentTimeout: roadAssessmentTimeout, afterSource: func(ctx context.Context, id string) error {
+		if id == parcelJobID {
 			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
 			if err != nil || !due {
 				return err

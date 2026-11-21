@@ -87,6 +87,36 @@ func TestSeparateSourceAndAssessmentAttempts(t *testing.T) {
 	}
 }
 
+func TestManualRoadAssessmentGetsIndependentHour(t *testing.T) {
+	runner := &executingRunner{}
+	var sourceLimit, assessmentLimit time.Duration
+	executor := unionExecutor{runner: runner, roadAssessmentTimeout: standaloneQualificationTimeout, afterSource: func(ctx context.Context, id string) error {
+		if id != roadsJobID {
+			t.Fatalf("downstream job %s", id)
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("assessment has no deadline")
+		}
+		assessmentLimit = time.Until(deadline)
+		return nil
+	}}
+	road := jobs.Definition{ID: roadsJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("roads have no deadline")
+		}
+		sourceLimit = time.Until(deadline)
+		return jobs.Result{}, nil
+	}}
+	if err := runRequired(context.Background(), executor, road); err != nil {
+		t.Fatal(err)
+	}
+	if sourceLimit < jobTimeout-time.Second || sourceLimit > jobTimeout || assessmentLimit < standaloneQualificationTimeout-time.Second || assessmentLimit > standaloneQualificationTimeout {
+		t.Fatalf("roads limit %s, assessment limit %s", sourceLimit, assessmentLimit)
+	}
+}
+
 func TestRunRequired(t *testing.T) {
 	definition := jobs.Definition{ID: "union.gis.soil", Run: func(context.Context) (jobs.Result, error) {
 		return jobs.Result{}, nil
