@@ -103,6 +103,10 @@ FROM tax_delinquent_balances WHERE parcel_id=$1`, vacantID).Scan(&id, &parcelID,
 	if result, err := taxstore.SaveDelinquent(ctx, tx, rows, meta, pp, rr); err != nil || result.Saved != 2 {
 		t.Fatalf("identical save=%+v err=%v", result, err)
 	}
+	var findings int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_unmatched_records u JOIN tax_file_imports i ON i.id=u.import_id WHERE i.source_name='union_delinquent' AND i.fetched_at=$1`, meta.FetchedAt).Scan(&findings); err != nil || findings != 3 {
+		t.Fatalf("retained unmatched findings=%d error=%v", findings, err)
+	}
 	rows[0].Balance = 111
 	if result, err := taxstore.SaveDelinquent(ctx, tx, rows, meta, pp, rr); err != nil || result.Saved != 2 {
 		t.Fatalf("replace save=%+v err=%v", result, err)

@@ -330,6 +330,15 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 		if err != nil {
 			return err
 		}
+		// Equivalent tax rows still need findings on the new active import.
+		if _, err := tx.Exec(ctx, `INSERT INTO tax_unmatched_records(import_id,parcel_key,tax_year,capture_id)
+SELECT $1,u.parcel_key,u.tax_year,$2::uuid FROM tax_unmatched_records u
+JOIN tax_file_imports i ON i.id=u.import_id
+WHERE i.county_id='union' AND i.source_name=$3 AND i.active
+AND NOT EXISTS (SELECT 1 FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND p.source_parcel_id=u.parcel_key)
+ON CONFLICT (import_id,parcel_key,tax_year) DO NOTHING`, id, observation.ID, p.source); err != nil {
+			return fmt.Errorf("retain unmatched tax PINs for source=%s capture=%s import=%s: %w", p.source, observation.ID, id, err)
+		}
 		if err := taxstore.ActivateImport(ctx, tx, id); err != nil {
 			return err
 		}

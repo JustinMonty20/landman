@@ -302,6 +302,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.floodMap(w, r)
 	case r.URL.Path == "/api/v1/qualification/map":
 		h.qualificationMap(w, r)
+	case r.URL.Path == "/api/v1/tax/unmatched":
+		h.taxUnmatched(w, r)
 	case r.URL.Path == "/api/v1/sources":
 		h.sources(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/parcels/"):
