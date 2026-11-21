@@ -99,7 +99,7 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 			return ingest.VerifiedCapture{}, err
 		}
 		_, err = source.CaptureVacancyLayer(ctx, union.AssessedValueLayer, func(u string, b []byte, crs, status int, complete bool) error {
-			return r.RecordHTTP(ctx, u, "", crs, status, complete, strings.NewReader(string(b)))
+			return r.RecordHTTP(ctx, u, union.AssessmentProtocolRevision, crs, status, complete, strings.NewReader(string(b)))
 		})
 		if err != nil {
 			return ingest.VerifiedCapture{}, err
@@ -114,7 +114,7 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub := &publisher{layer: union.AssessedValueLayer}
-	if err := pub.Prepare(ctx, v); err != nil || len(pub.assessments) != 2002 || len(v.Manifest().Receipts) != 10 {
+	if err := pub.Prepare(ctx, v); err != nil || len(pub.assessments) != 2002 || len(v.Manifest().Receipts) != 9 {
 		t.Fatalf("partition replay: %v rows=%d receipts=%d", err, len(pub.assessments), len(v.Manifest().Receipts))
 	}
 	for _, row := range pub.assessments {
@@ -130,39 +130,49 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 		name   string
 		change func(int, string, []byte) (string, []byte, bool)
 	}{
-		{"missing later page", func(i int, u string, b []byte) (string, []byte, bool) { return u, b, i != 7 }},
+		{"missing later page", func(i int, u string, b []byte) (string, []byte, bool) { return u, b, i != 6 }},
+		{"reordered child counts", func(i int, u string, b []byte) (string, []byte, bool) {
+			if i == 2 {
+				u = v.Manifest().Receipts[3].Request
+			}
+			if i == 3 {
+				u = v.Manifest().Receipts[2].Request
+			}
+			return u, b, true
+		}},
+		{"mixed revision", func(i int, u string, b []byte) (string, []byte, bool) { return u, b, true }},
 		{"duplicate identity replay", func(i int, u string, b []byte) (string, []byte, bool) {
-			if i == 7 {
+			if i == 6 {
 				b = []byte(strings.Replace(string(b), `"OBJECTID":9223372036854775807`, `"OBJECTID":9223372036854775807,"\u004fBJECTID":1`, 1))
 			}
 			return u, b, true
 		}},
 		{"duplicate envelope replay", func(i int, u string, b []byte) (string, []byte, bool) {
-			if i == 7 {
+			if i == 6 {
 				b = []byte(strings.Replace(string(b), `{"attributes":{"OBJECTID":9223372036854775807,"parcel_number":"001","assess_category":"AV","market_building":0}}`, `{"attributes":{"OBJECTID":9223372036854775807,"parcel_number":"001"},"\u0061ttributes":{"OBJECTID":1,"parcel_number":"001"}}`, 1))
 			}
 			return u, b, true
 		}},
 		{"conflicting arrays replay", func(i int, u string, b []byte) (string, []byte, bool) {
-			if i == 7 {
+			if i == 6 {
 				b = []byte(strings.TrimSuffix(string(b), `}`) + `,"\u0066eatures":[]}`)
 			}
 			return u, b, true
 		}},
 		{"quoted OID replay", func(i int, u string, b []byte) (string, []byte, bool) {
-			if i == 7 {
+			if i == 6 {
 				b = []byte(strings.Replace(string(b), `"OBJECTID":9223372036854775807`, `"OBJECTID":"9223372036854775807"`, 1))
 			}
 			return u, b, true
 		}},
 		{"changed partition count", func(i int, u string, b []byte) (string, []byte, bool) {
-			if i == 6 {
+			if i == 7 {
 				b = []byte(`{"count":1000}`)
 			}
 			return u, b, true
 		}},
 		{"unsupported query", func(i int, u string, b []byte) (string, []byte, bool) {
-			if i == 7 {
+			if i == 6 {
 				u += "&resultOffset=1"
 			}
 			return u, b, true
@@ -197,7 +207,11 @@ func TestAssessmentRangeCaptureReplay(t *testing.T) {
 				}
 				u, b, keep := tc.change(i, receipt.Request, raw)
 				if keep {
-					if err = r.RecordHTTP(ctx, u, "", 0, 200, true, strings.NewReader(string(b))); err != nil {
+					revision := union.AssessmentProtocolRevision
+					if tc.name == "mixed revision" && i == 4 {
+						revision = ""
+					}
+					if err = r.RecordHTTP(ctx, u, revision, 0, 200, true, strings.NewReader(string(b))); err != nil {
 						t.Fatal(err)
 					}
 				}
