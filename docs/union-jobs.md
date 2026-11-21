@@ -9,7 +9,7 @@ The parcel and soil commands contact the live Union GIS or USDA services. The ta
 
 ```sh
 # Import all manual sources in order: parcels, soil, zoning, roads, FEMA,
-# structures, assessed values, soil screening, qualification assessment, and tax files.
+# structures, assessed values, soil screening, and tax files.
 # Set the five tax inputs below before this command.
 ./landman
 
@@ -39,8 +39,11 @@ The parcel and soil commands contact the live Union GIS or USDA services. The ta
 ./landman run union.gis.structures
 ./landman run union.gis.assessed_value
 
-# Recompute stored qualification evidence without a county fetch.
+# Recompute qualification evidence from stored data. This command does not fetch county data.
 ./landman run union.qualification.assess
+
+# To assess after all imports succeed, run both commands in this order.
+./landman && ./landman run union.qualification.assess
 ```
 
 Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline, except the automatic assessment after a manual `./landman run union.gis.roads`. That assessment gets a new 60-minute limit. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt.
@@ -98,7 +101,7 @@ export UNION_TAX_PIPELINE_PATH="$TAX_INPUT_DIR/foreclosure-pipeline.pdf"
 ./landman
 ```
 
-Set `TAX_INPUT_DIR` and `TAX_ARTIFACT_DIR` to directories you selected before you run these commands. Also set `UNION_FEMA_ARTIFACT_DIR`, `UNION_FEMA_CATALOG_PATH`, and `UNION_FEMA_ARCHIVE_PATH` to matching official FEMA files. `./landman` runs parcel, soil, zoning, roads, FEMA, structures, assessed-value, soil-screening, qualification-assessment, and four-file tax jobs once each. `./landman run union.tax` runs only the four tax files. Individual source and derived-job commands remain available for targeted runs. There is no `./landman run` command without a job ID.
+Set `TAX_INPUT_DIR` and `TAX_ARTIFACT_DIR` to directories you selected before you run these commands. Also set `UNION_FEMA_ARTIFACT_DIR`, `UNION_FEMA_CATALOG_PATH`, and `UNION_FEMA_ARCHIVE_PATH` to matching official FEMA files. `./landman` runs parcel, soil, zoning, roads, FEMA, structures, assessed-value, soil-screening, and four-file tax jobs once each. `./landman run union.tax` runs only the four tax files. Individual source and derived-job commands remain available for targeted runs. There is no `./landman run` command without a job ID.
 
 The job checks all four files before its first typed write. It retains and verifies their exact bytes, then imports delinquent, billing, foreclosure sales, and foreclosure pipeline in that order. The stored county URLs identify known source references; they are not proof that the application fetched these files. A changed file replaces its prior active version only after a complete successful publication. A failed file stops later files. A repeated identical file can link parcels added since the prior run. Check `job_attempts` for `union.tax` and the tax import records for source and storage evidence. Do not set a tax schedule in this local mode.
 
@@ -121,7 +124,7 @@ export UNION_QUALIFICATION_CRON='CRON_TZ=UTC 0 6 * * *'
 
 The example imports parcels on Sunday and Wednesday at 02:00 New York time, soil at 03:00 UTC on the first day of each calendar quarter, zoning and roads on Mondays at 04:00 and 05:00 UTC, and qualification evidence daily at 06:00 UTC. Change each calendar independently, then restart the process. Each expression requires `CRON_TZ` and five calendar fields. Interval descriptors such as `@every` are not accepted by this command. Use UTC to avoid daylight-saving transitions.
 
-Parcel, soil, zoning, and roads have independent source schedules. Qualification also has an independent reconciliation schedule and runs once at scheduler startup. After parcel or soil succeeds cleanly, the executable runs both derived screening and qualification reconciliation. After zoning or roads succeeds cleanly, it runs qualification reconciliation only. A downstream failure does not erase a published source generation. No source import is retried automatically after a missed tick. There is no independent screening cron.
+Parcel, soil, zoning, and roads have independent source schedules. Qualification runs on its own schedule, not at scheduler startup or after source imports. After a successful parcel or soil import, the executable checks or refreshes soil screening as applicable. There is no independent screening schedule. A screening failure does not erase a published source generation. The scheduler does not retry an import after a missed start time.
 
 The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its ordered downstream work have separate ten-minute deadlines. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
 
