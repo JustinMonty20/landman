@@ -48,7 +48,21 @@ func TestAssessmentProgressIncludesAttemptAndRequestCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"count":2001}`)
+		where := r.URL.Query().Get("where")
+		if where == "1=1" {
+			fmt.Fprint(w, `{"count":2001}`)
+			return
+		}
+		var lo, hi int64
+		if _, err := fmt.Sscanf(where, "OBJECTID >= %d AND OBJECTID <= %d", &lo, &hi); err != nil {
+			t.Error(err)
+			return
+		}
+		if lo <= 1 && 1 <= hi {
+			fmt.Fprint(w, `{"count":2001}`)
+		} else {
+			fmt.Fprint(w, `{"count":0}`)
+		}
 	}))
 	defer server.Close()
 	source, err := union.NewGISSource(union.GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})

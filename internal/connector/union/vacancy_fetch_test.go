@@ -32,7 +32,7 @@ func TestVacancyCaptureFailClosed(t *testing.T) {
 		fail              bool
 	}{
 		{"complete", `{"count":2}`, `{"features":[{"attributes":{"OBJECTID":1}},{"attributes":{"OBJECTID":1}}]}`, 5, false},
-		{"unsupported range", `{"count":2001}`, `{}`, 128, true},
+		{"unsupported range", `{"count":2001}`, `{}`, 4, true},
 		{"over row gate", `{"count":500001}`, `{}`, 1, true},
 		{"partial", `{"count":2}`, `{"features":[{}]}`, 3, true},
 		{"transfer limit", `{"count":1}`, `{"features":[{}],"exceededTransferLimit":true}`, 3, true},
@@ -81,7 +81,7 @@ func TestAssessmentRangeLogsProgressBeforeRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
-	if err == nil || !strings.Contains(output.String(), "Count ranges: checked 0/2001 rows; requests=10/2048") {
+	if err == nil || !strings.Contains(output.String(), "Capture 2001 source rows") {
 		t.Fatalf("missing progress before first page: err=%v logs=%s", err, output.String())
 	}
 }
@@ -123,8 +123,15 @@ func TestAssessmentCaptureReportsPageAndRowFailures(t *testing.T) {
 					fmt.Fprint(w, tc.page)
 					return
 				}
-				if tc.split && q.Get("where") != AssessmentWhere(0, 4611686018427387903) {
-					fmt.Fprint(w, `{"count":2001}`)
+				if tc.split {
+					switch q.Get("where") {
+					case "1=1", AssessmentWhere(0, 9223372036854775807):
+						fmt.Fprint(w, `{"count":2001}`)
+					case AssessmentWhere(0, 4611686018427387903):
+						fmt.Fprint(w, `{"count":1}`)
+					default:
+						fmt.Fprint(w, `{"count":2000}`)
+					}
 					return
 				}
 				fmt.Fprint(w, `{"count":1}`)

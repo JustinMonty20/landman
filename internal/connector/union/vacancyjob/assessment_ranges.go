@@ -28,6 +28,9 @@ func (p *publisher) prepareAssessmentRanges(ctx context.Context, capture ingest.
 			return nil, errors.New("missing assessment partition receipt")
 		}
 		r := m.Receipts[index]
+		if r.Revision != "" {
+			return nil, errors.New("mixed assessment receipt revisions")
+		}
 		u, err := url.Parse(r.Request)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || !strings.HasSuffix(u.Path, "/Property_Tax_Live/Assessed_Value/MapServer/0/query") || u.RawQuery != q.Encode() || r.CRS != 0 || r.HTTPStatus < 200 || r.HTTPStatus >= 300 || !r.ResponseComplete {
 			return nil, errors.New("unsupported assessment partition receipt")
