@@ -271,11 +271,61 @@ func TestAssessmentCountProgressBeforeAdmission(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "indivisible") {
 		t.Fatalf("expected census rejection: %v", err)
 	}
-	if !strings.Contains(output.String(), "Count ranges: checked 0/2002 rows; requests=10/2048; resolved leaves=1; resolved rows=1") {
-		t.Fatalf("count progress misstates resolved work: %s", output.String())
+	if strings.Count(output.String(), "Count ranges: checked 0/2002 rows; requests=10/2048; resolved leaves=1; resolved rows=1") != 1 {
+		t.Fatalf("expected one validated tenth-request progress line: %s", output.String())
 	}
 	if strings.Contains(output.String(), "Range checked:") {
 		t.Fatalf("verified without pages: %s", output.String())
+	}
+}
+
+func TestAssessmentInvalidTenthCountReportsValidatedProgress(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	var counts, pages int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("resultRecordCount") {
+			pages++
+			return
+		}
+		counts++
+		if counts == 10 {
+			fmt.Fprint(w, `{"count":"invalid"}`)
+			return
+		}
+		where := r.URL.Query().Get("where")
+		if where == "1=1" {
+			fmt.Fprint(w, `{"count":2002}`)
+			return
+		}
+		var lo, hi int64
+		if _, err := fmt.Sscanf(where, "OBJECTID >= %d AND OBJECTID <= %d", &lo, &hi); err != nil {
+			t.Error(err)
+			return
+		}
+		n := 0
+		if lo <= 1 && 1 <= hi {
+			n += 2001
+		}
+		if lo <= math.MaxInt64 && math.MaxInt64 <= hi {
+			n++
+		}
+		fmt.Fprintf(w, `{"count":%d}`, n)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "invalid assessment partition count") || counts != 10 || pages != 0 {
+		t.Fatalf("err=%v counts=%d pages=%d", err, counts, pages)
+	}
+	want := "Count ranges: checked 0/2002 rows; requests=10/2048; resolved leaves=1; resolved rows=1"
+	if strings.Count(output.String(), want) != 1 {
+		t.Fatalf("expected one failure progress line %q: %s", want, output.String())
 	}
 }
 

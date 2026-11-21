@@ -57,14 +57,20 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 		}
 		return AssessmentCount(raw)
 	}
+	logPlanning := func(requests int, progress assessmentPlanningProgress) {
+		log.Printf("%s: Count ranges: checked %d/%d rows; requests=%d/%d; resolved leaves=%d; resolved rows=%d", label, verifiedRows, total, requests, AssessmentRangeLimit, progress.resolvedLeaves, progress.resolvedRows)
+	}
 	program, err := planAssessment(total, count, func(progress assessmentPlanningProgress) {
 		census = progress
 		if progress.requests%10 == 0 {
-			log.Printf("%s: Count ranges: checked %d/%d rows; requests=%d/%d; resolved leaves=%d; resolved rows=%d", label, verifiedRows, total, progress.requests, AssessmentRangeLimit, progress.resolvedLeaves, progress.resolvedRows)
+			logPlanning(progress.requests, progress)
 		}
 	})
 	planning = false
 	if err != nil {
+		if receipts%10 == 0 && census.requests != receipts {
+			logPlanning(receipts, census)
+		}
 		return err
 	}
 	log.Printf("%s: Admitted count plan: receipts=%d/%d; count requests=%d; resolved leaves=%d; resolved rows=%d; checked %d/%d rows", label, program.receipts, AssessmentRangeLimit, census.requests, census.resolvedLeaves, census.resolvedRows, verifiedRows, total)
