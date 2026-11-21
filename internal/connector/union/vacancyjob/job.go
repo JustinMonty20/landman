@@ -72,7 +72,7 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 	if j.Layer == union.AssessedValueLayer {
 		name = "Assessed Value (layer 0)"
 	}
-	log.Printf("[%s] %s: Capture county records", id, name)
+	log.Printf("[%s] %s: Capture county records attempt=%s", id, name, attempt)
 	n, err := j.Source.CaptureVacancyLayer(ctx, j.Layer, func(request string, body []byte, crs, status int, complete bool) error {
 		return recorder.RecordHTTP(ctx, request, "", crs, status, complete, bytes.NewReader(body))
 	})

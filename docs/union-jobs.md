@@ -46,7 +46,7 @@ The parcel and soil commands contact the live Union GIS or USDA services. The ta
 ./landman && ./landman run union.qualification.assess
 ```
 
-Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline, except the standalone `./landman run union.gis.assessed_value` command, which has a three-hour source deadline, and the automatic assessment after a manual `./landman run union.gis.roads`, which gets a new 60-minute limit. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt.
+Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline, except the standalone `./landman run union.gis.assessed_value` command, which has a three-hour source deadline, and the automatic assessment after a manual `./landman run union.gis.roads`, which gets a new 60-minute limit. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt. Assessed-value capture logs checked rows and requests after every ten county requests, including range counts before the first row passes validation.
 
 The standalone `./landman run union.qualification.assess` command also has a 60-minute limit for the full assessment. This limit includes the wait for the assessment lock. Scheduled assessments and automatic assessments after other imports keep their ten-minute limits.
 

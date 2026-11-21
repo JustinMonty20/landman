@@ -42,6 +42,13 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			}
 		}
 		receipts++
+		if receipts%10 == 0 {
+			stage := "Count ranges"
+			if q.Get("returnCountOnly") != "true" {
+				stage = "Read range page"
+			}
+			log.Printf("%s: %s: checked %d/%d rows; requests=%d/%d", label, stage, processed, total, receipts, AssessmentRangeLimit)
+		}
 		return body, err
 	}
 	count := func(where string) (int64, error) {
@@ -114,13 +121,14 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 		previous := processed
 		processed += n
 		if processed/10000 > previous/10000 || (n > 0 && processed == total) {
-			log.Printf("%s: Checked %d/%d rows (%d requests)", label, processed, total, receipts)
+			log.Printf("%s: Range checked: %d/%d rows; requests=%d/%d", label, processed, total, receipts, AssessmentRangeLimit)
 		}
 		return nil
 	}
 	if err := walk(0, math.MaxInt64, total); err != nil {
 		return err
 	}
+	log.Printf("%s: Verify final county count: checked %d/%d rows; requests=%d/%d", label, processed, total, receipts, AssessmentRangeLimit)
 	final, err := count("1=1")
 	if err != nil {
 		return err
@@ -128,5 +136,6 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 	if final != total {
 		return errors.New("assessment total count drift")
 	}
+	log.Printf("%s: Capture complete: checked %d/%d rows; requests=%d/%d", label, processed, total, receipts, AssessmentRangeLimit)
 	return nil
 }

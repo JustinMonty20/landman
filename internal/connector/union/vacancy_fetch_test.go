@@ -1,8 +1,10 @@
 package union
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -60,6 +62,27 @@ func TestVacancyCaptureFailClosed(t *testing.T) {
 				t.Fatalf("err=%v calls=%d captured=%d", err, calls, captured)
 			}
 		})
+	}
+}
+
+func TestAssessmentRangeLogsProgressBeforeRows(t *testing.T) {
+	var output bytes.Buffer
+	logger := log.Default()
+	previous := logger.Writer()
+	logger.SetOutput(&output)
+	t.Cleanup(func() { logger.SetOutput(previous) })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"count":2001}`)
+	}))
+	defer server.Close()
+	source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+	if err == nil || !strings.Contains(output.String(), "Count ranges: checked 0/2001 rows; requests=10/2048") {
+		t.Fatalf("missing progress before first page: err=%v logs=%s", err, output.String())
 	}
 }
 
