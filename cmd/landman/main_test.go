@@ -46,7 +46,7 @@ func (f *fakeRequiredRunner) Run(_ context.Context, definition jobs.Definition) 
 	return f.outcome, jobs.Result{}, f.err
 }
 
-func TestStandaloneJobLogsSourceAndDerivedAttempts(t *testing.T) {
+func TestSeparateSourceAndAssessmentAttempts(t *testing.T) {
 	var output bytes.Buffer
 	logger := log.Default()
 	previous := logger.Writer()
@@ -60,12 +60,16 @@ func TestStandaloneJobLogsSourceAndDerivedAttempts(t *testing.T) {
 		}
 		return jobs.Result{Processed: 7}, nil
 	}}
-	executor := unionExecutor{runner: runner, afterSource: func(ctx context.Context, _ string) error {
-		return runDerived(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(context.Context) (jobs.Result, error) {
-			return jobs.Result{Processed: 3}, nil
-		}})
-	}}
+	executor := unionExecutor{runner: runner}
 	if err := runManual(context.Background(), zoningJobID, runner, executor, []jobs.Definition{source}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), qualificationJobID) {
+		t.Fatalf("zoning import ran assessment: %s", output.String())
+	}
+	if err := runDerived(context.Background(), runner, jobs.Definition{ID: qualificationJobID, Run: func(context.Context) (jobs.Result, error) {
+		return jobs.Result{Processed: 3}, nil
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	remaining := output.String()
@@ -436,7 +440,7 @@ func TestManualTaxRequiresAllInputsBeforeDatabase(t *testing.T) {
 	}
 }
 
-func TestDefaultManualRunsAllJobsOnce(t *testing.T) {
+func TestDefaultManualRunsImportsAndScreeningWithoutAssessment(t *testing.T) {
 	runner := &executingRunner{}
 	definitions := []jobs.Definition{
 		{ID: parcelJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }},
@@ -451,13 +455,10 @@ func TestDefaultManualRunsAllJobsOnce(t *testing.T) {
 	refresh := func(ctx context.Context) error {
 		return runRequired(ctx, runner, jobs.Definition{ID: screeningJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }})
 	}
-	qualify := func(ctx context.Context) error {
-		return runRequired(ctx, runner, jobs.Definition{ID: qualificationJobID, Run: func(context.Context) (jobs.Result, error) { return jobs.Result{}, nil }})
-	}
-	if err := runManual(context.Background(), "all", runner, unionExecutor{qualify: qualify}, definitions, refresh); err != nil {
+	if err := runManual(context.Background(), "all", runner, unionExecutor{}, definitions, refresh); err != nil {
 		t.Fatal(err)
 	}
-	want := strings.Join([]string{parcelJobID, soilJobID, zoningJobID, roadsJobID, fema.JobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID, screeningJobID, qualificationJobID, taxJobID}, ",")
+	want := strings.Join([]string{parcelJobID, soilJobID, zoningJobID, roadsJobID, fema.JobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID, screeningJobID, taxJobID}, ",")
 	if got := strings.Join(runner.ids, ","); got != want {
 		t.Fatalf("default job order %q, want %q", got, want)
 	}

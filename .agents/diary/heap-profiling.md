@@ -1,0 +1,2 @@
+- **Out-of-scope decision:** The operator has not selected a deployment runtime. Add private local capture now. Defer remote access, process permissions, and profile storage rules until the runtime is known.
+- **Unrelated bug:** `go test -race ./...` includes an untracked baseline source copy under `artifacts/verify/parcel-publish-oQb7aI/baseline-src`. That copy does not compile. Leave the saved evidence unchanged and test `./cmd/...` and `./internal/...` directly.

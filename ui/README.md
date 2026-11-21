@@ -58,6 +58,10 @@ Each **Show on map** link opens that county through a validated `county` query p
 
 The boundaries are simplified for display. Do not use them for legal boundaries or parcel evidence calculations. The browser makes no Census, county, tile, or font requests. County labels are local HTML buttons. County availability is explicit UI configuration, not an ingestion status API.
 
+## Browser debugging and profiling
+
+Use the [Landman UI CDP skill](../.agents/skills/landman-ui-cdp/SKILL.md) to inspect browser errors and profile Svelte UI actions in a local Chromium session.
+
 ## Checks
 
 ```sh

@@ -20,6 +20,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union/taxjob"
 	"github.com/JustinMonty20/landman/internal/connector/union/vacancyjob"
 	"github.com/JustinMonty20/landman/internal/county"
+	"github.com/JustinMonty20/landman/internal/heapprof"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/qualification"
 	"github.com/JustinMonty20/landman/internal/soil"
@@ -91,7 +92,6 @@ type unionExecutor struct {
 	runner      requiredRunner
 	refresh     func(context.Context) error
 	afterSource func(context.Context, string) error
-	qualify     func(context.Context) error
 }
 
 func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (jobs.Outcome, jobs.Result, error) {
@@ -106,7 +106,7 @@ func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (job
 		defer downstreamCancel()
 		if e.afterSource != nil {
 			err = e.afterSource(downstreamCtx, definition.ID)
-		} else {
+		} else if e.refresh != nil {
 			err = e.refresh(downstreamCtx)
 		}
 	}
@@ -226,6 +226,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	stopProfile, err := heapprof.Start(os.Getenv("LANDMAN_HEAP_PROFILE_DIR"))
+	if err != nil {
+		return err
+	}
+	defer stopProfile()
+
 	if mode == fema.JobID || mode == "fema-replay" {
 		return runFEMA(ctx, mode)
 	}
@@ -412,24 +418,19 @@ func run(ctx context.Context) error {
 			return acknowledgeHandoffs(ctx, pool, "qualification_pending", requests)
 		})
 	}
-	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, afterSource: func(ctx context.Context, id string) error {
-		if id == parcelJobID {
+	executor := unionExecutor{runner: runner, afterSource: func(ctx context.Context, id string) error {
+		switch id {
+		case parcelJobID:
 			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
-			if err != nil {
+			if err != nil || !due {
 				return err
 			}
-			var screenErr error
-			if due {
-				screenErr = refresh(ctx)
-			}
-			return errors.Join(screenErr, qualificationRefresh(ctx))
+			return refresh(ctx)
+		case soilJobID:
+			return refresh(ctx)
+		default:
+			return nil
 		}
-		if id == soilJobID {
-			screeningError := refresh(ctx)
-			qualificationError := qualificationRefresh(ctx)
-			return errors.Join(screeningError, qualificationError)
-		}
-		return qualificationRefresh(ctx)
 	}}
 	if mode == "soil-replay" || mode == "screening-replay" {
 		id := soilJobID
@@ -502,11 +503,6 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		startupCtx, startupCancel := context.WithTimeout(ctx, jobTimeout)
-		if err := qualificationRefresh(startupCtx); err != nil {
-			log.Printf("qualification startup reconciliation: %v", err)
-		}
-		startupCancel()
 		scheduler.Start()
 		<-ctx.Done()
 		<-scheduler.Stop().Done()
@@ -580,11 +576,6 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 		}
 		if err := runManualStep(ctx, refresh); err != nil {
 			return err
-		}
-		if executor.qualify != nil {
-			if err := runManualStep(ctx, executor.qualify); err != nil {
-				return err
-			}
 		}
 		for _, definition := range definitions {
 			if definition.ID == taxJobID {
