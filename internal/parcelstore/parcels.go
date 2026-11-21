@@ -58,7 +58,7 @@ func NewShapeWriterTx(ctx context.Context, tx pgx.Tx) (*ShapeWriter, error) {
 	) ON COMMIT DROP;
 	CREATE INDEX ON parcel_import_parts(source_parcel_id);
 	CREATE TEMP TABLE parcel_import_rejected(source_parcel_id TEXT PRIMARY KEY, invalid_geometry boolean NOT NULL) ON COMMIT DROP;
-	CREATE TEMP TABLE parcel_import_identities(raw_key TEXT PRIMARY KEY, source_parcel_id TEXT NOT NULL) ON COMMIT DROP; CREATE INDEX ON parcel_import_identities(source_parcel_id)`)
+	CREATE TEMP TABLE parcel_import_identities(raw_key TEXT PRIMARY KEY, source_parcel_id TEXT NOT NULL) ON COMMIT DROP; CREATE INDEX ON parcel_import_identities USING hash(source_parcel_id)`)
 	if err != nil {
 		return nil, err
 	}

@@ -43,9 +43,9 @@ func ParcelRecordIdentity(raw connector.RawRecord) (ParcelIdentity, error) {
 	return id, nil
 }
 
-// InvalidParcelRecord describes only invalid individual source data, never infrastructure errors.
 const InvalidParcelGeometry = "invalid geometry"
 
+// InvalidParcelRecord describes only invalid individual source data, never infrastructure errors.
 type InvalidParcelRecord struct {
 	Identity ParcelIdentity
 	Reason   string
