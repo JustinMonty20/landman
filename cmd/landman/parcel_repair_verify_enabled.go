@@ -18,7 +18,7 @@ func checkParcelRepairVerificationMode(ctx context.Context, mode, dsn string) er
 	if err != nil {
 		return fmt.Errorf("invalid repair verification database connection")
 	}
-	if (cfg.Host != "127.0.0.1" && cfg.Host != "::1") || cfg.Database != database || len(cfg.Fallbacks) > 1 {
+	if (cfg.Host != "127.0.0.1" && cfg.Host != "::1") || cfg.Database != database || len(cfg.Fallbacks) != 0 {
 		return fmt.Errorf("repair verification requires an explicit loopback connection to %s", database)
 	}
 	return nil
