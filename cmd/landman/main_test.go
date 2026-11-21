@@ -526,6 +526,56 @@ func TestDefaultManualRunsImportsAndScreeningWithoutAssessment(t *testing.T) {
 	}
 }
 
+func TestDefaultManualAssessmentHasStandaloneLimit(t *testing.T) {
+	runner := &executingRunner{}
+	limits := make(map[string]time.Duration)
+	definition := func(id string) jobs.Definition {
+		return jobs.Definition{ID: id, Run: func(ctx context.Context) (jobs.Result, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatalf("%s has no deadline", id)
+			}
+			limits[id] = time.Until(deadline)
+			return jobs.Result{}, nil
+		}}
+	}
+	definitions := []jobs.Definition{definition(parcelJobID), definition(vacancyjob.AssessedValueID), definition(taxJobID)}
+	refresh := func(ctx context.Context) error {
+		_, _, err := runner.Run(ctx, definition(screeningJobID))
+		return err
+	}
+	if err := runManual(context.Background(), "all", runner, unionExecutor{}, definitions, refresh); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]time.Duration{
+		parcelJobID: jobTimeout, vacancyjob.AssessedValueID: standaloneAssessmentTimeout,
+		screeningJobID: jobTimeout, taxJobID: jobTimeout,
+	} {
+		if got := limits[id]; got < want-time.Second || got > want {
+			t.Errorf("%s deadline %s, want %s", id, got, want)
+		}
+	}
+}
+
+func TestScheduledQualificationHasStandaloneLimit(t *testing.T) {
+	var remaining time.Duration
+	executor := unionExecutor{runner: &executingRunner{}, sourceTimeout: jobTimeout}
+	definition := jobs.Definition{ID: qualificationJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("scheduled qualification has no deadline")
+		}
+		remaining = time.Until(deadline)
+		return jobs.Result{}, nil
+	}}
+	if outcome, _, err := executor.Run(context.Background(), definition); err != nil || outcome != jobs.OutcomeSuccess {
+		t.Fatalf("scheduled qualification: %s %v", outcome, err)
+	}
+	if remaining < standaloneQualificationTimeout-time.Second || remaining > standaloneQualificationTimeout {
+		t.Fatalf("qualification deadline %s, want %s", remaining, standaloneQualificationTimeout)
+	}
+}
+
 func TestDefaultTaxFailureKeepsCompletedScreening(t *testing.T) {
 	runner := &executingRunner{outcomes: map[string]jobs.Outcome{taxJobID: jobs.OutcomeFailed}}
 	definitions := []jobs.Definition{

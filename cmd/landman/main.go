@@ -103,6 +103,9 @@ func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (job
 	if e.sourceTimeout > 0 {
 		timeout = e.sourceTimeout
 	}
+	if definition.ID == qualificationJobID {
+		timeout = standaloneQualificationTimeout
+	}
 	sourceCtx, sourceCancel := context.WithTimeout(ctx, timeout)
 	outcome, result, err := e.runner.Run(sourceCtx, definition)
 	sourceCancel()
@@ -592,16 +595,16 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 			if definition.ID == taxJobID {
 				continue
 			}
-			if err := runManualStep(ctx, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) }); err != nil {
+			if err := runManualStep(ctx, manualImportTimeout(definition.ID), func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) }); err != nil {
 				return err
 			}
 		}
-		if err := runManualStep(ctx, refresh); err != nil {
+		if err := runManualStep(ctx, jobTimeout, refresh); err != nil {
 			return err
 		}
 		for _, definition := range definitions {
 			if definition.ID == taxJobID {
-				return runManualStep(ctx, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) })
+				return runManualStep(ctx, jobTimeout, func(runCtx context.Context) error { return runRequired(runCtx, runner, definition) })
 			}
 		}
 		return nil
@@ -614,9 +617,16 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 	return refresh(ctx)
 }
 
-// runManualStep gives each source and its downstream work the normal job limit.
-func runManualStep(ctx context.Context, run func(context.Context) error) error {
-	runCtx, cancel := context.WithTimeout(ctx, jobTimeout)
+func manualImportTimeout(id string) time.Duration {
+	if id == vacancyjob.AssessedValueID {
+		return standaloneAssessmentTimeout
+	}
+	return jobTimeout
+}
+
+// runManualStep bounds one source or derived job independently.
+func runManualStep(ctx context.Context, timeout time.Duration, run func(context.Context) error) error {
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return run(runCtx)
 }

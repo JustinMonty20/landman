@@ -46,9 +46,9 @@ The parcel and soil commands contact the live Union GIS or USDA services. The ta
 ./landman && ./landman run union.qualification.assess
 ```
 
-Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline, except the standalone `./landman run union.gis.assessed_value` command, which has a three-hour source deadline, and the automatic assessment after a manual `./landman run union.gis.roads`, which gets a new 60-minute limit. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt. Assessed-value capture logs checked rows and requests after every ten county requests, including range counts before the first row passes validation.
+Every source import and derived refresh uses `jobs.Runner.Run`. The default command runs source imports in order. Each source and derived step has its own ten-minute deadline, except assessed values, which have three hours in both the standalone and default commands, and the automatic qualification assessment after a manual `./landman run union.gis.roads`, which has 60 minutes. A source error or non-clean outcome stops later work. A derived error fails the command but does not change an already successful source attempt. Assessed-value capture logs checked rows and requests after every ten county requests, including range counts before the first row passes validation.
 
-The standalone `./landman run union.qualification.assess` command also has a 60-minute limit for the full assessment. This limit includes the wait for the assessment lock. Scheduled assessments and automatic assessments after other imports keep their ten-minute limits.
+The standalone `./landman run union.qualification.assess` command also has a 60-minute limit for the full assessment. This limit includes the wait for the assessment lock. Scheduled qualification assessments have the same 60-minute limit as the standalone command. Automatic qualification assessments after other imports keep their ten-minute limit.
 
 A parcel-only run needs a stored soil set. If no set exists, the source can succeed while screening records `pending` and the command fails with the missing prerequisite. Run the soil source to ingest a set and refresh screening. A stored empty set is not a missing set.
 
@@ -126,7 +126,7 @@ The example imports parcels on Sunday and Wednesday at 02:00 New York time, soil
 
 Parcel, soil, zoning, and roads have independent source schedules. Qualification runs on its own schedule, not at scheduler startup or after source imports. After a successful parcel or soil import, the executable checks or refreshes soil screening as applicable. There is no independent screening schedule. A screening failure does not erase a published source generation. The scheduler does not retry an import after a missed start time.
 
-The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its ordered downstream work have separate ten-minute deadlines. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
+The scheduler waits for the next due time on startup. It does not replay missed ticks or retry failures before the next due time. A tick overlapping the same source job is recorded as `skipped_overlap`. Each scheduled source and its ordered downstream work have separate ten-minute deadlines, except the scheduled qualification job, which has 60 minutes. SIGINT or SIGTERM cancels active jobs and waits for workers to finish.
 
 ## Save a log for diagnosis
 
