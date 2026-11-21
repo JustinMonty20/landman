@@ -121,7 +121,7 @@ func PlanAssessment(total int64, count func(url.Values) (int64, error)) (Assessm
 
 // ReadAssessmentProgram is the only feature-page path. Replay and live capture share it.
 // emit receives validated feature bytes in source order, including exact duplicates.
-func ReadAssessmentProgram(program AssessmentProgram, page func(url.Values) ([]byte, error), count func(url.Values) (int64, error), emit func([]byte) error) error {
+func ReadAssessmentProgram(program AssessmentProgram, page func(url.Values) ([]byte, error), count func(url.Values) (int64, error), emit func([]byte) error, verified func(int64)) error {
 	if program.root == nil || emit == nil {
 		return errors.New("assessment program not admitted")
 	}
@@ -167,6 +167,9 @@ func ReadAssessmentProgram(program AssessmentProgram, page func(url.Values) ([]b
 		}
 		if after != r.count {
 			return fmt.Errorf("assessment partition %d–%d count drift: got %d after capture, expected %d", r.low, r.high, after, r.count)
+		}
+		if verified != nil {
+			verified(r.count)
 		}
 		return nil
 	}

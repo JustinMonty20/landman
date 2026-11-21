@@ -82,7 +82,7 @@ func (p *publisher) prepareAdmittedAssessment(ctx context.Context, capture inges
 		}
 		p.assessments = append(p.assessments, row)
 		return nil
-	})
+	}, nil)
 	if err != nil {
 		return err
 	}

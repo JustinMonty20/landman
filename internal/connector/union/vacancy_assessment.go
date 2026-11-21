@@ -25,6 +25,7 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 	}
 	log.Printf("%s: Capture %d source rows by OBJECTID range", label, total)
 	receipts := 1
+	var verifiedRows int64
 	query := func(q url.Values) ([]byte, error) {
 		if receipts >= AssessmentRangeLimit {
 			return nil, errors.New("assessment partition receipt limit")
@@ -43,7 +44,7 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 			if q.Get("resultRecordCount") != "" {
 				stage = "Read range page"
 			}
-			log.Printf("%s: %s: checked 0/%d rows; requests=%d/%d", label, stage, total, receipts, AssessmentRangeLimit)
+			log.Printf("%s: %s: checked %d/%d rows; requests=%d/%d", label, stage, verifiedRows, total, receipts, AssessmentRangeLimit)
 		}
 		return body, err
 	}
@@ -59,5 +60,13 @@ func (s *GISSource) CaptureAssessmentRanges(ctx context.Context, base *url.URL, 
 		return err
 	}
 	log.Printf("%s: Admitted count plan: receipts=%d/%d", label, program.receipts, AssessmentRangeLimit)
-	return ReadAssessmentProgram(program, query, count, func([]byte) error { return nil })
+	err = ReadAssessmentProgram(program, query, count, func([]byte) error { return nil }, func(n int64) {
+		verifiedRows += n
+		log.Printf("%s: Range checked: %d/%d rows; requests=%d/%d", label, verifiedRows, total, receipts, AssessmentRangeLimit)
+	})
+	if err != nil {
+		return err
+	}
+	log.Printf("%s: Capture complete: checked %d/%d rows; requests=%d/%d", label, verifiedRows, total, receipts, AssessmentRangeLimit)
+	return nil
 }

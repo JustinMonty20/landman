@@ -1,8 +1,10 @@
 package union
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -55,6 +57,79 @@ func TestAssessmentAdmissionAndDrift(t *testing.T) {
 			}
 			if tc.total == 0 && len(urls) != 3 {
 				t.Fatalf("empty range requested page: %v", urls)
+			}
+		})
+	}
+}
+
+func TestAssessmentVerifiedProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name, fail string
+	}{
+		{"complete", ""},
+		{"failed second page", "page"},
+		{"failed second post-page count", "post-count"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(previous)
+			var rightCounts int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				where := q.Get("where")
+				right := where == AssessmentWhere(math.MaxInt64/2+1, math.MaxInt64)
+				if q.Has("resultRecordCount") {
+					if right && tc.fail == "page" {
+						http.Error(w, "failed page", http.StatusBadGateway)
+						return
+					}
+					oid := int64(1)
+					if right {
+						oid = math.MaxInt64
+					}
+					fmt.Fprint(w, `{"features":[`)
+					for i := 0; i < 1001; i++ {
+						if i != 0 {
+							fmt.Fprint(w, ",")
+						}
+						fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d}}`, oid)
+					}
+					fmt.Fprint(w, `]}`)
+					return
+				}
+				if right {
+					rightCounts++
+					if rightCounts == 2 && tc.fail == "post-count" {
+						fmt.Fprint(w, `{"count":1000}`)
+						return
+					}
+				}
+				n := 2002
+				if where != "1=1" && where != AssessmentWhere(0, math.MaxInt64) {
+					n = 1001
+				}
+				fmt.Fprintf(w, `{"count":%d}`, n)
+			}))
+			defer server.Close()
+			source, err := NewGISSource(GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 1000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = source.CaptureVacancyLayer(context.Background(), AssessedValueLayer, func(string, []byte, int, int, bool) error { return nil })
+			if (err == nil) != (tc.fail == "") {
+				t.Fatalf("capture error=%v", err)
+			}
+			logs := output.String()
+			if !strings.Contains(logs, "Range checked: 1001/2002 rows") {
+				t.Fatalf("missing nonzero verified progress: %s", logs)
+			}
+			if tc.fail != "" && (strings.Contains(logs, "Range checked: 2002/2002 rows") || strings.Contains(logs, "Capture complete")) {
+				t.Fatalf("failed leaf advanced progress: %s", logs)
+			}
+			if tc.fail == "" && !strings.Contains(logs, "Capture complete: checked 2002/2002 rows") {
+				t.Fatalf("missing completion total: %s", logs)
 			}
 		})
 	}
