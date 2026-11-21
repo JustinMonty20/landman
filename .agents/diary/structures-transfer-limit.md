@@ -1,0 +1,1 @@
+- [Out-of-scope decision] The operator chose a structures-only fix. Zoning already permits full flagged intermediate pages, while assessed-value rows need range partitions. I will not introduce a general paging interface or change soil ingestion as part of this fix.

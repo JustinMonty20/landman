@@ -367,7 +367,11 @@ func TestStructurePagesAtomicAndOfflineReplay(t *testing.T) {
 				}
 				fmt.Fprintf(w, `{"attributes":{"OBJECTID":%d},"geometry":{"rings":[[[0,0],[1,0],[0,0]]]}}`, i+1)
 			}
-			fmt.Fprint(w, `]}`)
+			if offset == 0 {
+				fmt.Fprint(w, `],"exceededTransferLimit":true}`)
+			} else {
+				fmt.Fprint(w, `]}`)
+			}
 		}
 	}))
 	defer server.Close()
