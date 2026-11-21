@@ -86,6 +86,9 @@ file_sha256=EXCLUDED.file_sha256,fetched_at=EXCLUDED.fetched_at,updated_at=now()
 			var parcelID string
 			err := tx.QueryRow(ctx, `SELECT id FROM parcels WHERE county_id=$1 AND source_name=$2 AND source_parcel_id=$3`, county.Union, "union_county_gis", pin.ParcelKey).Scan(&parcelID)
 			if errors.Is(err, pgx.ErrNoRows) {
+				if err := recordUnmatched(ctx, tx, id, pin.ParcelKey, 0); err != nil {
+					return result, err
+				}
 				result.Unmatched++
 				continue
 			}
