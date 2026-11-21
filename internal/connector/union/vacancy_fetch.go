@@ -119,23 +119,11 @@ func (s *GISSource) CaptureVacancyLayer(ctx context.Context, layer VacancyLayer,
 		if layer == StructuresLayer && crs == 0 {
 			return 0, fmt.Errorf("structure page at offset %d: missing or invalid CRS", offset)
 		}
-		features := gjson.GetBytes(body, "features")
-		expected := count.Int() - offset
-		if expected > 2000 {
-			expected = 2000
+		if err := ValidateStructurePage(body, int(offset), int(count.Int()), ids); err != nil {
+			return 0, err
 		}
-		if gjson.GetBytes(body, "error").Exists() || !features.IsArray() || int64(len(features.Array())) != expected || gjson.GetBytes(body, "exceededTransferLimit").Bool() {
-			return 0, fmt.Errorf("vacancy page at offset %d incomplete: got %d rows, expected %d", offset, len(features.Array()), expected)
-		}
-		if layer == StructuresLayer {
-			for i, feature := range features.Array() {
-				v := feature.Get("attributes.OBJECTID")
-				if v.Type != gjson.Number || v.Raw != strconv.FormatInt(ids[int(offset)+i], 10) {
-					return 0, fmt.Errorf("structure source ID membership drift at offset %d, row %d (expected OBJECTID %d)", offset, i+1, ids[int(offset)+i])
-				}
-			}
-			log.Printf("[union.gis.structures] Structures (layer 171): checked %d/%d records", offset+expected, count.Int())
-		}
+		checked := int(offset) + min(2000, int(count.Int()-offset))
+		log.Printf("[union.gis.structures] Structures (layer 171): checked %d/%d records", checked, count.Int())
 	}
 	if layer == StructuresLayer {
 		after, err := s.vacancyIDs(ctx, base, save)
@@ -182,6 +170,30 @@ func (s *GISSource) vacancyIDs(ctx context.Context, base *url.URL, save func(str
 		return nil, err
 	}
 	return StructureIDs(body)
+}
+
+// ValidateStructurePage checks one ordered structures page against the full source ID list.
+// A full intermediate page can report that more records remain. A short or final
+// flagged page cannot establish complete coverage and must fail.
+func ValidateStructurePage(body []byte, offset, total int, ids []int64) error {
+	if offset < 0 || total < 0 || offset > total || len(ids) != total {
+		return fmt.Errorf("structure page at offset %d: invalid source membership", offset)
+	}
+	expected := min(2000, total-offset)
+	features := gjson.GetBytes(body, "features")
+	if !gjson.ValidBytes(body) || gjson.GetBytes(body, "error").Exists() || !features.IsArray() || len(features.Array()) != expected {
+		return fmt.Errorf("structure page at offset %d incomplete: got %d rows, expected %d", offset, len(features.Array()), expected)
+	}
+	if gjson.GetBytes(body, "exceededTransferLimit").Bool() && offset+expected >= total {
+		return fmt.Errorf("structure page at offset %d: final page reports transfer limit", offset)
+	}
+	for i, feature := range features.Array() {
+		v := feature.Get("attributes.OBJECTID")
+		if v.Type != gjson.Number || v.Raw != strconv.FormatInt(ids[offset+i], 10) {
+			return fmt.Errorf("structure source ID membership drift at offset %d, row %d (expected OBJECTID %d)", offset, i+1, ids[offset+i])
+		}
+	}
+	return nil
 }
 
 // StructureIDs validates the complete unique source membership response.

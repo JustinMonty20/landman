@@ -267,7 +267,11 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 		} else if r.CRS != 0 || i != 1 {
 			return errors.New("unexpected assessment page")
 		}
-		if gjson.GetBytes(raw, "exceededTransferLimit").Bool() {
+		if structure && !legacyStructures {
+			if err := union.ValidateStructurePage(raw, pageIndex*2000, count, ids); err != nil {
+				return err
+			}
+		} else if gjson.GetBytes(raw, "exceededTransferLimit").Bool() {
 			return errors.New("truncated vacancy page")
 		}
 		var features []json.RawMessage
@@ -302,8 +306,6 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 						return errors.New("duplicate structure OBJECTID")
 					}
 					seenLegacy[v.ObjectID] = true
-				} else if v.ObjectID != strconv.FormatInt(ids[pageIndex*2000+n], 10) {
-					return errors.New("structure page source ID membership drift")
 				}
 				p.structures = append(p.structures, v)
 			} else {

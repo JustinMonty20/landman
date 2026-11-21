@@ -112,7 +112,7 @@ func (e unionExecutor) Run(ctx context.Context, definition jobs.Definition) (job
 		defer downstreamCancel()
 		if e.afterSource != nil {
 			err = e.afterSource(downstreamCtx, definition.ID)
-		} else {
+		} else if e.refresh != nil {
 			err = e.refresh(downstreamCtx)
 		}
 	}
@@ -431,21 +431,15 @@ func run(ctx context.Context) error {
 	executor := unionExecutor{runner: runner, refresh: refresh, qualify: qualificationRefresh, roadAssessmentTimeout: roadAssessmentTimeout, afterSource: func(ctx context.Context, id string) error {
 		if id == parcelJobID {
 			due, err := soil.NeedsScreenStored(ctx, pool, county.Union, gisSource.Name())
-			if err != nil {
+			if err != nil || !due {
 				return err
 			}
-			var screenErr error
-			if due {
-				screenErr = refresh(ctx)
-			}
-			return errors.Join(screenErr, qualificationRefresh(ctx))
+			return refresh(ctx)
+		case soilJobID:
+			return refresh(ctx)
+		default:
+			return nil
 		}
-		if id == soilJobID {
-			screeningError := refresh(ctx)
-			qualificationError := qualificationRefresh(ctx)
-			return errors.Join(screeningError, qualificationError)
-		}
-		return qualificationRefresh(ctx)
 	}}
 	if mode == "soil-replay" || mode == "screening-replay" {
 		id := soilJobID
@@ -518,11 +512,6 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		startupCtx, startupCancel := context.WithTimeout(ctx, jobTimeout)
-		if err := qualificationRefresh(startupCtx); err != nil {
-			log.Printf("qualification startup reconciliation: %v", err)
-		}
-		startupCancel()
 		scheduler.Start()
 		<-ctx.Done()
 		<-scheduler.Stop().Done()
@@ -596,11 +585,6 @@ func runManual(ctx context.Context, mode string, runner requiredRunner, executor
 		}
 		if err := runManualStep(ctx, refresh); err != nil {
 			return err
-		}
-		if executor.qualify != nil {
-			if err := runManualStep(ctx, executor.qualify); err != nil {
-				return err
-			}
 		}
 		for _, definition := range definitions {
 			if definition.ID == taxJobID {

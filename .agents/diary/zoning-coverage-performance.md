@@ -1,0 +1,2 @@
+- **Unrelated build failure:** `go test ./...` includes an incomplete parcel baseline under `artifacts/verify/parcel-publish-oQb7aI/baseline-src`. Leave the existing artifacts unchanged. Test the affected packages directly.
+- **Deferred change:** A separate `ST_Covers` check before each clip saved only 0.2 seconds on a 600-parcel sample. Do not add another geometry operation without a larger measured gain.
