@@ -20,7 +20,7 @@ func TestLongEdgeNearestInMeasurementCRS(t *testing.T) {
 	}{
 		{"winner", "LINESTRING(999.8 0,999.8 1)", false, 1},
 		{"tie", "LINESTRING(1000.001 4990,1000.001 5000)", false, 2},
-		{"radius-and-county-edge", "", true, 1},
+		{"radius-and-county-edge", "LINESTRING(1964.5 0,1964.5 5000)", true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -89,7 +89,7 @@ func TestLongEdgeNearestInMeasurementCRS(t *testing.T) {
 				t.Fatalf("10m vs 1m reference %.9f %.9f", coarse, fine)
 			}
 			if tc.radius {
-				if math.Abs(fine-5278.8874572) > 0.002 || r.State != RoadNearest || !r.CountyEdgeWarning || len(r.Ties) != 1 {
+				if math.Abs(fine-5278.8874572) > 0.002 || r.State != RoadNearest || !r.CountyEdgeWarning || len(r.Ties) != 1 || r.Ties[0].SourceID != 1 {
 					t.Fatalf("radius %.9f vs %.9f: %+v", coarse, fine, r)
 				}
 			} else if math.Abs(fine-2689.88028094) > 0.002 || r.State != RoadNearest || len(r.Ties) != tc.want || r.Ties[0].SourceID != 1 || r.DistanceFeet == nil || math.Abs(*r.DistanceFeet-fine) > 0.002 {
