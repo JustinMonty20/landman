@@ -1,15 +1,13 @@
-# Verify zero-movement parcel repairs
+# Parcel geometry publication and offline verification
 
-The verification build tests a proposed repair without changing normal imports. A feature qualifies only when both PostGIS repair methods return the same valid polygonal geometry and retain every directed boundary segment. The parcel writer validates the complete parcel after the union. A refusal or database failure rolls back the replay transaction. The verification build does not publish rejection state for readers.
+Union parcel imports, live reprocessing and registered capture replay use the same geometry policy. The writer accepts a ring self-intersection only when the PostGIS linework and structure repairs agree topologically and preserve every directed boundary segment. A rejected feature withholds its entire PID. The writer validates the dissolved boundary before publication. Unexpected SQL errors fail the publication transaction; they are not data refusals.
 
-Use only a fresh disposable PostGIS database named `landman_parcel_repair_test` on a loopback port. Apply the repository migrations. Do not load `.env`. Copy only the required capture registrations and their originating attempt records. Use a private copy of the artifact files. Build the verification executable:
+`parcels.shape` is the only serving boundary. Refusal clears it without deleting the parcel, changing its accepted source evidence, or replacing any sale or tax link. A new rejected PID gets no parcel row. For an existing valid boundary the decision retains a historical copy dated by the last accepted observation (the row timestamp for a legacy parcel without evidence). Spatial readers must not use that copy. Missing and invalid boundaries are unavailable, not evidence of no flood, soil, zoning or road intersection.
 
-```sh
-go build -tags parcelrepairverify -o "$VERIFY_BIN" ./cmd/landman
-```
+`parcel_geometry_decisions` is sparse. Each row identifies the capture, PID, policy version and source OBJECTIDs. A repair records its serving geometry hash. A refusal names the failing check and applies to every part. Live refusals leave pending quarantine records; replay does not refresh or resolve them. A refusal fences older capture replay even though the last accepted source observation is unchanged. Clearing or restoring a boundary requests screening and qualification in the same commit. A decision about an unchanged boundary does not.
 
-Run `replay union.gis.parcels --snapshot UUID` with the disposable `DATABASE_URL` and the private `PARCEL_EVIDENCE_DIR`. The tagged executable refuses all other modes. Do not deploy this executable. The normal build does not call the repair rule.
+## Check a release without a source request
 
-Use the normal executable to rebuild a baseline in the disposable database. Replay the same capture with the verification executable. Compare geometry validity, the exact geometry bytes of the unaffected parcels, parcel and sale IDs, and tax links. Verify that the source observation does not change. Repeat the correction and verify that it does not add more history or derived work. Keep capture IDs and per-parcel logs private.
+Use a fresh loopback disposable PostGIS database. Do not load `.env`. Build the baseline from the parent of the activation change. Apply the current migrations, use a private copy of the verified capture files and copy only the required registrations and originating attempts. The `parcelrepairverify` build tag still restricts execution to replay in `landman_parcel_repair_test`; it does not select a different geometry policy.
 
-The follow-up change will define production rejection state, update spatial consumers, and remove the verification-only restriction. Do not enable normal imports with this rule before those changes pass verification.
+Compare a baseline rebuilt from the retained capture with an eligible correction of that populated baseline and with a fresh rebuild under the new policy. Compare by source parcel ID. Check accepted, refused and untouched rows, geometry validity and exact bytes, parcel and sale IDs, tax links, decision and history counts, and pending derived requests. Repeat the correction and try an older capture. Neither should change current facts or live quarantine. Verify the existing ten-minute job limit for empty import, failed-first retry and unchanged repeat before deployment. Keep capture IDs and per-parcel results private.

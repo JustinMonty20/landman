@@ -116,7 +116,7 @@ func (h *Handler) floodDetail(w http.ResponseWriter, r *http.Request, id string)
 	}
 	var number string
 	var hasShape bool
-	err = tx.QueryRow(ctx, `SELECT source_parcel_id,shape IS NOT NULL AND NOT ST_IsEmpty(shape) AND ST_IsValid(shape) FROM parcels WHERE id=$1 AND county_id=$2 AND source_name=$3`, id, countyID, parcelSource).Scan(&number, &hasShape)
+	err = tx.QueryRow(ctx, `SELECT source_parcel_id,parcel_boundary_usable(shape) FROM parcels WHERE id=$1 AND county_id=$2 AND source_name=$3`, id, countyID, parcelSource).Scan(&number, &hasShape)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return

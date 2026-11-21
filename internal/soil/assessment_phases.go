@@ -22,8 +22,8 @@ FROM soil_polygon_set_members WHERE set_id=$1`, []any{setID}},
 		{"soil index", `CREATE UNIQUE INDEX ON soil_assess_soil(polygon_id)`, nil},
 		{"soil statistics", `ANALYZE soil_assess_soil`, nil},
 		{"parcels", `CREATE TEMP TABLE soil_assess_parcels ON COMMIT DROP AS
-SELECT id,shape AS shape_3857,COALESCE(md5(ST_AsEWKB(shape)),'missing') AS fingerprint,
- ST_CollectionExtract(ST_Transform(shape,2264),3) AS geom
+SELECT id,CASE WHEN parcel_boundary_usable(shape) THEN shape END AS shape_3857,COALESCE(md5(ST_AsEWKB(shape)),'missing') AS fingerprint,
+ CASE WHEN parcel_boundary_usable(shape) THEN ST_CollectionExtract(ST_Transform(shape,2264),3) END AS geom
 FROM parcels WHERE county_id=$1 AND source_name=$2`, []any{countyID.String(), source}},
 		{"parcel index", `CREATE UNIQUE INDEX ON soil_assess_parcels(id)`, nil},
 		{"parcel shape index", `CREATE INDEX ON soil_assess_parcels USING GIST(shape_3857)`, nil},

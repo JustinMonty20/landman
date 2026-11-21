@@ -83,6 +83,17 @@ func TestQualificationHoleAndUnavailableStates(t *testing.T) {
 	if e != nil || r.State != "nearest" || r.DistanceFeet == nil || math.Abs(*r.DistanceFeet-50) > 0.01 {
 		t.Fatalf("hole road: %+v %v", r, e)
 	}
+	for _, shape := range []string{"POLYGON((0 0,2 2,0 2,2 0,0 0))", ""} {
+		if _, err := pool.Exec(ctx, `UPDATE parcels SET shape=ST_GeomFromText(NULLIF($1,''),3857) WHERE id=$2`, shape, parcel); err != nil {
+			t.Fatal(err)
+		}
+		if r, e := CurrentRoads(ctx, pool, parcel); e != nil || r.Available || r.DistanceFeet != nil || r.State != RoadMissingParcelGeometry {
+			t.Fatal(r, e)
+		}
+		if z, e := CurrentZoning(ctx, pool, parcel); e != nil || z.Available || z.TotalAcres != nil || !z.Freshness.Stale {
+			t.Fatal(z, e)
+		}
+	}
 	r, e = CurrentRoads(ctx, pool, missing)
 	if e != nil || r.State != "missing_parcel_geometry" || !r.Freshness.Stale {
 		t.Fatalf("missing shape: %+v %v", r, e)

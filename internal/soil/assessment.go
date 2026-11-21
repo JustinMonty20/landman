@@ -184,22 +184,26 @@ func CurrentAssessment(ctx context.Context, pool *pgxpool.Pool, countyID county.
 	result := &ParcelAssessment{ParcelID: parcelID, County: countyID, Source: source, EvidenceLevel: "mapped-survey", Uses: []UseAssessment{}, Warnings: []string{"Mapped survey evidence is not site verified", "County geometry and USDA survey revision compatibility is unverified", "Survey detail unavailable; no jurisdictional wetlands or permit determination"}}
 	var uncovered, ambiguous float64
 	var currentGeometry, currentSet string
+	var usable bool
 	err = tx.QueryRow(ctx, `SELECT k.id::text,a.geometry_fingerprint,a.total_acres,a.uncovered_acres,a.ambiguous_acres,a.calculated_at,
  s.id::text,s.soil_set_id::text,g.fingerprint,s.assessment_method,s.fresh_until,
- COALESCE(md5(ST_AsEWKB(p.shape)),'missing'),COALESCE(cg.fingerprint,''),f.failed_at,f.error
+ COALESCE(md5(ST_AsEWKB(p.shape)),'missing'),COALESCE(cg.fingerprint,''),f.failed_at,f.error,parcel_boundary_usable(p.shape)
  FROM soil_screening_heads h JOIN soil_screening_runs s ON s.id=h.run_id
  JOIN soil_parcel_assessments a ON a.run_id=s.id JOIN soil_assessment_keys k ON k.parcel_id=a.parcel_id
  JOIN parcels p ON p.id=a.parcel_id JOIN soil_polygon_sets g ON g.id=s.soil_set_id
  LEFT JOIN soil_polygon_set_heads ch ON ch.county_id=h.county_id AND ch.source_name=h.source_name
  LEFT JOIN soil_polygon_sets cg ON cg.id=ch.set_id
  LEFT JOIN soil_screening_refresh_status f ON f.county_id=h.county_id AND f.source_name=h.source_name
- WHERE h.county_id=$1 AND h.source_name=$2 AND a.parcel_id=$3`, countyID.String(), source, parcelID).Scan(&result.ID, &result.GeometryFingerprint, &result.TotalAcres, &uncovered, &ambiguous, &result.CalculatedAt, &result.InterpretationSetRevision, &result.SoilSetID, &result.SoilSetRevision, &result.MethodVersion, &result.Freshness.FreshUntil, &currentGeometry, &currentSet, &result.Freshness.RefreshFailedAt, &result.Freshness.RefreshError)
+ WHERE h.county_id=$1 AND h.source_name=$2 AND a.parcel_id=$3`, countyID.String(), source, parcelID).Scan(&result.ID, &result.GeometryFingerprint, &result.TotalAcres, &uncovered, &ambiguous, &result.CalculatedAt, &result.InterpretationSetRevision, &result.SoilSetID, &result.SoilSetRevision, &result.MethodVersion, &result.Freshness.FreshUntil, &currentGeometry, &currentSet, &result.Freshness.RefreshFailedAt, &result.Freshness.RefreshError, &usable)
 	if err != nil {
 		return nil, err
 	}
+	if !usable {
+		result.TotalAcres = nil
+	}
 	result.Available = result.TotalAcres != nil
 	if !result.Available {
-		result.Warnings = append(result.Warnings, "Parcel geometry is missing or has zero polygonal area")
+		result.Warnings = append(result.Warnings, "Parcel geometry is missing, invalid, or has zero polygonal area")
 	}
 	freshness := &result.Freshness
 	freshness.Reasons = []string{}
@@ -219,6 +223,11 @@ func CurrentAssessment(ctx context.Context, pool *pgxpool.Pool, countyID county.
 		freshness.Reasons = append(freshness.Reasons, "required refresh failed")
 	}
 	freshness.Stale = len(freshness.Reasons) > 0
+	if !usable {
+		freshness.Reasons = append(freshness.Reasons, "parcel geometry unavailable")
+		freshness.Stale = true
+		return result, tx.Commit(ctx)
+	}
 	byUse := map[Use][]MapUnitAssessment{}
 	rows, err := tx.Query(ctx, `SELECT m.map_unit_key,m.exclusive_acres,m.mapped_acres,r.provenance,r.interpretation_id::text,
  (SELECT COALESCE(jsonb_agg(jsonb_build_object('sequence',c.sequence,'key',c.component_key,'name',c.name,'percent',c.percent,'availability',c.availability,'original_rating',c.original_rating,'rating',c.rating,'reason_key',c.reason_key,'reason_name',c.reason_name,'reason',c.reason,'severity',c.severity) ORDER BY c.component_key,c.sequence),'[]'::jsonb) FROM soil_component_facts c WHERE c.run_id=r.run_id AND c.interpretation_id=r.interpretation_id),

@@ -91,6 +91,7 @@ type RoadAssessment struct {
 }
 
 type currentRow struct {
+	usable                bool
 	id, version, geometry string
 	calculated            time.Time
 	total                 *float64
@@ -104,7 +105,7 @@ func current(ctx context.Context, tx pgx.Tx, parcelID, group, method string) (cu
 	var fetched, boundaryFetched, boundaryFailed *time.Time
 	err := tx.QueryRow(ctx, `SELECT a.generation_id::text,a.geometry_fingerprint,a.method_version,a.calculated_at,a.total_acres,
  h.generation_id::text,COALESCE(md5(ST_AsEWKB(p.shape)),'missing'),g.fetched_at,f.failed_at,f.error,
- a.boundary_generation_id::text,zh.generation_id::text,zg.fetched_at,zf.failed_at
+ a.boundary_generation_id::text,zh.generation_id::text,zg.fetched_at,zf.failed_at,parcel_boundary_usable(p.shape)
  FROM qualification_assessments a JOIN parcels p ON p.id=a.parcel_id
  LEFT JOIN qualification_heads h ON h.source_group=a.source_group
  LEFT JOIN qualification_generations g ON g.id=a.generation_id
@@ -114,7 +115,7 @@ func current(ctx context.Context, tx pgx.Tx, parcelID, group, method string) (cu
  LEFT JOIN qualification_generations zg ON zg.id=a.boundary_generation_id
  LEFT JOIN qualification_generations zheadg ON zheadg.id=zh.generation_id
  LEFT JOIN qualification_refresh_failures zf ON zf.source_group='zoning' AND (zheadg.started_at IS NULL OR zf.failed_at>=zheadg.started_at)
- WHERE a.parcel_id=$1 AND a.source_group=$2`, parcelID, group).Scan(&row.id, &row.geometry, &row.version, &row.calculated, &row.total, &head, &actual, &fetched, &row.fresh.RefreshFailedAt, &row.fresh.RefreshError, &row.boundary, &headBoundary, &boundaryFetched, &boundaryFailed)
+ WHERE a.parcel_id=$1 AND a.source_group=$2`, parcelID, group).Scan(&row.id, &row.geometry, &row.version, &row.calculated, &row.total, &head, &actual, &fetched, &row.fresh.RefreshFailedAt, &row.fresh.RefreshError, &row.boundary, &headBoundary, &boundaryFetched, &boundaryFailed, &row.usable)
 	if err != nil {
 		return row, err
 	}
@@ -132,7 +133,7 @@ func current(ctx context.Context, tx pgx.Tx, parcelID, group, method string) (cu
 	if fetched == nil || time.Since(*fetched) > maxSourceAge {
 		add("source_age")
 	}
-	if row.total == nil {
+	if row.total == nil || !row.usable {
 		add("parcel_geometry_missing_or_invalid")
 	}
 	if row.fresh.RefreshFailedAt != nil {
@@ -168,13 +169,17 @@ func CurrentZoning(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Zo
 	if err != nil {
 		return result, err
 	}
-	result.Available = true
+	result.Available = base.usable
 	result.GenerationID = base.id
 	result.GeometryFingerprint = base.geometry
 	result.MethodVersion = base.version
 	result.CalculatedAt = &base.calculated
 	result.TotalAcres = base.total
 	result.Freshness = base.fresh
+	if !base.usable {
+		result.TotalAcres = nil
+		return result, tx.Commit(ctx)
+	}
 	var hasConflict bool
 	if err = tx.QueryRow(ctx, `SELECT unmapped_acres,ambiguous_acres,jurisdiction_unmapped_acres,jurisdiction_ambiguous_acres,has_zone_conflict FROM qualification_assessments WHERE parcel_id=$1 AND source_group='zoning'`, parcelID).Scan(&result.UnmappedAcres, &result.AmbiguousAcres, &result.JurisdictionUnmappedAcres, &result.JurisdictionAmbiguousAcres, &hasConflict); err != nil {
 		return result, err
@@ -242,13 +247,17 @@ func CurrentRoads(ctx context.Context, pool *pgxpool.Pool, parcelID string) (Roa
 	if err != nil {
 		return result, err
 	}
-	result.Available = true
+	result.Available = base.usable
 	result.GenerationID = base.id
 	result.BoundaryGenerationID = base.boundary
 	result.GeometryFingerprint = base.geometry
 	result.MethodVersion = base.version
 	result.CalculatedAt = &base.calculated
 	result.Freshness = base.fresh
+	if !base.usable {
+		result.State = RoadMissingParcelGeometry
+		return result, tx.Commit(ctx)
+	}
 	var roadState string
 	err = tx.QueryRow(ctx, `SELECT road_state,road_distance_feet,road_search_radius_feet,county_edge_warning FROM qualification_assessments WHERE parcel_id=$1 AND source_group='roads'`, parcelID).Scan(&roadState, &result.DistanceFeet, &result.SearchRadiusFeet, &result.CountyEdgeWarning)
 	if err != nil {

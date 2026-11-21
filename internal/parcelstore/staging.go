@@ -53,11 +53,11 @@ func (w *ShapeWriter) stagePart(ctx context.Context, parcel models.GISParcel, va
 }
 
 // RejectPID excludes all parts of this key, regardless of their arrival order.
-func (w *ShapeWriter) RejectPID(ctx context.Context, pid string) error {
+func (w *ShapeWriter) RejectPID(ctx context.Context, pid string, invalidGeometry bool) error {
 	if pid == "" {
 		return ErrMissingNaturalKey
 	}
-	_, err := w.tx.Exec(ctx, `INSERT INTO parcel_import_rejected VALUES($1) ON CONFLICT DO NOTHING`, pid)
+	_, err := w.tx.Exec(ctx, `INSERT INTO parcel_import_rejected VALUES($1,$2) ON CONFLICT(source_parcel_id) DO UPDATE SET invalid_geometry=parcel_import_rejected.invalid_geometry OR EXCLUDED.invalid_geometry`, pid, invalidGeometry)
 	return err
 }
 
