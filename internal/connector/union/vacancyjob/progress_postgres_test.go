@@ -83,7 +83,7 @@ func TestAssessmentProgressIncludesAttemptAndRequestCount(t *testing.T) {
 	if len(start) != 2 {
 		t.Fatal("missing capture attempt ID")
 	}
-	want := "attempt=" + start[1] + ": Count ranges: checked 0/2001 rows; requests=10/2048"
+	want := "attempt=" + start[1] + ": Count ranges: checked 0/2001 rows; requests=10/2048; resolved leaves=0; resolved rows=0"
 	if !strings.Contains(output.String(), want) {
 		t.Fatalf("missing attempt-linked progress line: %s", want)
 	}

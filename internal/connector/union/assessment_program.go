@@ -14,6 +14,11 @@ import (
 const AssessmentProtocolRevision = "assessment-count-first-v1"
 
 type assessmentRange struct{ low, high, count int64 }
+type assessmentPlanningProgress struct {
+	requests       int
+	resolvedLeaves int
+	resolvedRows   int64
+}
 type assessmentNode struct {
 	rangeEvidence assessmentRange
 	left, right   *assessmentNode
@@ -43,11 +48,16 @@ func assessmentPageQuery(where string) url.Values {
 // PlanAssessment counts the root and every child exactly once, without requesting pages.
 // The returned program is an admission token; a failed census never returns one.
 func PlanAssessment(total int64, count func(url.Values) (int64, error)) (AssessmentProgram, error) {
+	return planAssessment(total, count, nil)
+}
+
+func planAssessment(total int64, count func(url.Values) (int64, error), report func(assessmentPlanningProgress)) (AssessmentProgram, error) {
 	if total < 0 || total > AssessmentRowLimit {
 		return AssessmentProgram{}, errors.New("assessment count exceeds safe gate")
 	}
 	const initialGlobalCountReceipts = 1
 	receipts := initialGlobalCountReceipts
+	progress := assessmentPlanningProgress{requests: initialGlobalCountReceipts}
 	query := func(lo, hi int64) (int64, error) {
 		if receipts >= AssessmentRangeLimit {
 			return 0, errors.New("assessment partition receipt limit")
@@ -57,15 +67,30 @@ func PlanAssessment(total int64, count func(url.Values) (int64, error)) (Assessm
 			return 0, err
 		}
 		receipts++
+		progress.requests++
 		return n, nil
+	}
+	credit := func(n int64) {
+		if n > 0 && n <= 2000 {
+			progress.resolvedLeaves++
+			progress.resolvedRows += n
+		}
+	}
+	publish := func() {
+		if report != nil {
+			report(progress)
+		}
 	}
 	rootCount, err := query(0, math.MaxInt64)
 	if err != nil {
 		return AssessmentProgram{}, err
 	}
 	if rootCount != total {
+		publish()
 		return AssessmentProgram{}, errors.New("assessment partition count drift")
 	}
+	credit(rootCount)
+	publish()
 	var build func(assessmentRange) (*assessmentNode, error)
 	build = func(r assessmentRange) (*assessmentNode, error) {
 		node := &assessmentNode{rangeEvidence: r}
@@ -80,13 +105,18 @@ func PlanAssessment(total int64, count func(url.Values) (int64, error)) (Assessm
 		if err != nil {
 			return nil, err
 		}
+		publish()
 		right, err := query(mid+1, r.high)
 		if err != nil {
 			return nil, err
 		}
 		if left > r.count || right > r.count || left+right != r.count {
+			publish()
 			return nil, errors.New("assessment partition sum mismatch")
 		}
+		credit(left)
+		credit(right)
+		publish()
 		node.left, err = build(assessmentRange{r.low, mid, left})
 		if err != nil {
 			return nil, err
