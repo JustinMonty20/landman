@@ -157,6 +157,11 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 			return nil, fmt.Errorf("nonstring attribute %s", field)
 		}
 	}
+	geometry, hasGeometry := asMap(value["geometry"])
+	rawRings, hasRings := geometry["rings"].([]interface{})
+	emptyRings := hasRings && len(rawRings) == 0
+	missingPolygon := spec.kind == QualificationZoning && emptyRings ||
+		spec.kind == "jurisdiction" && (value["geometry"] == nil || emptyRings)
 	var shape geom.T
 	if spec.kind == QualificationRoads {
 		geo, ok := asMap(value["geometry"])
@@ -191,9 +196,8 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 			}
 		}
 		shape = multi
-	} else {
-		geometry, ok := asMap(value["geometry"])
-		if !ok {
+	} else if !missingPolygon {
+		if !hasGeometry {
 			return nil, errors.New("missing polygon geometry")
 		}
 		polygonRings, ok := rings(geometry["rings"])
@@ -237,9 +241,12 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 	if srid != 3857 && srid != 102100 {
 		return nil, fmt.Errorf("unexpected source SRID %d", srid)
 	}
-	b, err := ewkb.Marshal(shape, ewkb.NDR)
-	if err != nil {
-		return nil, err
+	var b []byte
+	if shape != nil {
+		b, err = ewkb.Marshal(shape, ewkb.NDR)
+		if err != nil {
+			return nil, err
+		}
 	}
 	identity := SourceIdentity{LayerID: spec.id, SourceID: id, SourceSRID: srid, Shape: b}
 	clean := func(k string) string { return strings.TrimSpace(str(attrs, k)) }

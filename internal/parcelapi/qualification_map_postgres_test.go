@@ -40,6 +40,8 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 		`INSERT INTO qualification_heads VALUES ('zoning','` + zoning + `'),('roads','` + roads + `')`,
 		`INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,source_srid,shape,raw_shape,repair_status,repair_delta_m2) SELECT id,1,1,'Union',code,3857,` + polygon + `,` + polygon + `,'original',0 FROM (VALUES ('` + zoning + `'::uuid,'current'), ('` + old + `'::uuid,'retired')) x(id,code)`,
 		`INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES ('` + zoning + `',194,1,'Town',3857,` + polygon + `,` + polygon + `,'original',0)`,
+		`INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,source_srid,repair_status,repair_delta_m2) VALUES ('` + zoning + `',190,231245,'Union',3857,'missing_geometry',0)`,
+		`INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,repair_status,repair_delta_m2) VALUES ('` + zoning + `',195,117793,'No boundary',3857,'missing_geometry',0)`,
 		`INSERT INTO qualification_roads(generation_id,source_id,name,source_srid,shape) VALUES ('` + roads + `',1,'Main Road',3857,ST_Multi(ST_Transform(ST_GeomFromText('LINESTRING(-80.62 35,-80.59 35)',4326),3857)))`,
 		`INSERT INTO qualification_refresh_failures VALUES ('roads',now(),'fixture failure'),('zoning',now()-interval '1 day','superseded failure')`,
 	} {
