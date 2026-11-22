@@ -1,0 +1,13 @@
+# Parcel geometry publication and offline verification
+
+Union parcel imports, live reprocessing and registered capture replay use the same geometry policy. The writer accepts a ring self-intersection only when the PostGIS linework and structure repairs agree topologically and preserve every directed boundary segment. A rejected feature withholds its entire PID. The writer validates the dissolved boundary before publication. Unexpected SQL errors fail the publication transaction; they are not data refusals.
+
+`parcels.shape` is the only serving boundary. Refusal clears it without deleting the parcel, changing its accepted source evidence, or replacing any sale or tax link. A new rejected PID gets no parcel row. For an existing valid boundary the decision retains a historical copy dated by the last accepted observation (the row timestamp for a legacy parcel without evidence). Spatial readers must not use that copy. Missing and invalid boundaries are unavailable, not evidence of no flood, soil, zoning or road intersection.
+
+`parcel_geometry_decisions` is sparse. Each row identifies the capture, PID, policy version and source OBJECTIDs. A repair records its serving geometry hash. A refusal names the failing check and applies to every part. Live refusals leave pending quarantine records; replay does not refresh or resolve them. A refusal fences older capture replay even though the last accepted source observation is unchanged. Clearing or restoring a boundary requests screening and qualification in the same commit. A decision about an unchanged boundary does not.
+
+## Check a release without a source request
+
+Use a fresh loopback disposable PostGIS database. Do not load `.env`. Build the baseline from the parent of the activation change. Apply the current migrations, use a private copy of the verified capture files and copy only the required registrations and originating attempts. The `parcelrepairverify` build tag still restricts execution to replay in `landman_parcel_repair_test`; it does not select a different geometry policy.
+
+Compare a baseline rebuilt from the retained capture with an eligible correction of that populated baseline and with a fresh rebuild under the new policy. Compare by source parcel ID. Check accepted, refused and untouched rows, geometry validity and exact bytes, parcel and sale IDs, tax links, decision and history counts, and pending derived requests. Repeat the correction and try an older capture. Neither should change current facts or live quarantine. Verify the existing ten-minute job limit for empty import, failed-first retry and unchanged repeat before deployment. Keep capture IDs and per-parcel results private.

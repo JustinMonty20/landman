@@ -149,6 +149,17 @@ func TestHTTPPostGIS(t *testing.T) {
 	if code != 200 || soil["available"] != false {
 		t.Fatalf("missing soil %d %v", code, soil)
 	}
+	for _, shape := range []string{"POLYGON((-79.9 33.1,-79.899 33.101,-79.9 33.101,-79.899 33.1,-79.9 33.1))", ""} {
+		if _, err := pool.Exec(ctx, `UPDATE parcels SET shape=ST_Transform(ST_GeomFromText(NULLIF($1,''),4326),3857) WHERE id=$2`, shape, ids[0]); err != nil {
+			t.Fatal(err)
+		}
+		if code, b := request("/api/v1/parcels/" + ids[0]); code != 200 || b["geometry_available"] != false || b["location"] != nil {
+			t.Fatal(code, b)
+		}
+		if code, b := request("/api/v1/parcels/map?bbox=" + bbox + "&zoom=14"); code != 200 || b["context_count"] != float64(2) {
+			t.Fatal(code, b)
+		}
+	}
 	if _, err := pool.Exec(ctx, `UPDATE parcels SET situs_line_1=$1 WHERE id=$2`, strings.Repeat("x", 2<<20), ids[0]); err != nil {
 		t.Fatal(err)
 	}

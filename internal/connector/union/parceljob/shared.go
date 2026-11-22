@@ -205,6 +205,7 @@ func (p *sharedPublisher) Apply(ctx context.Context, tx pgx.Tx, observation inge
 	if err != nil {
 		return fmt.Errorf("publish complete parcel groups: %w", err)
 	}
+	p.result.Quarantined += writer.RefusedGeometryParts()
 	if observation.Published {
 		return nil
 	}

@@ -367,6 +367,14 @@ func TestPostgresAssessmentSeventyThirtyAndImprovedParcels(t *testing.T) {
 	if f.read(improved).Uses[0].MapUnits[0].Interpretation.ID != unknown.Uses[0].MapUnits[0].Interpretation.ID {
 		t.Fatal("unknown revision did not retain its stable UUID")
 	}
+	for _, shape := range []string{"POLYGON((0 0,2 2,0 2,2 0,0 0))", ""} {
+		if _, err := f.db.Exec(f.ctx, `UPDATE parcels SET shape=ST_GeomFromText(NULLIF($1,''),3857) WHERE id=$2`, shape, improved); err != nil {
+			t.Fatal(err)
+		}
+		if a := f.read(improved); a.Available || a.TotalAcres != nil || len(a.Uses) != 0 || !a.Freshness.Stale {
+			t.Fatalf("prior soil assessment leaked: %+v", a)
+		}
+	}
 }
 
 func TestPostgresAssessmentCopyAndChangedInput(t *testing.T) {

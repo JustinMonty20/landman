@@ -44,7 +44,7 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 			if !errors.As(err, &invalid) {
 				return fmt.Errorf("normalize parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 			}
-			if err := writer.RejectPID(ctx, invalid.Identity.PID); err != nil {
+			if err := writer.RejectPID(ctx, invalid.Identity.PID, invalid.Reason == union.InvalidParcelGeometry); err != nil {
 				return fmt.Errorf("reject parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 			}
 			result.Quarantined++

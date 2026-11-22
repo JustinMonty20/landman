@@ -253,7 +253,7 @@ const predicate = `p.county_id=$1 AND p.source_name=$2
  AND ($11::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.out_of_state_mailing=$11))
 AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.entity_name_indicator=$12))
 AND ($13::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.corporate_name_indicator=$13))
-AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857))))`
+AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857)) END))`
 const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,p.likely_vacant,p.updated_at`
 
 func scanParcel(row pgx.Row) (Parcel, error) {
@@ -565,7 +565,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	}
 	b := f.Bounds
 	contextArgs := []any{countyID, parcelSource, b.West, b.South, b.East, b.North}
-	const contextWhere = `p.county_id=$1 AND p.source_name=$2 AND p.shape && ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857) AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857))`
+	const contextWhere = `p.county_id=$1 AND p.source_name=$2 AND p.shape && ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857)) END`
 	var total, matches int64
 	if z < 13 {
 		type cell struct {
@@ -698,7 +698,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request, id string) {
 	var p Parcel
 	var sourceID string
 	var location []byte
-	e = tx.QueryRow(r.Context(), `SELECT `+parcelColumns+`,p.source_parcel_id,ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(p.shape),4326))::jsonb FROM parcels p WHERE p.id=$1 AND p.county_id=$2 AND p.source_name=$3`, id, countyID, parcelSource).Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt, &sourceID, &location)
+	e = tx.QueryRow(r.Context(), `SELECT `+parcelColumns+`,p.source_parcel_id,CASE WHEN parcel_boundary_usable(p.shape) THEN ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(p.shape),4326))::jsonb END FROM parcels p WHERE p.id=$1 AND p.county_id=$2 AND p.source_name=$3`, id, countyID, parcelSource).Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt, &sourceID, &location)
 	if errors.Is(e, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -730,7 +730,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
-	respond(w, map[string]any{"parcel": p, "county": countyID, "source": parcelSource, "source_parcel_id": sourceID, "location": json.RawMessage(location), "sales": json.RawMessage(sales), "owner_labels": json.RawMessage(labels), "source_stamp": s})
+	respond(w, map[string]any{"parcel": p, "county": countyID, "source": parcelSource, "source_parcel_id": sourceID, "geometry_available": location != nil, "location": json.RawMessage(location), "sales": json.RawMessage(sales), "owner_labels": json.RawMessage(labels), "source_stamp": s})
 }
 func (h *Handler) soil(w http.ResponseWriter, r *http.Request, id string) {
 	// CurrentAssessment owns its own read-only snapshot and freshness logic.

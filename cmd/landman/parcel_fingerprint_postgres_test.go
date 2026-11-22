@@ -3,8 +3,10 @@
 package main
 
 import (
-	"github.com/JustinMonty20/landman/internal/parcelevidence"
 	"testing"
+
+	"github.com/JustinMonty20/landman/internal/jobs"
+	"github.com/JustinMonty20/landman/internal/parcelevidence"
 )
 
 func TestParcelPersistedGeometryAndNormalizedFingerprintStable(t *testing.T) {
@@ -53,7 +55,7 @@ func TestParcelPersistedGeometryAndNormalizedFingerprintStable(t *testing.T) {
 
 }
 
-func TestArcGISInteriorRingDirectionChangesTopologyAndSourceFingerprint(t *testing.T) {
+func TestArcGISReversedHoleDoesNotReplaceAcceptedBoundary(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	fixture := &parcelHTTPFixture{features: []map[string]interface{}{feature(1, "A", "owner", true, 0)}}
 	outer := [][]int{{0, 0}, {0, 4}, {4, 4}, {4, 0}, {0, 0}}
@@ -63,21 +65,22 @@ func TestArcGISInteriorRingDirectionChangesTopologyAndSourceFingerprint(t *testi
 	if _, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil {
 		t.Fatal(err)
 	}
-	var firstArea float64
 	var firstHash string
-	if err := pool.QueryRow(ctx, `SELECT ST_Area(p.shape),c.source_hash FROM parcels p JOIN parcel_evidence_current c USING(county_id,source_name,source_parcel_id)`).Scan(&firstArea, &firstHash); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT source_hash FROM parcel_evidence_current`).Scan(&firstHash); err != nil {
 		t.Fatal(err)
 	}
+	before := parcelSnapshot(t, ctx, pool)[0]
 	fixture.features[0]["geometry"] = map[string]interface{}{"rings": [][][]int{outer, {{1, 1}, {1, 2}, {2, 2}, {2, 1}, {1, 1}}}}
-	if _, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil {
-		t.Fatal(err)
+	if out, _, err := runParcelFixture(ctx, pool, dsn, source, false, 0); err != nil || out != jobs.OutcomeSuccessWithQuarantine {
+		t.Fatal(out, err)
 	}
-	var secondArea float64
+	assertBoundaryCleared(t, before, parcelSnapshot(t, ctx, pool)[0])
 	var secondHash string
-	if err := pool.QueryRow(ctx, `SELECT ST_Area(p.shape),c.source_hash FROM parcels p JOIN parcel_evidence_current c USING(county_id,source_name,source_parcel_id)`).Scan(&secondArea, &secondHash); err != nil {
+	var area float64
+	if err := pool.QueryRow(ctx, `SELECT c.source_hash,ST_Area(d.prior_valid_shape) FROM parcel_evidence_current c JOIN parcel_geometry_decisions d USING(source_parcel_id) WHERE d.outcome='zero_movement_refused'`).Scan(&secondHash, &area); err != nil {
 		t.Fatal(err)
 	}
-	if firstArea == secondArea || firstHash == secondHash {
-		t.Fatalf("direction lost topology or source meaning: areas %v,%v hashes equal %v", firstArea, secondArea, firstHash == secondHash)
+	if firstHash != secondHash || area != 15 {
+		t.Fatalf("reversed hole replaced the accepted source or dated area: hash equal %t, area %v", firstHash == secondHash, area)
 	}
 }

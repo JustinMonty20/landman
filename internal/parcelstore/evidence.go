@@ -31,6 +31,15 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	if _, err := w.tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('union.parcel.evidence.publication'))`); err != nil {
 		return 0, err
 	}
+	if verifyParcelGeometryRepair {
+		var disposable bool
+		if err := w.tx.QueryRow(ctx, `SELECT current_database() = 'landman_parcel_repair_test'`).Scan(&disposable); err != nil {
+			return 0, fmt.Errorf("check repair verification database: %w", err)
+		}
+		if !disposable || !correction {
+			return 0, fmt.Errorf("parcel repair verification requires replay in landman_parcel_repair_test")
+		}
+	}
 	if manifest.ArtifactHashVersion != "ordered-response-bytes-v1" || !digest.MatchString(manifest.ArtifactHash) {
 		return 0, fmt.Errorf("invalid artifact digest")
 	}
@@ -106,9 +115,32 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 		}
 		publicationKind = "observed"
 	}
+	// A refusal does not advance current source evidence, but it still fences older input.
+	if _, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_evidence_groups ON COMMIT DROP AS
+ WITH candidates AS (
+   SELECT p.source_parcel_id,min(p.ordinal) ordinal,false invalid_geometry FROM parcel_import_parts p
+   WHERE NOT EXISTS (SELECT 1 FROM parcel_import_rejected r WHERE r.source_parcel_id=p.source_parcel_id) GROUP BY p.source_parcel_id
+   UNION ALL SELECT source_parcel_id,NULL,true FROM parcel_import_rejected WHERE invalid_geometry
+ ) SELECT c.source_parcel_id,row_number() OVER (ORDER BY ordinal,c.source_parcel_id) first_ordinal,invalid_geometry
+ FROM candidates c WHERE NOT $3::boolean OR NOT EXISTS (SELECT 1 FROM parcel_geometry_decisions d JOIN parcel_evidence_observations o USING(artifact_id)
+ WHERE d.source_parcel_id=c.source_parcel_id AND d.outcome<>'repaired' AND d.artifact_id<>$2 AND o.observed_at >= $1)`, manifest.CreatedAt, manifest.ID, correction); err != nil {
+		return 0, err
+	}
+	if _, err := w.tx.Exec(ctx, `CREATE UNIQUE INDEX ON parcel_evidence_groups(first_ordinal); ANALYZE parcel_evidence_groups`); err != nil {
+		return 0, err
+	}
+	if !correction {
+		var conflict bool
+		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_geometry_decisions d JOIN parcel_evidence_observations o USING(artifact_id) JOIN parcel_evidence_groups g USING(source_parcel_id) WHERE d.outcome<>'repaired' AND o.observed_at >= $1)`, manifest.CreatedAt).Scan(&conflict); err != nil {
+			return 0, err
+		}
+		if conflict {
+			return 0, fmt.Errorf("source observation is not newer than geometry refusal")
+		}
+	}
 	if observationID == "" && correction && publicationKind == "offline_retry" {
 		var eligible bool
-		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM (SELECT DISTINCT p.source_parcel_id FROM parcel_import_parts p WHERE NOT EXISTS (SELECT 1 FROM parcel_import_rejected r WHERE r.source_parcel_id=p.source_parcel_id)) p LEFT JOIN parcel_evidence_current c ON c.county_id='union' AND c.source_name='union_county_gis' AND c.source_parcel_id=p.source_parcel_id LEFT JOIN parcel_evidence_observations o ON o.id=c.observation_id WHERE o.observed_at IS NULL OR o.observed_at < $1)`, manifest.CreatedAt).Scan(&eligible); err != nil {
+		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_groups p LEFT JOIN parcel_evidence_current c ON c.county_id='union' AND c.source_name='union_county_gis' AND c.source_parcel_id=p.source_parcel_id LEFT JOIN parcel_evidence_observations o ON o.id=c.observation_id WHERE o.observed_at IS NULL OR o.observed_at < $1)`, manifest.CreatedAt).Scan(&eligible); err != nil {
 			return 0, err
 		}
 		if !eligible {
@@ -121,24 +153,23 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 			return 0, err
 		}
 	}
-	if _, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_evidence_groups ON COMMIT DROP AS SELECT p.source_parcel_id,min(p.ordinal) first_ordinal FROM parcel_import_parts p WHERE NOT EXISTS (SELECT 1 FROM parcel_import_rejected r WHERE r.source_parcel_id=p.source_parcel_id) GROUP BY p.source_parcel_id; CREATE UNIQUE INDEX ON parcel_evidence_groups(first_ordinal); ANALYZE parcel_evidence_groups`); err != nil {
-		return 0, err
-	}
+	publication := evidencePublication{artifactID: manifest.ID, observedAt: manifest.CreatedAt, observationID: observationID, kind: publicationKind, attemptID: attemptID, replay: correction, quarantine: quarantine, jobID: jobID}
 	processed, groupsChecked := 0, 0
 	var cursor int64
 	for {
-		rows, err := w.tx.Query(ctx, `SELECT source_parcel_id,first_ordinal FROM parcel_evidence_groups WHERE first_ordinal>$1 ORDER BY first_ordinal LIMIT 200`, cursor)
+		rows, err := w.tx.Query(ctx, `SELECT source_parcel_id,first_ordinal,invalid_geometry FROM parcel_evidence_groups WHERE first_ordinal>$1 ORDER BY first_ordinal LIMIT 200`, cursor)
 		if err != nil {
 			return 0, err
 		}
 		type group struct {
-			pid     string
-			ordinal int64
+			pid             string
+			ordinal         int64
+			invalidGeometry bool
 		}
 		batch := make([]group, 0, 200)
 		for rows.Next() {
 			var g group
-			if err = rows.Scan(&g.pid, &g.ordinal); err != nil {
+			if err = rows.Scan(&g.pid, &g.ordinal, &g.invalidGeometry); err != nil {
 				break
 			}
 			batch = append(batch, g)
@@ -156,16 +187,18 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 		pids := make([]string, 0, len(batch))
 		for _, g := range batch {
 			cursor = g.ordinal
-			n, err := w.publishEvidencePID(ctx, g.pid, observationID, manifest.CreatedAt, manifest.ID, correction, publicationKind, attemptID)
+			n, err := w.publishEvidencePID(ctx, g.pid, g.invalidGeometry, publication)
 			if err != nil {
-				return 0, fmt.Errorf("write parcel PID %q (group %d, first source part %d): %w", g.pid, groupsChecked+1, g.ordinal, err)
+				return 0, fmt.Errorf("write parcel PID %q (group %d, publication order %d): %w", g.pid, groupsChecked+1, g.ordinal, err)
 			}
 			groupsChecked++
 			if groupsChecked%10000 == 0 {
 				log.Printf("[%s] capture=%s: Checked %d parcel groups in publication transaction", jobID, manifest.ID, groupsChecked)
 			}
 			processed += n
-			pids = append(pids, g.pid)
+			if n > 0 {
+				pids = append(pids, g.pid)
+			}
 		}
 		// A replay has no retained selection tokens or original scan cutoff.
 		// Leave unverifiable quarantine occurrences pending for a live repair.
@@ -202,7 +235,14 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	return processed, nil
 }
 
-func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID string, observedAt time.Time, artifactID string, correction bool, publicationKind, attemptID string) (int, error) {
+type evidencePublication struct {
+	artifactID, observationID, kind, attemptID, jobID string
+	observedAt                                        time.Time
+	replay                                            bool
+	quarantine                                        *jobs.QuarantineStore
+}
+
+func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invalidGeometry bool, publication evidencePublication) (int, error) {
 	rows, err := w.tx.Query(ctx, `SELECT payload,likely_vacant,source_feature,source_hash FROM parcel_import_parts WHERE source_parcel_id=$1 ORDER BY ordinal`, pid)
 	if err != nil {
 		return 0, err
@@ -244,9 +284,41 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	if err = rows.Err(); err != nil {
 		return 0, err
 	}
-	var shape []byte
-	err = w.tx.QueryRow(ctx, `SELECT ST_AsEWKB(ST_Normalize(ST_Multi(ST_Union(ST_GeomFromEWKB(shape))))) FROM parcel_import_parts WHERE source_parcel_id=$1`, pid).Scan(&shape)
-	if err != nil {
+	var sourceHash string
+	if !invalidGeometry {
+		sourceHash, err = parcelevidence.SourcePartHash(features)
+		if err != nil {
+			return 0, err
+		}
+	}
+	var previousObservation, oldHash, oldGeometry, oldNormalizer, oldSourceHash, oldSourceVersion, oldHashVersion, oldGeometryVersion *string
+	var shapeMissing bool
+	err = w.tx.QueryRow(ctx, `SELECT p.shape IS NULL, observation_id::text,normalized_hash,geometry_hash,normalizer_version,source_hash,source_hash_version,normalized_hash_version,geometry_hash_version FROM parcel_evidence_current c JOIN parcels p USING(county_id,source_name,source_parcel_id) WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1 FOR UPDATE OF c`, pid).Scan(&shapeMissing, &previousObservation, &oldHash, &oldGeometry, &oldNormalizer, &oldSourceHash, &oldSourceVersion, &oldHashVersion, &oldGeometryVersion)
+	if err != nil && err != pgx.ErrNoRows {
+		return 0, err
+	}
+	if publication.replay && publication.kind == "" {
+		if previousObservation == nil || *previousObservation != publication.observationID {
+			return 0, nil
+		}
+		if oldSourceHash == nil || *oldSourceHash != sourceHash || oldSourceVersion == nil || *oldSourceVersion != parcelevidence.SourceHashVersion {
+			return 0, fmt.Errorf("trusted source hash mismatch for PID %s", pid)
+		}
+	} else if previousObservation != nil {
+		var newer bool
+		err = w.tx.QueryRow(ctx, `SELECT o.observed_at >= $2 FROM parcel_evidence_observations o WHERE o.id=$1::uuid`, *previousObservation, publication.observedAt).Scan(&newer)
+		if err != nil {
+			return 0, err
+		}
+		if newer {
+			if publication.replay {
+				return 0, nil
+			}
+			return 0, fmt.Errorf("source observation is not newer for %s", pid)
+		}
+	}
+	shape, err := w.applyGeometry(ctx, pid, invalidGeometry, count, publication)
+	if err != nil || shape == nil {
 		return 0, err
 	}
 	geometryHash := parcelevidence.GeometryHash(shape)
@@ -254,48 +326,21 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	if err != nil {
 		return 0, err
 	}
-	sourceHash, err := parcelevidence.SourcePartHash(features)
-	if err != nil {
-		return 0, err
-	}
-	var previousObservation, oldHash, oldGeometry, oldNormalizer, oldSourceHash, oldSourceVersion, oldHashVersion, oldGeometryVersion *string
-	err = w.tx.QueryRow(ctx, `SELECT observation_id::text,normalized_hash,geometry_hash,normalizer_version,source_hash,source_hash_version,normalized_hash_version,geometry_hash_version FROM parcel_evidence_current WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1 FOR UPDATE`, pid).Scan(&previousObservation, &oldHash, &oldGeometry, &oldNormalizer, &oldSourceHash, &oldSourceVersion, &oldHashVersion, &oldGeometryVersion)
-	if err != nil && err != pgx.ErrNoRows {
-		return 0, err
-	}
-	if correction && publicationKind == "" {
-		if previousObservation == nil {
-			return 0, nil
-		}
-		var currentID string
-		if err = w.tx.QueryRow(ctx, `SELECT artifact_id FROM parcel_evidence_observations WHERE id=$1::uuid`, *previousObservation).Scan(&currentID); err != nil {
-			return 0, err
-		}
-		if currentID != artifactID {
-			return 0, nil
-		}
-		observationID = *previousObservation
-		if oldSourceHash == nil || *oldSourceHash != sourceHash || oldSourceVersion == nil || *oldSourceVersion != parcelevidence.SourceHashVersion {
-			return 0, fmt.Errorf("trusted source hash mismatch for PID %s", pid)
-		}
-	} else if previousObservation != nil {
-		var newer bool
-		err = w.tx.QueryRow(ctx, `SELECT o.observed_at >= $2 FROM parcel_evidence_observations o WHERE o.id=$1::uuid`, *previousObservation, observedAt).Scan(&newer)
-		if err != nil {
-			return 0, err
-		}
-		if newer {
-			if correction {
-				return 0, nil
-			}
-			return 0, fmt.Errorf("source observation is not newer for %s", pid)
-		}
-	}
 	unchanged := oldHash != nil && *oldHash == normalizedHash && oldHashVersion != nil && *oldHashVersion == parcelevidence.NormalizedHashVersion && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion
 	if !unchanged && oldHash != nil && oldHashVersion != nil && *oldHashVersion != parcelevidence.NormalizedHashVersion && oldGeometry != nil && *oldGeometry == geometryHash && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion {
 		unchanged, err = w.matchesStoredProjection(ctx, pid, last, shape, vacant)
 		if err != nil {
 			return 0, err
+		}
+	}
+	// The last accepted fingerprint survives refusal. Restore the boundary even if all facts match.
+	if shapeMissing && oldGeometry != nil && *oldGeometry == geometryHash {
+		tag, err := w.tx.Exec(ctx, `UPDATE parcels SET shape=ST_GeomFromEWKB($2), updated_at=now() WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1 AND shape IS NULL`, pid, shape)
+		if err != nil {
+			return 0, err
+		}
+		if tag.RowsAffected() > 0 {
+			w.geometryChanged = true
 		}
 	}
 	if unchanged {
@@ -308,8 +353,8 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 		} else if err != pgx.ErrNoRows {
 			return 0, err
 		}
-		if !correction || publicationKind == "offline_retry" || *oldHashVersion != parcelevidence.NormalizedHashVersion {
-			if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
+		if !publication.replay || publication.kind == "offline_retry" || *oldHashVersion != parcelevidence.NormalizedHashVersion {
+			if err = w.updateCurrentEvidence(ctx, pid, publication.observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 				return 0, err
 			}
 		}
@@ -343,13 +388,13 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid, observationID
 	cause := "source_observation"
 	if previousObservation != nil && oldSourceHash != nil && *oldSourceHash == sourceHash && oldSourceVersion != nil && *oldSourceVersion == parcelevidence.SourceHashVersion {
 		cause = "normalization_correction"
-	} else if correction {
-		cause = publicationKind
+	} else if publication.replay {
+		cause = publication.kind
 	}
-	if _, err = w.tx.Exec(ctx, `INSERT INTO parcel_evidence_history(county_id,source_name,source_parcel_id,old_observation_id,new_observation_id,cause,source_hash_version,old_source_hash_version,normalizer_version,old_normalizer_version,old_source_hash,new_source_hash,old_normalized_hash,new_normalized_hash,old_geometry_hash,new_geometry_hash,old_fields,new_fields,attempt_id,normalized_hash_version,old_normalized_hash_version,geometry_hash_version,old_geometry_hash_version) VALUES ('union','union_county_gis',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::uuid,$18,$19,$20,$21)`, pid, previousObservation, observationID, cause, parcelevidence.SourceHashVersion, oldSourceVersion, parcelevidence.NormalizerVersion, oldNormalizer, oldSourceHash, sourceHash, oldHash, normalizedHash, oldGeometry, geometryHash, old, nextFields, attemptID, parcelevidence.NormalizedHashVersion, oldHashVersion, parcelevidence.GeometryHashVersion, oldGeometryVersion); err != nil {
+	if _, err = w.tx.Exec(ctx, `INSERT INTO parcel_evidence_history(county_id,source_name,source_parcel_id,old_observation_id,new_observation_id,cause,source_hash_version,old_source_hash_version,normalizer_version,old_normalizer_version,old_source_hash,new_source_hash,old_normalized_hash,new_normalized_hash,old_geometry_hash,new_geometry_hash,old_fields,new_fields,attempt_id,normalized_hash_version,old_normalized_hash_version,geometry_hash_version,old_geometry_hash_version) VALUES ('union','union_county_gis',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::uuid,$18,$19,$20,$21)`, pid, previousObservation, publication.observationID, cause, parcelevidence.SourceHashVersion, oldSourceVersion, parcelevidence.NormalizerVersion, oldNormalizer, oldSourceHash, sourceHash, oldHash, normalizedHash, oldGeometry, geometryHash, old, nextFields, publication.attemptID, parcelevidence.NormalizedHashVersion, oldHashVersion, parcelevidence.GeometryHashVersion, oldGeometryVersion); err != nil {
 		return 0, err
 	}
-	if err = w.updateCurrentEvidence(ctx, pid, observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
+	if err = w.updateCurrentEvidence(ctx, pid, publication.observationID, sourceHash, normalizedHash, geometryHash, features); err != nil {
 		return 0, err
 	}
 	// A cached lookup can keep scanning the whole table as an empty table grows.

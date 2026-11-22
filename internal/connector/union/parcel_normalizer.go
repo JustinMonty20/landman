@@ -43,6 +43,8 @@ func ParcelRecordIdentity(raw connector.RawRecord) (ParcelIdentity, error) {
 	return id, nil
 }
 
+const InvalidParcelGeometry = "invalid geometry"
+
 // InvalidParcelRecord describes only invalid individual source data, never infrastructure errors.
 type InvalidParcelRecord struct {
 	Identity ParcelIdentity
@@ -93,11 +95,11 @@ func NormalizeParcel(raw connector.RawRecord) (models.GISParcel, bool, error) {
 		return models.GISParcel{}, false, err
 	}
 	if parcel.Geometry.Shape == nil || *parcel.Geometry.Shape == nil || (*parcel.Geometry.Shape).Empty() {
-		return invalid("invalid geometry")
+		return invalid(InvalidParcelGeometry)
 	}
 	for _, n := range (*parcel.Geometry.Shape).FlatCoords() {
 		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return invalid("invalid geometry")
+			return invalid(InvalidParcelGeometry)
 		}
 	}
 	vacant := IsLikelyVacantGISRecord(raw) && str(attrs, "PID") != ""

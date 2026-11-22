@@ -23,7 +23,7 @@ WHERE m.set_id=$3 AND s.county_id=$1 AND s.source_name=$2
  FROM current_soil AS s CROSS JOIN LATERAL (
  SELECT p.id, p.shape FROM parcels AS p
  WHERE p.county_id = s.county_id AND p.source_name = s.source_name
- AND p.shape && s.shape AND p.shape IS NOT NULL
+ AND p.shape && s.shape AND parcel_boundary_usable(p.shape)
  OFFSET 0
  ) AS p
  WHERE s.county_id = $1 AND s.source_name = $2
@@ -54,11 +54,6 @@ func StoreWithSet(ctx context.Context, connectionString string, countyID county.
 
 type beginner interface {
 	Begin(context.Context) (pgx.Tx, error)
-}
-
-func store(ctx context.Context, db beginner, countyID county.ID, source string, polygons []Polygon, units []MapUnit, client *http.Client, endpoint string) error {
-	_, err := storeWithSet(ctx, db, countyID, source, polygons, units, client, endpoint)
-	return err
 }
 
 func storeWithSet(ctx context.Context, db beginner, countyID county.ID, source string, polygons []Polygon, units []MapUnit, client *http.Client, endpoint string) (string, error) {

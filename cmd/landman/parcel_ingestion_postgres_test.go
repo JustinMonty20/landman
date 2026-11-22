@@ -53,7 +53,7 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 			t.Error(err)
 		}
 	})
-	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "ingest_captures", "ingest_replay_attempts", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history", "parcel_derived_handoff"} {
+	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "ingest_captures", "ingest_replay_attempts", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history", "parcel_derived_handoff", "parcel_geometry_decisions"} {
 		if _, err := base.Exec(ctx, "CREATE TABLE "+name+"."+table+" (LIKE public."+table+" INCLUDING ALL) WITH (autovacuum_enabled=false)"); err != nil {
 			t.Fatal(err)
 		}
@@ -264,9 +264,10 @@ func TestParcelQuarantineWholePIDAcrossPages(t *testing.T) {
 				}
 				after := parcelSnapshot(t, ctx, pool)
 				if existing {
-					if len(after) != 2 || after[0] != before[0] {
-						t.Fatalf("rejected existing A changed\nbefore=%v\nafter=%v", before, after)
+					if len(after) != 2 {
+						t.Fatal(after)
 					}
+					assertBoundaryCleared(t, before[0], after[0])
 				} else if len(after) != 1 {
 					t.Fatalf("new rejected A published: %v", after)
 				}
@@ -377,9 +378,7 @@ func TestParcelReprocessCurrentMultipartAndRecurrence(t *testing.T) {
 		t.Fatal(outcome, err)
 	}
 	after := parcelSnapshot(t, ctx, pool)
-	if after[0] != before[0] {
-		t.Fatal("recurrence changed existing A")
-	}
+	assertBoundaryCleared(t, before[0], after[0])
 	var occurrences int
 	var current bool
 	var reference, identity string
@@ -716,5 +715,23 @@ func TestParcelReprocessRetainsChangedEvidenceToken(t *testing.T) {
 	}
 	if outcome, _, err := runParcelFixture(ctx, pool, dsn, source, true, 1); err != nil || outcome != jobs.OutcomeSuccess || countRows(t, ctx, pool, "quarantined_records WHERE reprocessed_at IS NULL") != 0 {
 		t.Fatalf("fresh token retry outcome=%s err=%v", outcome, err)
+	}
+}
+
+func assertBoundaryCleared(t *testing.T, before, after string) {
+	t.Helper()
+	var saved, actual map[string]any
+	if err := json.Unmarshal([]byte(before), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved["shape"] == nil {
+		t.Fatal("expected prior shape")
+	}
+	saved["shape"] = nil
+	if err := json.Unmarshal([]byte(after), &actual); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(saved, actual) {
+		t.Fatalf("expected only cleared shape: before=%s after=%s", before, after)
 	}
 }
