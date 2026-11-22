@@ -38,11 +38,11 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 	for _, q := range []string{
 		`INSERT INTO qualification_generations(id,source_group,completed_at) VALUES ('` + zoning + `','zoning',now()),('` + old + `','zoning',now()),('` + roads + `','roads',now())`,
 		`INSERT INTO qualification_heads VALUES ('zoning','` + zoning + `'),('roads','` + roads + `')`,
-		`INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,source_srid,shape,raw_shape,repair_status,repair_delta_m2) SELECT id,1,1,'Union',code,3857,` + polygon + `,` + polygon + `,'original',0 FROM (VALUES ('` + zoning + `'::uuid,'current'), ('` + old + `'::uuid,'retired')) x(id,code)`,
+		`INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,district_code,case_reference,source_date,source_srid,shape,raw_shape,repair_status,repair_delta_m2) SELECT id,1,1,'Union',code,' TEST-24-01 ','2026-09-01',3857,` + polygon + `,` + polygon + `,'original',0 FROM (VALUES ('` + zoning + `'::uuid,'current'), ('` + old + `'::uuid,'retired')) x(id,code)`,
 		`INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,shape,raw_shape,repair_status,repair_delta_m2) VALUES ('` + zoning + `',194,1,'Town',3857,` + polygon + `,` + polygon + `,'original',0)`,
 		`INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,source_srid,repair_status,repair_delta_m2) VALUES ('` + zoning + `',190,231245,'Union',3857,'missing_geometry',0)`,
 		`INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,name,source_srid,repair_status,repair_delta_m2) VALUES ('` + zoning + `',195,117793,'No boundary',3857,'missing_geometry',0)`,
-		`INSERT INTO qualification_roads(generation_id,source_id,name,source_srid,shape) VALUES ('` + roads + `',1,'Main Road',3857,ST_Multi(ST_Transform(ST_GeomFromText('LINESTRING(-80.62 35,-80.59 35)',4326),3857)))`,
+		`INSERT INTO qualification_roads(generation_id,source_id,name,road_class,source_srid,shape) VALUES ('` + roads + `',1,'Main Road','Primary',3857,ST_Multi(ST_Transform(ST_GeomFromText('LINESTRING(-80.62 35,-80.59 35)',4326),3857)))`,
 		`INSERT INTO qualification_refresh_failures VALUES ('roads',now(),'fixture failure'),('zoning',now()-interval '1 day','superseded failure')`,
 	} {
 		if _, err := pool.Exec(ctx, q); err != nil {
@@ -59,7 +59,7 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 		layer, zoom, id string
 		count           int
 		failed          bool
-	}{{"zoning", "9", zoning, 2, false}, {"roads", "13", roads, 1, true}} {
+	}{{"zoning", "9", zoning, 3, false}, {"roads", "13", roads, 2, true}} {
 		w := request(c.layer, c.zoom)
 		var data struct {
 			Features   []qualificationFeature
@@ -86,11 +86,46 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 			}
 		}
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,mapped_acres,shape)
+ SELECT 'union','union','union_county_gis',id,12,ST_Transform(ST_MakeEnvelope(west,34.992,east,34.998,4326),3857)
+ FROM (VALUES ('inside',-80.598,-80.592),('edge',-80.59,-80.585)) p(id,west,east)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/parcels?jurisdiction=etj:Town&min_acres=12", "/api/v1/parcels/map?jurisdiction=etj:Town&min_acres=12&bbox=-80.61,34.98,-80.58,35.01&zoom=14"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		var result struct {
+			Count      int       `json:"count"`
+			MatchCount int       `json:"match_count"`
+			Features   []Feature `json:"features"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Count+result.MatchCount != 1 || (strings.Contains(path, "/map?") && len(result.Features) != 1) {
+			t.Fatalf("jurisdiction parcels: %d %s", w.Code, w.Body.String())
+		}
+	}
 	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/qualification/map?layer=zoning&overview=true&jurisdiction=etj:Town", nil))
+	var chosen struct{ Features []qualificationFeature }
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &chosen) != nil || len(chosen.Features) != 2 || chosen.Features[0].Properties.Kind != "jurisdiction" || chosen.Features[1].Properties.Kind != "etj_label" {
+		t.Fatalf("jurisdiction overlay: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/qualification/map?bbox=-80.598,34.992,-80.592,34.998&layer=zoning&zoom=14", nil))
 	var inside struct{ Features []qualificationFeature }
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &inside) != nil || len(inside.Features) != 1 || inside.Features[0].Properties.Kind != "zoning" {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &inside) != nil || len(inside.Features) != 2 || inside.Features[0].Properties.Kind != "zoning" || inside.Features[1].Properties.Kind != "etj_label" {
 		t.Fatalf("viewport inside jurisdiction: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/qualification/zoning?lon=-80.595&lat=34.995", nil))
+	var selection struct {
+		GenerationID string `json:"generation_id"`
+		Districts    []zoningDistrict
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &selection) != nil || selection.GenerationID != zoning || len(selection.Districts) != 1 || selection.Districts[0].Code != "current" {
+		t.Fatalf("zoning point: %d %s", w.Code, w.Body.String())
+	}
+	if d := selection.Districts[0]; d.CaseReference != "TEST-24-01" || d.SourceDate != "2026-09-01" || d.Description != "" {
+		t.Fatalf("zoning source fields: %+v", d)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,jurisdiction,source_srid,shape,raw_shape,repair_status,repair_delta_m2)
  SELECT $1,1,seq,'Union',3857,g,g,'original',0 FROM generate_series(2,502) seq CROSS JOIN LATERAL
@@ -99,6 +134,30 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 	}
 	if w := request("zoning", "14"); w.Code != 413 {
 		t.Fatalf("over-limit zoning request: %d", w.Code)
+	}
+	for _, c := range []struct {
+		layer, generation string
+		kinds             []string
+	}{{"zoning", zoning, []string{"zoning", "jurisdiction", "etj_label"}}, {"roads", roads, []string{"roads", "road_label"}}} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/qualification/map?layer="+c.layer+"&overview=true", nil))
+		var data struct {
+			Overview   bool
+			Features   []qualificationFeature
+			Generation struct{ ID string }
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &data) != nil || !data.Overview || data.Generation.ID != c.generation || len(data.Features) != len(c.kinds) {
+			t.Fatalf("%s overview: %d %s", c.layer, w.Code, w.Body.String())
+		}
+		seen := map[string]bool{}
+		for _, f := range data.Features {
+			seen[f.Properties.Kind] = len(f.Geometry) > 0
+		}
+		for _, kind := range c.kinds {
+			if !seen[kind] {
+				t.Fatalf("missing %s feature from %s overview", kind, c.layer)
+			}
+		}
 	}
 	if w := request("roads", "12"); w.Code != 400 {
 		t.Fatalf("low zoom: %d", w.Code)

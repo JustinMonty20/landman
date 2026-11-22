@@ -39,6 +39,9 @@ type Filters struct {
 	EntityNameIndicator    *string
 	CorporateNameIndicator *string
 	Bounds                 *Bounds
+	Jurisdiction           *string
+	FloodCategory          *string
+	FloodContact           string
 	PageSize               int
 	After                  string
 }
@@ -112,9 +115,9 @@ func parseFilters(q url.Values) (Filters, error) {
 
 func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	f := Filters{PageSize: 50}
-	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor"}
+	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor", "flood_category", "flood_contact", "jurisdiction"}
 	if mapQuery {
-		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom"}
+		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom", "flood_category", "flood_contact", "jurisdiction"}
 	}
 	if err := parse(q, allowed...); err != nil {
 		return f, err
@@ -170,6 +173,28 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 			*item.target = &v[0]
 		}
 	}
+	if raw, ok := q["jurisdiction"]; ok {
+		if !validJurisdiction(raw[0]) {
+			return f, errors.New("invalid jurisdiction")
+		}
+		f.Jurisdiction = &raw[0]
+	}
+	if raw, ok := q["flood_category"]; ok {
+		switch raw[0] {
+		case "floodway", "sfha", "moderate", "minimal", "unclassified":
+			f.FloodCategory = &raw[0]
+		default:
+			return f, errors.New("invalid flood category")
+		}
+	}
+	if raw, ok := q["flood_contact"]; ok {
+		if f.FloodCategory == nil || (raw[0] != "area" && raw[0] != "intersects") {
+			return f, errors.New("invalid flood contact")
+		}
+		f.FloodContact = raw[0]
+	} else if f.FloodCategory != nil {
+		f.FloodContact = "area"
+	}
 	if raw, ok := q["bbox"]; ok {
 		var e error
 		f.Bounds, e = parseBounds(raw[0])
@@ -193,8 +218,10 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	return f, nil
 }
 func (f Filters) active() bool {
-	return f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil
+	return f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil || f.spatialFilter()
 }
+
+func (f Filters) spatialFilter() bool { return f.FloodCategory != nil || f.Jurisdiction != nil }
 func (f Filters) digest() string {
 	copy := f
 	copy.After = ""
@@ -241,19 +268,48 @@ func (f Filters) args() []any {
 		a[8] = f.Bounds.East
 		a[9] = f.Bounds.North
 	}
-	a = append(a, optString(f.OutOfStateMailing), optString(f.EntityNameIndicator), optString(f.CorporateNameIndicator))
+	a = append(a, optString(f.OutOfStateMailing), optString(f.EntityNameIndicator), optString(f.CorporateNameIndicator), optString(f.FloodCategory), f.FloodContact, optString(f.Jurisdiction))
 	return a
 }
 
-const predicate = `p.county_id=$1 AND p.source_name=$2
- AND ($3::float8 IS NULL OR p.mapped_acres >= $3)
+const filterPredicate = `($3::float8 IS NULL OR p.mapped_acres >= $3)
  AND ($4::float8 IS NULL OR p.mapped_acres <= $4)
  AND ($5::boolean IS NULL OR p.likely_vacant=$5)
  AND ($6::boolean IS NULL OR EXISTS (SELECT 1 FROM tax_delinquent_balances d WHERE d.parcel_id=p.id AND d.balance_due>0 AND EXISTS (SELECT 1 FROM tax_file_imports i WHERE i.active AND i.county_id=d.county_id AND i.source_name=d.source_name) )=$6)
  AND ($11::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.out_of_state_mailing=$11))
 AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.entity_name_indicator=$12))
 AND ($13::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.corporate_name_indicator=$13))
-AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857)) END))`
+AND ($14::text IS NULL OR p.id IN (SELECT id FROM flood_matches))
+AND ($16::text IS NULL OR p.id IN (SELECT id FROM jurisdiction_matches))`
+
+const parcelScope = `p.county_id=$1 AND p.source_name=$2`
+const viewport = `p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857)) END`
+const listScope = parcelScope + ` AND ($7::float8 IS NULL OR (` + viewport + `))`
+const predicate = listScope + ` AND (` + filterPredicate + `)`
+
+// The padded envelope finds candidates in the parcel index. Only native FEMA coordinates decide contact.
+const floodMatchQuery = `WITH flood_matches AS MATERIALIZED (
+ SELECT DISTINCT candidate.id
+ FROM fema_release_head h JOIN fema_zones z ON z.capture_id=h.capture_id
+ CROSS JOIN LATERAL (
+  SELECT p.id FROM parcels p WHERE ` + listScope + `
+  AND p.shape && ST_Transform(ST_Expand(ST_Envelope(z.shape),0.001),3857)
+  AND CASE WHEN parcel_boundary_usable(p.shape) THEN CASE WHEN $15::text='intersects'
+   THEN ST_Intersects(z.shape,ST_Transform(p.shape,4269))
+   ELSE ST_Relate(z.shape,ST_Transform(p.shape,4269),'2********') END ELSE false END
+  OFFSET 0
+ ) candidate
+ WHERE h.study_id='37179C' AND ` + floodClassSQL + `=$14::text
+), jurisdiction_matches AS MATERIALIZED (
+ SELECT DISTINCT candidate.id
+ FROM qualification_heads h JOIN qualification_jurisdictions j ON j.generation_id=h.generation_id
+ CROSS JOIN LATERAL (
+  SELECT p.id FROM parcels p WHERE ` + listScope + ` AND p.shape && j.shape
+  AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Relate(j.shape,p.shape,'2********') ELSE false END
+  OFFSET 0
+ ) candidate
+ WHERE h.source_group='zoning' AND ` + jurisdictionKeySQL + `=$16::text
+) `
 const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,p.likely_vacant,p.updated_at`
 
 func scanParcel(row pgx.Row) (Parcel, error) {
@@ -302,6 +358,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.floodMap(w, r)
 	case r.URL.Path == "/api/v1/qualification/map":
 		h.qualificationMap(w, r)
+	case r.URL.Path == "/api/v1/qualification/zoning":
+		h.zoningAtPoint(w, r)
 	case r.URL.Path == "/api/v1/tax/unmatched":
 		h.taxUnmatched(w, r)
 	case r.URL.Path == "/api/v1/sources":
@@ -354,13 +412,37 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	} else if err != nil {
 		return "", err
 	}
+	var floodRevision, zoningRevision string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT generation_id::text FROM qualification_heads WHERE source_group='zoning'),'')`).Scan(&zoningRevision); err != nil {
+		return "", err
+	}
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT capture_id::text FROM fema_release_head WHERE study_id='37179C'),'')`).Scan(&floodRevision); err != nil {
+		return "", err
+	}
 	var labelRevision int64
 	if err := tx.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&labelRevision); err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision)))
+	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision, floodRevision, zoningRevision)))
 	return hex.EncodeToString(h[:]), nil
 }
+func (f Filters) sourcesReady(ctx context.Context, tx pgx.Tx) bool {
+	if f.FloodCategory != nil {
+		release, err := activeFlood(ctx, tx)
+		if err != nil || release == nil {
+			return false
+		}
+	}
+	if f.Jurisdiction == nil {
+		return true
+	}
+	var found bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM qualification_heads h
+ JOIN qualification_jurisdictions j ON j.generation_id=h.generation_id
+ WHERE h.source_group='zoning' AND j.shape IS NOT NULL AND `+jurisdictionKeySQL+`=$1)`, *f.Jurisdiction).Scan(&found)
+	return err == nil && found
+}
+
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	f, e := parseFilters(r.URL.Query())
 	if e != nil {
@@ -373,6 +455,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
+	if !f.sourcesReady(r.Context(), tx) {
+		unavailable(w)
+		return
+	}
 	s, e := stamp(r.Context(), tx)
 	if e != nil {
 		unavailable(w)
@@ -391,13 +477,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	count := int64(0)
 	next := ""
 	if f.active() {
-		e = tx.QueryRow(r.Context(), `SELECT count(*) FROM parcels p WHERE `+predicate, f.args()...).Scan(&count)
+		e = tx.QueryRow(r.Context(), floodMatchQuery+`SELECT count(*) FROM parcels p WHERE `+predicate, f.args()...).Scan(&count)
 		if e != nil {
 			unavailable(w)
 			return
 		}
 		a := append(f.args(), after, f.PageSize+1)
-		rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$14::uuid ORDER BY p.id LIMIT $15`, a...)
+		rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$17::uuid ORDER BY p.id LIMIT $18`, a...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -498,43 +584,9 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, map[string]any{"items": items})
 }
-func (f Filters) mapMatch(args *[]any) string {
-	parts := []string{}
-	add := func(value any, column, op string) {
-		*args = append(*args, value)
-		parts = append(parts, fmt.Sprintf("%s %s $%d", column, op, len(*args)))
-	}
-	if f.AcresMin != nil {
-		add(*f.AcresMin, "p.mapped_acres", ">=")
-	}
-	if f.AcresMax != nil {
-		add(*f.AcresMax, "p.mapped_acres", "<=")
-	}
-	if f.LikelyVacant != nil {
-		add(*f.LikelyVacant, "p.likely_vacant", "=")
-	}
-	if f.Delinquent != nil {
-		*args = append(*args, *f.Delinquent)
-		parts = append(parts, fmt.Sprintf(`EXISTS (SELECT 1 FROM tax_delinquent_balances d JOIN tax_file_imports i ON i.active AND i.county_id=d.county_id AND i.source_name=d.source_name WHERE d.parcel_id=p.id AND d.balance_due>0) = $%d`, len(*args)))
-	}
-	for _, item := range []struct {
-		status *string
-		column string
-	}{{f.OutOfStateMailing, "out_of_state_mailing"}, {f.EntityNameIndicator, "entity_name_indicator"}, {f.CorporateNameIndicator, "corporate_name_indicator"}} {
-		if item.status != nil {
-			*args = append(*args, *item.status)
-			parts = append(parts, fmt.Sprintf("EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.%s=$%d)", item.column, len(*args)))
-		}
-	}
-	if len(parts) == 0 {
-		return "false"
-	}
-	return "COALESCE((" + strings.Join(parts, " AND ") + "), false)"
-}
-
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator"); e != nil {
+	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "flood_category", "flood_contact", "jurisdiction"); e != nil {
 		bad(w, e)
 		return
 	}
@@ -558,6 +610,10 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
+	if !f.sourcesReady(r.Context(), tx) {
+		unavailable(w)
+		return
+	}
 	s, e := stamp(r.Context(), tx)
 	if e != nil {
 		unavailable(w)
@@ -566,6 +622,11 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	b := f.Bounds
 	contextArgs := []any{countyID, parcelSource, b.West, b.South, b.East, b.North}
 	const contextWhere = `p.county_id=$1 AND p.source_name=$2 AND p.shape && ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857)) END`
+	const mapWhere = parcelScope + ` AND ` + viewport
+	match := `COALESCE((` + filterPredicate + `), false)`
+	if !f.active() {
+		match = `false AND (` + match + `)`
+	}
 	var total, matches int64
 	if z < 13 {
 		type cell struct {
@@ -575,14 +636,12 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 			Matches int64 `json:"matches"`
 		}
 		cells := []cell{}
-		args := append([]any(nil), contextArgs...)
-		match := f.mapMatch(&args)
 		// Cell position is display-only; intersection and match use the original polygon.
-		rows, err := tx.Query(r.Context(), `SELECT greatest(0,least(15,floor((ST_X(location)-$3)*16/($5-$3))))::int AS x,
- greatest(0,least(15,floor((ST_Y(location)-$4)*16/($6-$4))))::int AS y,
+		rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT greatest(0,least(15,floor((ST_X(location)-$7)*16/($9-$7))))::int AS x,
+ greatest(0,least(15,floor((ST_Y(location)-$8)*16/($10-$8))))::int AS y,
  count(*),count(*) FILTER (WHERE match)
  FROM (SELECT ST_Transform(ST_PointOnSurface(p.shape),4326) AS location, (`+match+`) AS match
- FROM parcels p WHERE `+contextWhere+`) located GROUP BY x,y ORDER BY x,y`, args...)
+ FROM parcels p WHERE `+mapWhere+`) located GROUP BY x,y ORDER BY x,y`, f.args()...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -617,13 +676,16 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	if total > 200 {
+	args := append(f.args(), z)
+	where := mapWhere
+	if f.spatialFilter() {
+		where += ` AND (` + match + `)`
+		match = `true`
+	} else if total > 200 {
 		http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 		return
 	}
-	args := append(append([]any(nil), contextArgs...), z)
-	match := f.mapMatch(&args)
-	rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$7::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+contextWhere+` ORDER BY p.id`, args...)
+	rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$17::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT 201`, args...)
 	if err != nil {
 		unavailable(w)
 		return
@@ -640,6 +702,11 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		item.Geometry = geometry
 		if item.Match {
 			matches++
+		}
+		if len(features) == 200 {
+			rows.Close()
+			http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
+			return
 		}
 		features = append(features, item)
 	}

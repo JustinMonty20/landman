@@ -57,7 +57,7 @@ test('preview filters survive hidden panels and regional zoom without changing p
   await panel.getByRole('button', { name: 'Parcel filters', exact: true }).click();
   await panel.getByRole('spinbutton', { name: 'Minimum acres' }).fill('0');
   await expect(panel.getByText('2 filters selected', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Hide filters' }).click();
+  await page.getByRole('button', { name: 'Hide map panel' }).click();
   await page.getByRole('button', { name: 'Show all counties', exact: true }).click();
   await expect(panel).not.toBeVisible();
   await page.getByRole('button', { name: 'Show selected filters', exact: true }).click();

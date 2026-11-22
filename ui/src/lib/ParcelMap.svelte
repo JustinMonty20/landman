@@ -1,19 +1,25 @@
+<script module lang="ts">
+  export const zoningColor = '#aebf77';
+  export const jurisdictionColor = '#d5ce82';
+</script>
+
 <script lang="ts">
 import { onMount } from 'svelte';
 import { Map, Marker, NavigationControl, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 import type { FeatureCollection } from 'geojson';
-import { emptyShapes, type Viewport } from './flood';
+import { emptyShapes, floodStyles, type Viewport } from './flood';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { counties, countyBounds, countyGeometry, mapDetail, type CountyId, type MapDetail } from './counties';
 
-let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, parcels, flood, zoning, roads, parcelID }: {
+let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, onzoning, parcels, flood, zoning, roads, parcelID }: {
   selected: CountyId;
   focusRequest: number;
   onselect: (id: CountyId) => void;
   ondetail: (detail: MapDetail) => void;
   onviewport: (viewport: Viewport) => void;
   onparcel: (id: string) => void;
+  onzoning: (point: { lon: number; lat: number }) => void;
   parcels: FeatureCollection;
   flood: FeatureCollection;
   zoning: FeatureCollection;
@@ -26,6 +32,22 @@ let ready = $state(false);
 let failed = $state(false);
 let lastFocusRequest = 0;
 let markers: Marker[] = [];
+let layerMarkers: Marker[] = [];
+
+function placeMapLabels() {
+  if (!map) return;
+  const placed: { x: number; y: number; w: number; h: number }[] = [];
+  for (const marker of layerMarkers) {
+    const { x, y } = map.project(marker.getLngLat());
+    const label = marker.getElement();
+    const w = label.offsetWidth / 2 + 3;
+    const h = label.offsetHeight / 2 + 2;
+    const visible = x >= 0 && y >= 0 && x < container.clientWidth && y < container.clientHeight &&
+      !placed.some((box) => Math.abs(x - box.x) < w + box.w && Math.abs(y - box.y) < h + box.h);
+    label.style.visibility = visible ? '' : 'hidden';
+    if (visible) placed.push({ x, y, w, h });
+  }
+}
 const padding = { top: 110, bottom: 185, left: 35, right: 35 };
 
 function reportDetail() {
@@ -33,6 +55,7 @@ function reportDetail() {
   const detail = mapDetail(map.getZoom());
   markers.forEach((marker) => { marker.getElement().hidden = detail === 'parcels'; });
   ondetail(detail);
+  placeMapLabels();
   const bounds = map.getBounds();
   onviewport({ bbox: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].map((n) => n.toFixed(6)).join(','), zoom: Math.floor(map.getZoom()) });
 }
@@ -75,11 +98,11 @@ onMount(() => {
         markers.push(new Marker({ element: label }).setLngLat([...county.center]).addTo(map));
       }
       map.addSource('zoning', { type: 'geojson', data: emptyShapes });
-      map.addLayer({ id: 'zoning-fill', type: 'fill', source: 'zoning', filter: ['==', ['get', 'kind'], 'zoning'], paint: { 'fill-color': '#aebf77', 'fill-opacity': 0.3, 'fill-outline-color': '#aebf77' } });
-      map.addLayer({ id: 'jurisdiction-outline', type: 'line', source: 'zoning', filter: ['==', ['get', 'kind'], 'jurisdiction'], paint: { 'line-color': '#d5ce82', 'line-width': 2, 'line-dasharray': [3, 2] } });
+      map.addLayer({ id: 'zoning-fill', type: 'fill', source: 'zoning', filter: ['==', ['get', 'kind'], 'zoning'], paint: { 'fill-color': zoningColor, 'fill-opacity': 0.3, 'fill-outline-color': zoningColor } });
+      map.addLayer({ id: 'jurisdiction-outline', type: 'line', source: 'zoning', filter: ['==', ['get', 'kind'], 'jurisdiction'], paint: { 'line-color': jurisdictionColor, 'line-width': 2, 'line-dasharray': [3, 2] } });
       map.addSource('flood-zones', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'flood-fill', type: 'fill', source: 'flood-zones', paint: {
-        'fill-color': ['case', ['==', ['get', 'subtype'], 'FLOODWAY'], '#dc78bf', ['==', ['get', 'sfha'], 'T'], '#65cfe4', '#8b9ee8'], 'fill-opacity': 0.42
+        'fill-color': ['match', ['get', 'category'], 'floodway', floodStyles.floodway.color, 'sfha', floodStyles.sfha.color, 'moderate', floodStyles.moderate.color, 'minimal', floodStyles.minimal.color, 'unclassified', floodStyles.unclassified.color, floodStyles.unclassified.color], 'fill-opacity': 0.42
       } });
       map.addSource('roads', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'roads', type: 'line', source: 'roads', paint: { 'line-color': '#ff996b', 'line-width': 2 } });
@@ -90,10 +113,13 @@ onMount(() => {
       map.on('click', (event) => {
         if (!map) return;
         const hit = map.queryRenderedFeatures(event.point, { layers: ['parcel-hit'] })[0];
-        if (hit) {
-          onparcel(String(hit.properties.id));
-          return;
+        if (hit) onparcel(String(hit.properties.id));
+        const zoningHit = map.queryRenderedFeatures(event.point, { layers: ['zoning-fill'] })[0];
+        if (zoningHit) {
+          const { lng, lat } = event.lngLat.wrap();
+          onzoning({ lon: lng, lat });
         }
+        if (hit || zoningHit) return;
         if (mapDetail(map.getZoom()) === 'parcels') return;
         const county = counties.find((county) => county.id === map?.queryRenderedFeatures(event.point, { layers: ['county-fill'] })[0]?.properties?.id);
         if (county) onselect(county.id);
@@ -109,7 +135,7 @@ onMount(() => {
     observer = new ResizeObserver(() => map?.resize());
     observer.observe(container);
   } catch { failed = true; }
-  return () => { observer?.disconnect(); markers.forEach((marker) => marker.remove()); map?.remove(); };
+  return () => { observer?.disconnect(); [...markers, ...layerMarkers].forEach((marker) => marker.remove()); map?.remove(); };
 });
 
 $effect(() => {
@@ -119,9 +145,22 @@ $effect(() => {
   if (!ready || !map) return;
   (map.getSource('parcels') as GeoJSONSource).setData(parcels);
   (map.getSource('flood-zones') as GeoJSONSource).setData(flood);
+  map.setFilter('parcel-selected', ['==', ['get', 'id'], parcelID]);
+});
+$effect(() => {
+  if (!ready || !map) return;
   (map.getSource('zoning') as GeoJSONSource).setData(zoning);
   (map.getSource('roads') as GeoJSONSource).setData(roads);
-  map.setFilter('parcel-selected', ['==', ['get', 'id'], parcelID]);
+  layerMarkers.forEach((marker) => marker.remove());
+  layerMarkers = [];
+  for (const { geometry, properties } of [...zoning.features, ...roads.features]) {
+    if (geometry.type !== 'Point' || typeof properties?.name !== 'string') continue;
+    const label = document.createElement('span');
+    label.className = properties.kind === 'road_label' ? 'layer-map-label road-map-label' : 'layer-map-label';
+    label.textContent = properties.kind === 'etj_label' ? `${properties.name} ETJ` : properties.name;
+    layerMarkers.push(new Marker({ element: label }).setLngLat([geometry.coordinates[0], geometry.coordinates[1]]).addTo(map));
+  }
+  placeMapLabels();
 });
 $effect(() => {
   if (!ready || focusRequest === lastFocusRequest) return;
@@ -145,5 +184,7 @@ $effect(() => {
 .failure, .source { background: var(--surface); padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; pointer-events: none; }
 .source { font-size: 10px; }
 .failure { position: absolute; bottom: 155px; left: 12px; right: 12px; }
+:global(.layer-map-label) { color: #f3e9a8; background: #24272be8; padding: 1px 4px; border-radius: 3px; font-size: 11px; white-space: nowrap; pointer-events: none; }
+:global(.road-map-label) { color: #ffb691; font-size: 10px; }
 :global(.county-map-label) { color: #f0f2f5; background: #24272be8; border: 1px solid #727b88; border-radius: 4px; padding: 4px 7px; font-size: 11px; line-height: 1.3; white-space: pre; cursor: pointer; }
 </style>
