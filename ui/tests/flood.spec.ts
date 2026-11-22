@@ -35,7 +35,7 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
     await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
   }
   await page.getByRole('button', { name: 'FLOOD-TEST' }).click();
-  const details = page.getByRole('region', { name: 'Parcel flood evidence' });
+  const details = page.getByRole('region', { name: 'Parcel evidence' });
   await expect(details).toContainText('Zone AE: 7.00 acres');
   await expect(details).toContainText('Unknown coverage: 3.00 acres');
   await expect(details).toContainText('3710542500J · 2008-10-16');

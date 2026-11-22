@@ -391,7 +391,7 @@ func TestProtectedParcelRoutes(t *testing.T) {
 	f := setup(t)
 	called := 0
 	f.handler.mountData(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called++; w.WriteHeader(http.StatusNoContent) }))
-	for _, path := range []string{"/api/v1/parcels", "/api/v1/parcels/map", "/api/v1/parcels/lookup", "/api/v1/sources", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/tax", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/soil"} {
+	for _, path := range []string{"/api/v1/parcels", "/api/v1/parcels/map", "/api/v1/parcels/lookup", "/api/v1/sources", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/tax", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/soil", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/zoning", "/api/v1/parcels/00000000-0000-0000-0000-000000000000/roads"} {
 		if w := f.request("GET", path); w.Code != http.StatusUnauthorized {
 			t.Errorf("unprotected %s: %d", path, w.Code)
 		}

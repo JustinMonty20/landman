@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import { Tabs } from '@skeletonlabs/skeleton-svelte';
+import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import ParcelMap, { jurisdictionColor, zoningColor } from '../lib/ParcelMap.svelte';
 import FilterPanel from '../lib/FilterPanel.svelte';
 import { emptyFilterDraft, filterSelections } from '../lib/filterDraft';
@@ -129,8 +130,6 @@ $effect(() => {
   });
   return () => task.abort();
 });
-let evidence = $state<FloodDetail>();
-let detailError = $state('');
 let parcelGeometry = $derived(parcelShapes(parcels));
 const floodGeometry = $derived(!floodOn || !flood ? emptyShapes : floodCategory
   ? { ...flood, features: flood.features.filter((feature) => feature.properties?.category === floodCategory) }
@@ -191,25 +190,6 @@ $effect(() => {
   if (!task.signal.aborted) matches = data;
  }).catch(() => { if (!task.signal.aborted) matchError = 'Matching parcels are unavailable.'; });
  return () => task.abort();
-});
-$effect(() => {
-  const id = parcelID;
-  const currentRelease = flood?.release?.id;
-  evidence = undefined;
-  detailError = '';
-  if (!parcelView || !id) return;
-  const task = new AbortController();
-  readMapData<FloodDetail>(`/api/v1/parcels/${encodeURIComponent(id)}/flood`, task.signal).then((data) => {
-    if (task.signal.aborted) return;
-    if (currentRelease && currentRelease !== data.release?.id) {
-      detailError = 'FEMA data changed. Move the map to load the current release.';
-      return;
-    }
-    evidence = data;
-  }).catch(() => {
-    if (!task.signal.aborted) detailError = 'Flood evidence is unavailable.';
-  });
-  return () => task.abort();
 });
 function showSelectedFilters() {
   mapTab = 'filters';
@@ -348,31 +328,9 @@ onMount(() => {
         <button class="btn-icon preset-outlined-surface-300-700 bg-surface-900 edge-toggle right-toggle" class:open={panelOpen} aria-label={panelOpen ? 'Hide matches' : 'Show matches'} aria-expanded={panelOpen} aria-controls="parcel-panel" onclick={() => panelOpen = !panelOpen}>{panelOpen ? '›' : '‹'}</button>
         <div class="right-panel" class:collapsed={!panelOpen} inert={!panelOpen} aria-hidden={!panelOpen}>
           {#if parcelID}
-          <section class="results" id="parcel-panel" aria-label="Parcel flood evidence">
-            <div class="results-heading">
-              <button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button>
-              <h1>Parcel flood evidence</h1>
-              {#if evidence}<p>Parcel {evidence.parcel_number}</p>{/if}
-            </div>
-            <div class="flood-details" aria-live="polite">
-              {#if detailError}<p>{detailError}</p>
-              {:else if !evidence}<p>Loading flood evidence…</p>
-              {:else if evidence.status === 'no_release'}<p>No FEMA release is stored.</p>
-              {:else if evidence.status === 'missing_geometry'}<p>Parcel geometry is unavailable.</p>
-              {:else if evidence.status === 'available'}
-                <p>FEMA archive issue date: {releaseDate(evidence.release!.issued_at)}</p>
-                <p>Unknown coverage: {acreage(evidence.acres.unknown)} acres of {acreage(evidence.acres.parcel)} acres</p>
-                <p>Mapped floodway: {acreage(evidence.acres.floodway)} acres</p>
-                <h2>Mapped zones</h2>
-                {#if evidence.zones.length}
-                  <ul>{#each evidence.zones as zone}<li>Zone {zone.code || 'unknown'}{zone.subtype ? ` · ${zone.subtype}` : ''}: {acreage(zone.acres)} acres</li>{/each}</ul>
-                {:else}<p>No mapped zone overlaps this parcel.</p>{/if}
-                <h2>FEMA panels</h2>
-                {#if evidence.panels.length}<ul>{#each evidence.panels as panel}<li>{panel.number} · {panel.effective_date ?? 'Effective date unavailable'}</li>{/each}</ul>
-                {:else}<p>No panel overlaps this parcel.</p>{/if}
-                <p>Zones can overlap. Do not add their areas. A blank area is not proof that the parcel is free from flood risk.</p>
-              {/if}
-            </div>
+          <section class="results" id="parcel-panel" aria-label="Parcel evidence">
+            <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
+            <div class="flood-details" aria-live="polite"><ParcelEvidence id={parcelID} {floodOn} {zoningOn} {roadsOn} releaseId={flood?.release?.id} /></div>
           </section>
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
@@ -435,8 +393,6 @@ h1 { font-size: 19px; font-weight: 650; }
 .selected-zoning { border-top: 1px solid var(--border); padding-top: 6px; }
 .selected-zoning li { margin-top: 4px; }
 .flood-details, .empty { overflow: auto; padding: 10px; }
-.flood-details h2 { font-weight: 650; }
-.flood-details ul { padding-left: 1em; list-style: disc; }
 .coverage-link { position: absolute; bottom: 12px; right: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; color: #93c5fd; }
 :global(input:disabled), :global(select:disabled), :global(button:disabled) { opacity: .6; cursor: not-allowed; }
 @media (max-width: 900px) { .map-controls { right: 65px; max-width: 440px; } }
