@@ -574,7 +574,7 @@ func PublishScreeningTx(ctx context.Context, tx pgx.Tx, countyID county.ID, sour
 		return errors.New("soil: screening membership differs from committed set")
 	}
 	var runID string
-	err = tx.QueryRow(ctx, `INSERT INTO soil_screening_runs(county_id,source_name,source_url,method,soil_set_id,assessment_method,fresh_until) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, countyID.String(), source, endpoint, screeningMethod, setID, assessmentMethod, observedAt.Add(interval)).Scan(&runID)
+	err = tx.QueryRow(ctx, `INSERT INTO soil_screening_runs(county_id,source_name,source_url,method,soil_set_id,assessment_method,fresh_until) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, countyID.String(), source, endpoint, screeningMethod, setID, AssessmentMethod, observedAt.Add(interval)).Scan(&runID)
 	if err != nil {
 		return err
 	}
@@ -649,19 +649,16 @@ SELECT $1,m.polygon_id FROM soil_polygon_set_members m JOIN soil_polygons p ON p
 	if _, err = tx.Exec(ctx, `LOCK TABLE parcels IN SHARE MODE`); err != nil {
 		return fmt.Errorf("soil assessment parcel lock: %w", err)
 	}
-	copied, err := assessParcels(ctx, tx, runID, setID, countyID, source)
-	if err != nil {
+	if err := assessParcels(ctx, tx, runID, setID, countyID, source); err != nil {
 		return err
 	}
-	if !copied {
-		if _, err = tx.Exec(ctx, overlapInsert, countyID.String(), source, setID); err != nil {
-			return err
-		}
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO soil_screening_heads(county_id,source_name,run_id) VALUES ($1,$2,$3) ON CONFLICT(county_id,source_name) DO UPDATE SET run_id=excluded.run_id,refresh_failed_at=NULL,refresh_error=NULL`, countyID.String(), source, runID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO soil_screening_heads(county_id,source_name,run_id) VALUES ($1,$2,$3)
+ON CONFLICT(county_id,source_name) DO UPDATE SET run_id=excluded.run_id,
+ refresh_failed_at=CASE WHEN soil_screening_heads.refresh_failed_at>$4 THEN soil_screening_heads.refresh_failed_at END,
+ refresh_error=CASE WHEN soil_screening_heads.refresh_failed_at>$4 THEN soil_screening_heads.refresh_error END`, countyID.String(), source, runID, observedAt); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM soil_screening_refresh_status WHERE county_id=$1 AND source_name=$2`, countyID.String(), source); err != nil {
+	if _, err = tx.Exec(ctx, `DELETE FROM soil_screening_refresh_status WHERE county_id=$1 AND source_name=$2 AND failed_at<=$3`, countyID.String(), source, observedAt); err != nil {
 		return err
 	}
 	return nil

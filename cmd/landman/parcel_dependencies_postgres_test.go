@@ -42,7 +42,7 @@ func TestParcelDerivedWorkChecksPersistedDependencies(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO soil_polygon_set_heads(county_id,source_name,set_id) VALUES ('union','union_county_gis',$1)`, setID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO soil_screening_runs(county_id,source_name,source_url,method,soil_set_id,assessment_method,fresh_until) VALUES ('union','union_county_gis','fixture','USDA Dominant Condition; tie break 1; no component cutoff',$1,'exclusive-map-unit-union/1; EPSG:2264; acres=ftUS^2/43560',now()+interval '1 day') RETURNING id::text`, setID).Scan(&runID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO soil_screening_runs(county_id,source_name,source_url,method,soil_set_id,assessment_method,fresh_until) VALUES ('union','union_county_gis','fixture','USDA Dominant Condition; tie break 1; no component cutoff',$1,$2,now()+interval '1 day') RETURNING id::text`, setID, soil.AssessmentMethod).Scan(&runID); err != nil {
 		t.Fatal(err)
 	}
 	for _, query := range []string{`INSERT INTO soil_screening_heads(county_id,source_name,run_id) VALUES ('union','union_county_gis',$1)`, `INSERT INTO soil_parcel_assessments(run_id,parcel_id,geometry_fingerprint,uncovered_acres,ambiguous_acres) SELECT $1,id,md5(ST_AsEWKB(shape)),0,0 FROM parcels`} {
@@ -52,6 +52,15 @@ func TestParcelDerivedWorkChecksPersistedDependencies(t *testing.T) {
 	}
 	if due() {
 		t.Fatal("unchanged assessed parcel scheduled spatial work")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE soil_screening_runs SET assessment_method='exclusive-map-unit-union/1' WHERE id=$1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if !due() {
+		t.Fatal("previous soil assessment method was not due for refresh")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE soil_screening_runs SET assessment_method=$2 WHERE id=$1`, runID, soil.AssessmentMethod); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE parcels SET current_name_1='owner-only'`); err != nil {
 		t.Fatal(err)

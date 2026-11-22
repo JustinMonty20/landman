@@ -14,7 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const assessmentMethod = "exclusive-map-unit-union/1; EPSG:2264; acres=ftUS^2/43560"
+// AssessmentMethod identifies the geometry and measurement rules used to publish screening.
+const AssessmentMethod = "exclusive-map-unit-union/2; EPSG:3857 overlay; EPSG:2264 measurement; max segment 10m; acres=ftUS^2/43560"
 
 // Area shares are fractions of geometric parcel area, never confidence estimates.
 // Share is unavailable when the parcel has no positive polygonal area.
@@ -84,35 +85,35 @@ type ParcelAssessment struct {
 // Reconciliation tolerance covers overlay roundoff, not omitted slivers.
 func areaTolerance(total float64) float64 { return math.Max(1e-7, total*1e-8) }
 
-func assessParcels(ctx context.Context, tx pgx.Tx, runID, setID string, countyID county.ID, source string) (bool, error) {
+func assessParcels(ctx context.Context, tx pgx.Tx, runID, setID string, countyID county.ID, source string) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO soil_assessment_keys(parcel_id) SELECT id FROM parcels WHERE county_id=$1 AND source_name=$2 ON CONFLICT DO NOTHING`, countyID.String(), source); err != nil {
-		return false, err
+		return err
 	}
 	copied, err := copyUnchangedAssessment(ctx, tx, runID, setID, countyID, source)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if !copied {
 		if err := assessChangedParcels(ctx, tx, runID, setID, countyID, source); err != nil {
-			return false, err
+			return err
 		}
 	}
 	var invalid int
 	err = tx.QueryRow(ctx, `SELECT count(*) FROM soil_parcel_assessments a WHERE run_id=$1 AND total_acres IS NOT NULL AND abs(total_acres-uncovered_acres-ambiguous_acres-COALESCE((SELECT sum(exclusive_acres) FROM soil_assessment_map_units m WHERE m.run_id=a.run_id AND m.parcel_id=a.parcel_id),0))>greatest(1e-7,total_acres*1e-8)`, runID).Scan(&invalid)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if invalid != 0 {
-		return false, fmt.Errorf("soil: %d parcel area partitions failed reconciliation", invalid)
+		return fmt.Errorf("soil: %d parcel area partitions failed reconciliation", invalid)
 	}
 	err = tx.QueryRow(ctx, `SELECT count(*) FROM soil_assessment_map_units m WHERE m.run_id=$1 AND (SELECT count(*) FROM soil_screening_ratings r WHERE r.run_id=m.run_id AND r.map_unit_key=m.map_unit_key)<>3`, runID).Scan(&invalid)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if invalid != 0 {
-		return false, errors.New("soil: incomplete interpretation coverage")
+		return errors.New("soil: incomplete interpretation coverage")
 	}
-	return copied, nil
+	return nil
 }
 
 // Copy only when every current parcel and the complete soil geometry set are unchanged.
@@ -142,7 +143,7 @@ func copyUnchangedAssessment(ctx context.Context, tx pgx.Tx, runID, setID string
    ON a.run_id=prev.id AND a.parcel_id=p.id
    WHERE p.county_id=$1 AND p.source_name=$2
    AND (a.parcel_id IS NULL OR a.geometry_fingerprint IS DISTINCT FROM COALESCE(md5(ST_AsEWKB(p.shape)),'missing'))
- )`, countyID.String(), source, setID, assessmentMethod).Scan(&previous)
+ )`, countyID.String(), source, setID, AssessmentMethod).Scan(&previous)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -213,7 +214,7 @@ func CurrentAssessment(ctx context.Context, pool *pgxpool.Pool, countyID county.
 	if currentSet != result.SoilSetRevision {
 		freshness.Reasons = append(freshness.Reasons, "soil geometry set changed")
 	}
-	if result.MethodVersion != assessmentMethod {
+	if result.MethodVersion != AssessmentMethod {
 		freshness.Reasons = append(freshness.Reasons, "assessment method changed")
 	}
 	if time.Now().After(freshness.FreshUntil) {

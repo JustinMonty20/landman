@@ -317,7 +317,7 @@ func (p *screeningPublication) Apply(ctx context.Context, tx pgx.Tx, observation
 	if err != nil {
 		return err
 	}
-	next := ingest.Fingerprint{Source: canonical, SourceVersion: "usda-response-v1", Normalized: normalized, NormalizedVersion: "usda-interpretation-v1", Geometry: geometry, GeometryVersion: "soil-set-v1"}
+	next := ingest.Fingerprint{Source: canonical, SourceVersion: "usda-response-v1", Normalized: normalized, NormalizedVersion: "usda-interpretation-v1", Geometry: geometry, GeometryVersion: soil.AssessmentMethod}
 	var surveyChanged bool
 	for key, date := range p.surveyDates {
 		var differs bool
@@ -329,7 +329,18 @@ WHERE m.set_id=$2::uuid AND m.map_unit_key=$3 AND d.survey_saved_on IS DISTINCT 
 		}
 		surveyChanged = surveyChanged || differs
 	}
-	revision, err := soilPublicationRevision(ctx, tx, observation, currentCapture, previous, next, surveyChanged)
+	needsAssessment := surveyChanged || previous.Normalized != normalized || previous.NormalizedVersion != next.NormalizedVersion || previous.Geometry != geometry || previous.GeometryVersion != next.GeometryVersion
+	if !needsAssessment {
+		if observation.Replay {
+			needsAssessment, err = soil.NeedsAssessmentTx(ctx, tx, county.Union, polygonSource)
+		} else {
+			needsAssessment, err = soil.NeedsScreenTx(ctx, tx, county.Union, polygonSource)
+		}
+		if err != nil {
+			return fmt.Errorf("soil_set=%s: check screening inputs: %w", p.setID, err)
+		}
+	}
+	revision, err := soilPublicationRevision(ctx, tx, observation, currentCapture, previous, next, needsAssessment)
 	if err != nil {
 		return err
 	}
@@ -344,7 +355,7 @@ WHERE m.set_id=$2::uuid AND m.map_unit_key=$3 AND d.survey_saved_on IS DISTINCT 
 	cause := soilChangeCause(previous, next, observation.Replay)
 	log.Printf("[union.soil.screening] capture=%s soil_set=%s: Evaluate screening publication for %d polygons", observation.ID, p.setID, len(polygons))
 	var runID *string
-	if surveyChanged || previous.Normalized != normalized || previous.NormalizedVersion != next.NormalizedVersion || previous.Geometry != geometry || previous.GeometryVersion != next.GeometryVersion {
+	if needsAssessment {
 		if err := soil.PublishScreeningTx(ctx, tx, county.Union, polygonSource, p.setID, polygons, p.values, soil.USDAEndpoint, p.interval, observation.Manifest.ObservedAt); err != nil {
 			return fmt.Errorf("soil_set=%s: calculate and store screening: %w", p.setID, err)
 		}
@@ -356,25 +367,7 @@ WHERE m.set_id=$2::uuid AND m.map_unit_key=$3 AND d.survey_saved_on IS DISTINCT 
 		if err := soil.StoreCapturedSurveyDatesTx(ctx, tx, p.surveyDates, id, p.setID); err != nil {
 			return err
 		}
-	} else {
-		due, err := soil.NeedsScreenTx(ctx, tx, county.Union, polygonSource)
-		if err != nil {
-			return err
-		}
-		if due {
-			if err := soil.PublishScreeningTx(ctx, tx, county.Union, polygonSource, p.setID, polygons, p.values, soil.USDAEndpoint, p.interval, observation.Manifest.ObservedAt); err != nil {
-				return fmt.Errorf("soil_set=%s: refresh expired screening: %w", p.setID, err)
-			}
-			var id string
-			if err := tx.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&id); err != nil {
-				return err
-			}
-			runID = &id
-			if err := soil.StoreCapturedSurveyDatesTx(ctx, tx, p.surveyDates, id, p.setID); err != nil {
-				return err
-			}
-		}
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,revision,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,published_run_id,observed_at) VALUES ($1::uuid,$2,$3,'usda-response-v1',$4,'usda-interpretation-v1',$5,'soil-set-v1',$6,$7,$8::uuid,$9::uuid,$10)`, observation.ID, revision, interpretationSource, canonical, normalized, geometry, cause, p.setID, runID, observation.Manifest.ObservedAt)
+	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,revision,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,published_run_id,observed_at) VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::uuid,$12::uuid,$13)`, observation.ID, revision, interpretationSource, next.SourceVersion, next.Source, next.NormalizedVersion, next.Normalized, next.GeometryVersion, next.Geometry, cause, p.setID, runID, observation.Manifest.ObservedAt)
 	return err
 }

@@ -1,0 +1,2 @@
+- [Out of scope] Keep zoning and database test isolation out of this change. The operator deferred them.
+- [Out of scope] Keep county soil capture and raw geometry publication unchanged. The approved repair rule applies to screening, not to stored source evidence.
