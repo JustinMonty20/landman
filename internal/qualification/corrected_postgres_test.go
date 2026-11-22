@@ -50,10 +50,13 @@ func TestCapturedQualificationFullStoredReplay(t *testing.T) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		if kind == "sample" && (id == "190" || id == "195") {
+		if kind == "sample" && (id == "170" || id == "190" || id == "195") {
 			var envelope map[string]json.RawMessage
 			var features []json.RawMessage
 			stub := json.RawMessage(`{"attributes":{"OBJECTID":231245,"ZONE":"R-40","PETITION":" ","URL":" "},"geometry":{"rings":[]}}`)
+			if id == "170" {
+				stub = json.RawMessage(`{"attributes":{"OBJECTID":14483,"FullName":null,"FTR_CODE":null,"RoadClass":null,"STATUS":null,"DateUpdate":null}}`)
+			}
 			if id == "195" {
 				stub = json.RawMessage(`{"attributes":{"OBJECTID":117793,"NAME":"Test municipality","LAST_UPDATE":null}}`)
 			}
@@ -122,6 +125,14 @@ func TestCapturedQualificationFullStoredReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		generations = append(generations, id)
+	}
+	for _, gen := range []string{generations[1], generations[3]} {
+		var accounted bool
+		if err := pool.QueryRow(ctx, `SELECT source_metadata->'omitted_road_objectids'='[14483]'::jsonb
+AND feature_count=1+(SELECT count(*) FROM qualification_roads WHERE generation_id=$1)
+FROM qualification_layer_receipts WHERE generation_id=$1 AND layer_id=170`, gen).Scan(&accounted); err != nil || !accounted {
+			t.Fatalf("road without geometry not accounted for: %v", err)
+		}
 	}
 	for _, tc := range []struct {
 		table, attribute, value string
