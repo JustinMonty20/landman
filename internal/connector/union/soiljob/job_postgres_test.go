@@ -306,6 +306,14 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if requestsBefore != noRequests || read("soil_screening_runs") != 3 {
 		t.Fatal("USDA replay issued request or republished historical run")
 	}
+	liveFailure := errors.New("newer USDA request failed")
+	if e := soil.RecordScreeningFailure(ctx, pool, county.Union, polygonSource, updated.InterpretationSetRevision, liveFailure); e != nil {
+		t.Fatal(e)
+	}
+	failed, e := soil.CurrentAssessment(ctx, pool, county.Union, polygonSource, parcelID)
+	if e != nil || failed == nil || failed.Freshness.RefreshFailedAt == nil {
+		t.Fatalf("missing recorded USDA failure: %+v %v", failed, e)
+	}
 	if _, e := pool.Exec(ctx, `UPDATE parcels SET shape=ST_Scale(shape,ST_MakePoint(0.5,0.5),ST_Centroid(shape)) WHERE id=$1`, parcelID); e != nil {
 		t.Fatal(e)
 	}
@@ -313,8 +321,11 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	moved, e := soil.CurrentAssessment(ctx, pool, county.Union, polygonSource, parcelID)
-	if e != nil || moved == nil || moved.Freshness.Stale || moved.TotalAcres == nil || updated.TotalAcres == nil || *moved.TotalAcres >= *updated.TotalAcres || !moved.Freshness.FreshUntil.Equal(updated.Freshness.FreshUntil) {
+	if e != nil || moved == nil || moved.TotalAcres == nil || updated.TotalAcres == nil || *moved.TotalAcres >= *updated.TotalAcres || !moved.Freshness.FreshUntil.Equal(updated.Freshness.FreshUntil) {
 		t.Fatalf("replay did not refresh changed parcel geometry at the original observation time: %+v %v", moved, e)
+	}
+	if !moved.Freshness.Stale || moved.Freshness.RefreshFailedAt == nil || !moved.Freshness.RefreshFailedAt.Equal(*failed.Freshness.RefreshFailedAt) || moved.Freshness.RefreshError == nil || *moved.Freshness.RefreshError != liveFailure.Error() {
+		t.Fatalf("replay hid the newer USDA failure: %+v", moved.Freshness)
 	}
 	if e := screen.Replay(ctx, currentScreenCapture); e != nil || requestsBefore != noRequests || read("soil_screening_runs") != 4 {
 		t.Fatalf("unchanged replay after parcel refresh issued a request or published again: %v", e)

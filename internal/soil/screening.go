@@ -652,10 +652,13 @@ SELECT $1,m.polygon_id FROM soil_polygon_set_members m JOIN soil_polygons p ON p
 	if err := assessParcels(ctx, tx, runID, setID, countyID, source); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO soil_screening_heads(county_id,source_name,run_id) VALUES ($1,$2,$3) ON CONFLICT(county_id,source_name) DO UPDATE SET run_id=excluded.run_id,refresh_failed_at=NULL,refresh_error=NULL`, countyID.String(), source, runID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO soil_screening_heads(county_id,source_name,run_id) VALUES ($1,$2,$3)
+ON CONFLICT(county_id,source_name) DO UPDATE SET run_id=excluded.run_id,
+ refresh_failed_at=CASE WHEN soil_screening_heads.refresh_failed_at>$4 THEN soil_screening_heads.refresh_failed_at END,
+ refresh_error=CASE WHEN soil_screening_heads.refresh_failed_at>$4 THEN soil_screening_heads.refresh_error END`, countyID.String(), source, runID, observedAt); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM soil_screening_refresh_status WHERE county_id=$1 AND source_name=$2`, countyID.String(), source); err != nil {
+	if _, err = tx.Exec(ctx, `DELETE FROM soil_screening_refresh_status WHERE county_id=$1 AND source_name=$2 AND failed_at<=$3`, countyID.String(), source, observedAt); err != nil {
 		return err
 	}
 	return nil
