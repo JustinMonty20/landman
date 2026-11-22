@@ -86,7 +86,30 @@ func TestQualificationMapActiveGenerations(t *testing.T) {
 			}
 		}
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,mapped_acres,shape)
+ SELECT 'union','union','union_county_gis',id,12,ST_Transform(ST_MakeEnvelope(west,34.992,east,34.998,4326),3857)
+ FROM (VALUES ('inside',-80.598,-80.592),('edge',-80.59,-80.585)) p(id,west,east)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/parcels?jurisdiction=etj:Town&min_acres=12", "/api/v1/parcels/map?jurisdiction=etj:Town&min_acres=12&bbox=-80.61,34.98,-80.58,35.01&zoom=14"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		var result struct {
+			Count      int       `json:"count"`
+			MatchCount int       `json:"match_count"`
+			Features   []Feature `json:"features"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Count+result.MatchCount != 1 || (strings.Contains(path, "/map?") && len(result.Features) != 1) {
+			t.Fatalf("jurisdiction parcels: %d %s", w.Code, w.Body.String())
+		}
+	}
 	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/qualification/map?layer=zoning&overview=true&jurisdiction=etj:Town", nil))
+	var chosen struct{ Features []qualificationFeature }
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &chosen) != nil || len(chosen.Features) != 2 || chosen.Features[0].Properties.Kind != "jurisdiction" || chosen.Features[1].Properties.Kind != "etj_label" {
+		t.Fatalf("jurisdiction overlay: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/qualification/map?bbox=-80.598,34.992,-80.592,34.998&layer=zoning&zoom=14", nil))
 	var inside struct{ Features []qualificationFeature }
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &inside) != nil || len(inside.Features) != 2 || inside.Features[0].Properties.Kind != "zoning" || inside.Features[1].Properties.Kind != "etj_label" {

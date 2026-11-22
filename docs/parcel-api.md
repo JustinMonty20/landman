@@ -30,7 +30,11 @@ See the [flood parcel API reference](flood-parcel-api.md) for flood category fil
 - `GET /api/v1/qualification/map?layer=roads&overview=true` returns simplified centerlines for roads with a source class of Primary, Highway, or Expressway from the published roads generation.
 - `GET /api/v1/flood/map?overview=true` returns simplified polygons grouped by zone code, subtype, and special flood hazard designation from the published FEMA release.
 
-The zoning map also returns named point features for municipalities and extraterritorial jurisdictions (ETJs). The roads map returns up to 30 named point features for main roads. A label point is for display, not measurement.
+The zoning map also returns named point features for municipalities and extraterritorial jurisdictions (ETJs). Use the feature name as returned. Prefix municipality names with `municipality:` and ETJ names with `etj:`. For example, send `jurisdiction=etj%3AMonroe`.
+
+The parcel list and parcel map accept `jurisdiction`. They return parcels with positive-area overlap with the named boundary. Edge and corner contact do not count. If a flood filter is also present, a parcel must meet both filters. The API returns `503` if it cannot find a published shape for the selected boundary.
+
+Send the same `jurisdiction` value to `/api/v1/qualification/map?layer=zoning&overview=true` to get only the selected boundary and its label. The roads map returns up to 30 named point features for main roads. A label point is for display, not measurement.
 
 `GET /api/v1/qualification/zoning?lon=-80.595&lat=34.995` returns the active zoning generation and the distinct stored districts at the selected point. It uses full stored polygons, not map shapes. Each district has a jurisdiction and the stored code, description, case reference, and source record date. Fields the source did not supply are empty strings. More than one district can be present. The result does not establish permitted use.
 

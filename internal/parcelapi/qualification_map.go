@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,7 @@ type qualificationFeature struct {
 
 func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if err := parse(q, "bbox", "zoom", "layer", "overview"); err != nil {
+	if err := parse(q, "bbox", "zoom", "layer", "overview", "jurisdiction"); err != nil {
 		bad(w, err)
 		return
 	}
@@ -46,7 +47,15 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 	}
 	query := county
 	var args []any
-	if !overview {
+	if q.Has("jurisdiction") {
+		key := q.Get("jurisdiction")
+		if !overview || group != "zoning" || !validJurisdiction(key) {
+			bad(w, errors.New("jurisdiction requires a zoning overview and a valid key"))
+			return
+		}
+		query = jurisdictionOverview
+		args = []any{key}
+	} else if !overview {
 		args, err = overlayViewportArgs(q, minZoom, maxSpan)
 		if err != nil {
 			bad(w, err)
@@ -111,9 +120,27 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	features = append(features, labels...)
+	for _, label := range labels {
+		if !q.Has("jurisdiction") || labelJurisdictionKey(label) == q.Get("jurisdiction") {
+			features = append(features, label)
+		}
+	}
 	respond(w, map[string]any{"type": "FeatureCollection", "features": features, "generation": gen, "overview": overview})
 }
+
+const jurisdictionKeySQL = `(CASE j.layer_id WHEN 195 THEN 'municipality:' ELSE 'etj:' END || j.name)`
+
+func validJurisdiction(key string) bool {
+	kind, name, ok := strings.Cut(key, ":")
+	return ok && (kind == "municipality" || kind == "etj") && strings.TrimSpace(name) != "" && len(key) <= 160
+}
+
+func labelJurisdictionKey(f qualificationFeature) string {
+	return strings.TrimSuffix(f.Properties.Kind, "_label") + ":" + f.Properties.Name
+}
+
+const jurisdictionOverview = `SELECT 'jurisdiction', '', ST_AsGeoJSON(ST_Transform(ST_Collect(ST_Boundary(j.shape)),4326),7)::jsonb
+ FROM qualification_jurisdictions j WHERE generation_id=$1 AND ` + jurisdictionKeySQL + `=$2 AND shape IS NOT NULL HAVING count(*)>0`
 
 const jurisdictionLabels = `WITH anchors AS (
  SELECT DISTINCT ON (layer_id,name) layer_id,name,shape FROM qualification_jurisdictions

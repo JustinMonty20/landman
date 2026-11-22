@@ -15,11 +15,23 @@ test('Filters and Layers tabs retain independent selections across tabs and zoom
     return route.continue();
   });
   await page.route('**/api/me', (route) => route.fulfill({ json: { id: 'buyer', email: 'buyer@example.test', name: 'Buyer' } }));
-  await page.route('**/api/v1/parcels/map?*', (route) => route.fulfill({ json: { features: [] } }));
+  await page.route('**/api/v1/parcels/map?*', (route) => {
+    if (new URL(route.request().url()).searchParams.get('jurisdiction') === 'etj:Test Town') {
+      requested.push('etj:map');
+      return route.fulfill({ json: { features: [], match_count: 1, source_stamp: 'fixture' } });
+    }
+    return route.fulfill({ json: { features: [] } });
+  });
   await page.route('**/api/v1/qualification/map?*', (route) => {
     const { searchParams } = new URL(route.request().url());
     const layer = searchParams.get('layer');
     const overview = searchParams.get('overview') === 'true';
+    if (searchParams.get('jurisdiction') === 'etj:Test Town') {
+      requested.push('etj:overlay');
+      return route.fulfill({ json: { type: 'FeatureCollection', generation, overview, features: [
+        { type: 'Feature', geometry: { type: 'MultiLineString', coordinates: [district] }, properties: { kind: 'jurisdiction' } }
+      ] } });
+    }
     requested.push(`${layer}:${overview ? 'overview' : 'detail'}`);
     if (layer === 'roads' && !overview) {
       roadsRejected++;
@@ -57,6 +69,11 @@ test('Filters and Layers tabs retain independent selections across tabs and zoom
       { code: 'R-20', jurisdiction: 'Test County', description: '', case_reference: '', source_date: '' }
     ]
   } }));
+  await page.route('**/api/v1/parcels?*', (route) => {
+    if (new URL(route.request().url()).searchParams.get('jurisdiction') !== 'etj:Test Town') return route.abort();
+    requested.push('etj:list');
+    return route.fulfill({ json: { items: [{ id: 'test-match', parcel_number: 'ETJ-TEST' }], count: 1, source_stamp: 'fixture' } });
+  });
   await page.goto('/');
   const layers = page.getByRole('group', { name: 'Map layers' });
   await expect(layers).toHaveCount(0);
@@ -98,9 +115,10 @@ test('Filters and Layers tabs retain independent selections across tabs and zoom
   const zoningLegend = page.getByRole('list', { name: 'Zoning and jurisdiction legend' });
   await expect(zoningLegend.getByText('Zoning area', { exact: true })).toBeVisible();
   await expect(zoningLegend.getByText('Municipality or ETJ boundary', { exact: true })).toBeVisible();
-  const townLabel = page.getByText('Test Town', { exact: true });
+  const mapArea = page.getByRole('region', { name: 'County map' });
+  const townLabel = mapArea.getByText('Test Town', { exact: true });
   await expect(townLabel).toBeVisible();
-  await expect(page.getByText('Test Town ETJ', { exact: true })).toBeVisible();
+  await expect(mapArea.getByText('Test Town ETJ', { exact: true })).toBeVisible();
   await expect(page.getByText('Test Highway', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Zone X — 0.2% annual chance', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Zone X — minimal flood hazard', exact: true })).toBeVisible();
@@ -122,6 +140,17 @@ test('Filters and Layers tabs retain independent selections across tabs and zoom
   await expect(withoutCase).not.toContainText(/Case reference|Source record date|Source description/);
   await expect(page.getByText('Check the local zoning ordinance', { exact: false })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('05-zoning-selection.png') });
+  const etj = page.getByRole('button', { name: 'Test Town ETJ', exact: true });
+  await etj.click();
+  await expect(etj).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Test Town', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'Show matches' })).toBeVisible();
+  await page.getByRole('button', { name: 'Show matches' }).click();
+  await expect(page.getByRole('button', { name: 'ETJ-TEST' })).toBeVisible();
+  await expect.poll(() => ['etj:overlay', 'etj:list', 'etj:map'].every((request) => requested.includes(request))).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('07-jurisdiction-filter.png') });
+  await etj.press('Space');
+  await expect(etj).toHaveAttribute('aria-pressed', 'false');
   await flood.uncheck();
   await expect(floodStatus).toBeHidden();
   await expect(zoning).toBeChecked();

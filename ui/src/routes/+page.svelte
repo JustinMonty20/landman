@@ -24,8 +24,11 @@ let parcelID = $state('');
 let floodOn = $state(false);
 type FloodCategory = keyof typeof floodStyles;
 let floodCategory = $state<FloodCategory | ''>('');
+let jurisdiction = $state('');
+let jurisdictionMap = $state<QualificationMap>();
+let jurisdictionError = $state(false);
 let floodContact = $state<'area' | 'intersects'>('area');
-const filterCount = $derived(filterSelections(draftFilters).length + (floodCategory ? 1 : 0));
+const filterCount = $derived(filterSelections(draftFilters).length + (floodCategory ? 1 : 0) + (jurisdiction ? 1 : 0));
 let matches = $state<{ items: { id: string; parcel_number: string | null; address: string | null }[]; count: number; next_cursor?: string; source_stamp: string }>();
 let matchError = $state('');
 let matchCursor = $state('');
@@ -33,7 +36,17 @@ let cursorHistory = $state<string[]>([]);
 function resetMatches() { matchCursor = ''; cursorHistory = []; }
 let mapCount = $state<number | undefined>();
 let mapStamp = $state<string>();
-const floodParams = $derived(floodCategory ? new URLSearchParams({ flood_category: floodCategory, flood_contact: floodContact }) : undefined);
+const spatialParams = $derived.by(() => {
+  const params = new URLSearchParams();
+  if (floodCategory) { params.set('flood_category', floodCategory); params.set('flood_contact', floodContact); }
+  if (jurisdiction) params.set('jurisdiction', jurisdiction);
+  return params.size ? params : undefined;
+});
+function selectJurisdiction(key: string) {
+  jurisdiction = jurisdiction === key ? '' : key;
+  zoningPoint = undefined;
+  resetMatches();
+}
 function clearFlood() { floodCategory = ''; floodContact = 'area'; resetMatches(); }
 
 let flood = $state<FloodMap>();
@@ -75,6 +88,22 @@ function loadQualification(layer: QualificationLayer, enabled: boolean, query: s
 
 $effect(() => loadQualification('zoning', zoningOn, layerQuery));
 $effect(() => loadQualification('roads', roadsOn, layerQuery));
+const jurisdictionChoices = $derived((overlays.zoning?.features ?? []).flatMap(({ properties }) => {
+  if (!properties || !['municipality_label', 'etj_label'].includes(properties.kind)) return [];
+  const isETJ = properties.kind === 'etj_label';
+  return [{ key: `${isETJ ? 'etj' : 'municipality'}:${properties.name}`, label: `${properties.name}${isETJ ? ' ETJ' : ''}` }];
+}));
+$effect(() => {
+  jurisdictionMap = undefined;
+  jurisdictionError = false;
+  if (!parcelView || !zoningOn || !jurisdiction) return;
+  const task = new AbortController();
+  const params = new URLSearchParams({ layer: 'zoning', overview: 'true', jurisdiction });
+  readMapData<QualificationMap>(`/api/v1/qualification/map?${params}`, task.signal).then((data) => {
+    if (!task.signal.aborted) jurisdictionMap = data;
+  }).catch(() => { if (!task.signal.aborted) jurisdictionError = true; });
+  return () => task.abort();
+});
 
 function inspectZoning(point: { lon: number; lat: number }) {
   if (!parcelView || !zoningOn) return;
@@ -120,10 +149,10 @@ $effect(() => {
   mapCount = undefined;
   mapStamp = undefined;
   parcelError = '';
-  if (!parcelView || !view || (view.zoom < 13 && !floodParams)) return;
+  if (!parcelView || !view || (view.zoom < 13 && !spatialParams)) return;
   const task = new AbortController();
   const params = viewportQuery(view);
-  if (floodParams) for (const [key, value] of floodParams) params.set(key, value);
+  if (spatialParams) for (const [key, value] of spatialParams) params.set(key, value);
   readMapData<{ mode: string; features?: ParcelShape[]; match_count: number; source_stamp: string }>(`/api/v1/parcels/map?${params}`, task.signal).then((data) => {
     if (!task.signal.aborted) { parcels = data.features ?? []; mapCount = data.match_count; mapStamp = data.source_stamp; }
   }).catch((error: Error) => {
@@ -150,7 +179,7 @@ $effect(() => {
 });
 
 $effect(() => {
- const params = floodParams;
+ const params = spatialParams;
  const cursor = matchCursor;
  matches = undefined;
  matchError = '';
@@ -210,7 +239,7 @@ onMount(() => {
 <div class="app">
   <header><a class="brand" href="/">▧ <span>landman</span></a></header>
   <main aria-label="Parcel discovery">
-    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={overlays.zoning ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
+    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={(jurisdiction ? jurisdictionMap : overlays.zoning) ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if !parcelView && filterCount > 0 && selected.status === 'configured'}{@render countySummary()}{/if}
     {#if selected.status === 'locked'}<p class="locked-notice" role="status">{selected.name} County is locked. Parcel discovery is not available.</p>{/if}
     {#if parcelView}
@@ -268,7 +297,14 @@ onMount(() => {
                         <li><span class="jurisdiction-swatch" style:border-color={jurisdictionColor} aria-hidden="true"></span> Municipality or ETJ boundary</li>
                       </ul>
                       <small>ETJ: extraterritorial jurisdiction. It is outside municipal limits.</small>
-                      <small>Select a shaded zoning area to see its district codes.</small>
+                      <small>Select a named boundary to filter parcels.</small>
+                      <div class="jurisdiction-choices" role="group" aria-label="Jurisdiction parcel filters">
+                        {#each jurisdictionChoices as choice (choice.key)}
+                          <button class="btn btn-sm legend-item" aria-pressed={jurisdiction === choice.key} onclick={() => selectJurisdiction(choice.key)}>{choice.label}</button>
+                        {/each}
+                      </div>
+                      {#if jurisdictionError}<p role="status">The selected jurisdiction boundary is unavailable.</p>{/if}
+                      {#if !jurisdiction}<small>Select a shaded zoning area to see its district codes.</small>{/if}
                       {#if zoningPoint}
                         <div class="selected-zoning" aria-live="polite">
                           <strong>Zoning at selected location</strong>
@@ -341,8 +377,9 @@ onMount(() => {
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
             <div class="results-heading">
-              <h1>{floodCategory ? 'Matching parcels' : 'Parcel results unavailable'}</h1>
-              {#if floodCategory}
+              <h1>{spatialParams ? 'Matching parcels' : 'Parcel results unavailable'}</h1>
+              {#if spatialParams}
+                {#if jurisdiction}<button class="btn btn-sm" onclick={() => selectJurisdiction(jurisdiction)}>Clear jurisdiction filter</button>{/if}
                 {#if matches}<p>{selected.name} County · {matches.count} {matches.count === 1 ? 'match' : 'matches'}</p>{/if}
                 {#if matches && mapStamp && mapStamp !== matches.source_stamp}
                   <p>Data changed. Refresh the map to compare counts.</p>
@@ -353,10 +390,10 @@ onMount(() => {
                 <p>{selected.name} County · Filter selections do not run a search.</p>
               {/if}
             </div>
-            <div class="empty"><p>{matchError || parcelError || (floodCategory ? (!matches ? 'Loading matches…' : matches.count ? 'County matches' : 'No matching parcels.') : parcels.length ? 'Select a visible parcel for flood evidence.' : 'Zoom in to see parcel boundaries.')}</p>
-              {#if floodCategory && matches?.items.length}<ul aria-label="Matching parcels">{#each matches.items as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{:else if !floodCategory && parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}</button></li>{/each}</ul>{/if}
+            <div class="empty"><p>{matchError || parcelError || (spatialParams ? (!matches ? 'Loading matches…' : matches.count ? 'County matches' : 'No matching parcels.') : parcels.length ? 'Select a visible parcel for flood evidence.' : 'Zoom in to see parcel boundaries.')}</p>
+              {#if spatialParams && matches?.items.length}<ul aria-label="Matching parcels">{#each matches.items as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{:else if !spatialParams && parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}</button></li>{/each}</ul>{/if}
             </div>
-            {#if floodCategory}<nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled={!cursorHistory.length} onclick={() => { matchCursor = cursorHistory.at(-1) ?? ''; cursorHistory = cursorHistory.slice(0, -1); }}>Previous</button><span>Page {cursorHistory.length + 1}</span><button class="btn btn-sm" disabled={!matches?.next_cursor} onclick={() => { cursorHistory = [...cursorHistory, matchCursor]; matchCursor = matches?.next_cursor ?? ''; }}>Next</button></nav>{/if}
+            {#if spatialParams}<nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled={!cursorHistory.length} onclick={() => { matchCursor = cursorHistory.at(-1) ?? ''; cursorHistory = cursorHistory.slice(0, -1); }}>Previous</button><span>Page {cursorHistory.length + 1}</span><button class="btn btn-sm" disabled={!matches?.next_cursor} onclick={() => { cursorHistory = [...cursorHistory, matchCursor]; matchCursor = matches?.next_cursor ?? ''; }}>Next</button></nav>{/if}
           </section>
           {/if}
         </div>
@@ -391,6 +428,7 @@ h1 { font-size: 19px; font-weight: 650; }
 .jurisdiction-swatch { width: 1.2em; border-top: 2px dashed; }
 .road-key { color: #ff996b; }
 .flood-legend { display: grid; gap: 4px; width: fit-content; }
+.jurisdiction-choices { display: grid; max-height: 12rem; overflow-y: auto; }
 .legend-item { justify-content: flex-start; gap: 6px; text-align: left; white-space: normal; }
 .legend-item[aria-pressed='true'] { background: var(--color-surface-700); box-shadow: inset 2px 0 var(--accent); }
 .flood-legend i { flex-shrink: 0; display: inline-block; width: .8em; height: .8em; }
