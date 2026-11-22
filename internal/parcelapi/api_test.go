@@ -56,3 +56,31 @@ func TestCursor(t *testing.T) {
 		t.Fatal("filter digest collision")
 	}
 }
+
+func TestDiscoveryFiltersAndCursorIdentity(t *testing.T) {
+	legacy, err := parseFilters(url.Values{})
+	if err != nil || legacy.active() {
+		t.Fatalf("legacy empty list: %+v %v", legacy, err)
+	}
+	browse, err := parseFilters(url.Values{"discovery": {"browse"}})
+	if err != nil || !browse.active() || browse.digest() == legacy.digest() {
+		t.Fatalf("browse mode: %+v %v", browse, err)
+	}
+	combined, err := parseFilters(url.Values{"discovery": {"browse"}, "foreclosure": {"true"}, "soil_type": {"unit-1"}, "soil_use": {"conventional-septic"}, "soil_rating": {"Not limited"}})
+	if err != nil || !combined.active() || len(combined.args()) != 20 || *combined.SoilUse != "208" {
+		t.Fatalf("combined: %+v %v", combined, err)
+	}
+	for _, query := range []string{"discovery=all", "foreclosure=maybe", "soil_type=", "soil_use=conventional-septic", "soil_rating=Not+limited", "soil_use=other&soil_rating=Not+limited", "soil_use=conventional-septic&soil_rating=Not+rated"} {
+		q, _ := url.ParseQuery(query)
+		if _, err := parseFilters(q); err == nil {
+			t.Errorf("accepted %s", query)
+		}
+	}
+	mapFilter, err := parseFilterValues(url.Values{"bbox": {"-81,34,-80,35"}, "zoom": {"8"}, "discovery": {"browse"}, "soil_type": {"unit-1"}}, true)
+	if err != nil || *mapFilter.SoilType != "unit-1" {
+		t.Fatalf("map filters: %+v %v", mapFilter, err)
+	}
+	if mapFilter.digest() == combined.digest() {
+		t.Fatal("semantic filter change retained cursor identity")
+	}
+}

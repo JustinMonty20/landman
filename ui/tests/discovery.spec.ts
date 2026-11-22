@@ -31,7 +31,7 @@ test('clicking Union opens filters and preserves panel preferences across zoom l
   expect(panel!.y).toBe(164);
   await page.getByRole('button', { name: 'Parcel filters', exact: true }).click();
   await expect(page.getByRole('spinbutton', { name: 'Minimum acres' })).toBeEnabled();
-  await expect(page.getByRole('heading', { name: 'Parcel results unavailable' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Matching parcels' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Matching parcels' })).not.toContainText('Ingestion');
   await page.screenshot({ path: `test-results/${test.info().project.name}-union-county-view.png` });
   await page.getByRole('button', { name: 'Hide map panel' }).click();

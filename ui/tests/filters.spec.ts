@@ -3,55 +3,58 @@ import { test, expect } from '@playwright/test';
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.route('**/api/me', (route) => route.fulfill({ json: { id: 'sample-user', email: 'buyer@example.test', name: 'Buyer' } }));
+await page.route('**/api/v1/parcels/soil-types', route => route.fulfill({ json: { items: [] } }));
+await page.route('**/api/v1/parcels?*', route => route.fulfill({ json: { items: [], count: 0, source_stamp: 'fixture' } }));
+await page.route('**/api/v1/parcels/map?*', route => route.fulfill({ json: { mode: 'grid', cells: [], match_count: 0, context_count: 0, source_stamp: 'fixture' } }));
   await page.goto('/?county=37179');
   await expect(page.getByRole('heading', { name: 'Filter Union parcels' })).toBeVisible();
 });
 
-test('mock filter sections use data-specific controls and explain unavailable soil choices', async ({ page }) => {
+test('filter sections expose data-specific controls and bounded soil choices', async ({ page }) => {
   const panel = page.getByRole('complementary', { name: 'Parcel filters' });
   await expect(panel.getByText(/mock|preview/i)).toHaveCount(0);
-  await expect(panel.getByText('Parcel data is not connected yet. Selections do not run a search.')).toBeVisible();
+  await expect(panel.getByText('Choose filters to narrow county parcels.')).toBeVisible();
   for (const name of ['Owner', 'Soil', 'Tax', 'Parcel']) {
     await expect(panel.getByRole('button', { name: `${name} filters`, exact: true })).toBeVisible();
   }
-  await expect(panel.getByRole('checkbox', { name: 'Out-of-state owner' })).toBeEnabled();
+  await expect(panel.getByRole('checkbox', { name: 'Out-of-state mailing' })).toBeEnabled();
   await expect(panel.getByText('Owner mailing address is outside North Carolina.')).toBeVisible();
   await panel.getByRole('button', { name: 'Soil filters', exact: true }).click();
-  await expect(panel.getByRole('combobox', { name: 'Soil type', exact: true })).toBeDisabled();
-  await expect(panel.getByRole('option', { name: 'No soil types loaded' })).toHaveCount(1);
+  await expect(panel.getByRole('combobox', { name: 'Soil type', exact: true })).toBeEnabled();
+  await expect(panel.getByRole('option', { name: 'Any soil unit' })).toHaveCount(1);
   await expect(panel.getByRole('searchbox')).toHaveCount(0);
   await page.screenshot({ path: `test-results/${test.info().project.name}-filter-sections.png` });
 });
 
-test('preview counts and removal controls update without querying parcel data', async ({ page }) => {
+test('filter counts and removal controls update with parcel requests', async ({ page }) => {
   const dataRequests: string[] = [];
   page.on('request', (request) => { if (request.url().includes('/api/')) dataRequests.push(request.url()); });
   const panel = page.getByRole('complementary', { name: 'Parcel filters' });
-  await panel.getByRole('checkbox', { name: 'Business-name match' }).check();
-  await panel.getByRole('checkbox', { name: 'Out-of-state owner' }).check();
+  await panel.getByRole('checkbox', { name: 'Entity-name signal' }).check();
+  await panel.getByRole('checkbox', { name: 'Out-of-state mailing' }).check();
   await panel.getByRole('checkbox', { name: 'Reported delinquent taxes' }).check();
   await expect(panel.getByRole('button', { name: 'Owner filters', exact: true })).toContainText('2');
   await expect(panel.getByRole('button', { name: 'Tax filters', exact: true })).toContainText('1');
   await expect(panel.getByText('3 filters selected', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Owner filters', exact: true }).focus();
   await page.keyboard.press('Enter');
-  await expect(panel.getByRole('checkbox', { name: 'Out-of-state owner' })).not.toBeVisible();
+  await expect(panel.getByRole('checkbox', { name: 'Out-of-state mailing' })).not.toBeVisible();
   await page.keyboard.press('Enter');
-  await expect(panel.getByRole('checkbox', { name: 'Out-of-state owner' })).toBeChecked();
-  await panel.getByRole('button', { name: 'Remove Business-name match', exact: true }).click();
-  await expect(panel.getByRole('checkbox', { name: 'Business-name match' })).not.toBeChecked();
-  await expect(panel.getByRole('checkbox', { name: 'Out-of-state owner' })).toBeChecked();
-  await expect(panel.getByRole('button', { name: 'Remove Out-of-state owner', exact: true })).toBeFocused();
+  await expect(panel.getByRole('checkbox', { name: 'Out-of-state mailing' })).toBeChecked();
+  await panel.getByRole('button', { name: 'Remove Entity-name signal', exact: true }).click();
+  await expect(panel.getByRole('checkbox', { name: 'Entity-name signal' })).not.toBeChecked();
+  await expect(panel.getByRole('checkbox', { name: 'Out-of-state mailing' })).toBeChecked();
+  await expect(panel.getByRole('button', { name: 'Remove Out-of-state mailing', exact: true })).toBeFocused();
   await expect(panel.getByText('2 filters selected', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Clear all', exact: true }).click();
   await expect(panel.getByText('0 filters selected', { exact: true })).toBeVisible();
-  await expect(panel.getByRole('checkbox', { name: 'Out-of-state owner' })).not.toBeChecked();
+  await expect(panel.getByRole('checkbox', { name: 'Out-of-state mailing' })).not.toBeChecked();
   await expect(panel.getByRole('checkbox', { name: 'Reported delinquent taxes' })).not.toBeChecked();
-  await expect(page.getByRole('heading', { name: 'Parcel results unavailable' })).toBeVisible();
-  expect(dataRequests).toEqual([]);
+  await expect(page.getByRole('heading', { name: 'Matching parcels' })).toBeVisible();
+  expect(dataRequests.some(path => path.includes('/api/v1/parcels?'))).toBe(true);
 });
 
-test('preview filters survive hidden panels and regional zoom without changing parcel results', async ({ page }) => {
+test('filters survive hidden panels and regional zoom with matching results', async ({ page }) => {
   const panel = page.getByRole('complementary', { name: 'Parcel filters' });
   await panel.getByRole('checkbox', { name: 'Foreclosure record' }).check();
   await panel.getByRole('button', { name: 'Parcel filters', exact: true }).click();
@@ -63,7 +66,7 @@ test('preview filters survive hidden panels and regional zoom without changing p
   await page.getByRole('button', { name: 'Show selected filters', exact: true }).click();
   await expect(panel.getByRole('checkbox', { name: 'Foreclosure record' })).toBeChecked();
   await expect(panel.getByRole('spinbutton', { name: 'Minimum acres' })).toHaveValue('0');
-  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('Filter selections do not run a search.');
+  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('No matching parcels.');
   await panel.getByRole('button', { name: 'Remove At least 0 acres', exact: true }).click();
   await expect(panel.getByRole('spinbutton', { name: 'Minimum acres' })).toHaveValue('');
   await expect(panel.getByText('1 filter selected', { exact: true })).toBeVisible();

@@ -108,7 +108,7 @@ onMount(() => {
       map.addLayer({ id: 'roads', type: 'line', source: 'roads', paint: { 'line-color': '#ff996b', 'line-width': 2 } });
       map.addSource('parcels', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'parcel-hit', type: 'fill', source: 'parcels', paint: { 'fill-opacity': 0 } });
-      map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcels', paint: { 'line-color': '#c4cbd2', 'line-width': 1 } });
+      map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcels', paint: { 'line-color': ['case', ['get', 'match'], '#72b8ff', '#c4cbd2'], 'line-width': ['case', ['get', 'match'], 2, 1] } });
       map.addLayer({ id: 'parcel-selected', type: 'line', source: 'parcels', filter: ['==', ['get', 'id'], ''], paint: { 'line-color': '#edba71', 'line-width': 3 } });
       map.on('click', (event) => {
         if (!map) return;

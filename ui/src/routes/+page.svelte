@@ -30,6 +30,13 @@ let jurisdictionMap = $state<QualificationMap>();
 let jurisdictionError = $state(false);
 let floodContact = $state<'area' | 'intersects'>('area');
 const filterCount = $derived(filterSelections(draftFilters).length + (floodCategory ? 1 : 0) + (jurisdiction ? 1 : 0));
+let soilChoices = $state<{key: string; name: string}[]>([]);
+$effect(() => {
+ if (!parcelView) return;
+ const task = new AbortController();
+ readMapData<{items: typeof soilChoices}>('/api/v1/parcels/soil-types', task.signal).then(data => { if (!task.signal.aborted) soilChoices = data.items; }).catch(() => {});
+ return () => task.abort();
+});
 let matches = $state<{ items: { id: string; parcel_number: string | null; address: string | null }[]; count: number; next_cursor?: string; source_stamp: string }>();
 let matchError = $state('');
 let matchCursor = $state('');
@@ -38,10 +45,19 @@ function resetMatches() { matchCursor = ''; cursorHistory = []; }
 let mapCount = $state<number | undefined>();
 let mapStamp = $state<string>();
 const spatialParams = $derived.by(() => {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ discovery: 'browse' });
+  if (draftFilters.minAcres !== undefined && draftFilters.minAcres >= 0) params.set('min_acres', String(draftFilters.minAcres));
+  if (draftFilters.maxAcres !== undefined && draftFilters.maxAcres >= 0) params.set('max_acres', String(draftFilters.maxAcres));
+  if (draftFilters.businessName) params.set('entity_name_indicator', 'matched');
+  if (draftFilters.outOfState) params.set('out_of_state_mailing', 'yes');
+  if (draftFilters.delinquent) params.set('delinquent', 'true');
+  if (draftFilters.foreclosure) params.set('foreclosure', 'true');
+  if (draftFilters.likelyVacant) params.set('likely_vacant', 'true');
+  if (draftFilters.soilType) params.set('soil_type', draftFilters.soilType);
+  if (draftFilters.soilUse && draftFilters.soilRating) { params.set('soil_use', draftFilters.soilUse); params.set('soil_rating', draftFilters.soilRating); }
   if (floodCategory) { params.set('flood_category', floodCategory); params.set('flood_contact', floodContact); }
   if (jurisdiction) params.set('jurisdiction', jurisdiction);
-  return params.size ? params : undefined;
+  return params;
 });
 function selectJurisdiction(key: string) {
   jurisdiction = jurisdiction === key ? '' : key;
@@ -50,6 +66,11 @@ function selectJurisdiction(key: string) {
 }
 function clearFlood() { floodCategory = ''; floodContact = 'area'; resetMatches(); }
 
+let previousFilterQuery = "";
+$effect(() => {
+ const query = spatialParams.toString();
+ if (query !== previousFilterQuery) { previousFilterQuery = query; resetMatches(); }
+});
 let flood = $state<FloodMap>();
 let floodError = $state('');
 let zoningOn = $state(false);
@@ -148,7 +169,7 @@ $effect(() => {
   mapCount = undefined;
   mapStamp = undefined;
   parcelError = '';
-  if (!parcelView || !view || (view.zoom < 13 && !spatialParams)) return;
+  if (!parcelView || !view) return;
   const task = new AbortController();
   const params = viewportQuery(view);
   if (spatialParams) for (const [key, value] of spatialParams) params.set(key, value);
@@ -238,7 +259,7 @@ onMount(() => {
             <Tabs.Trigger class="btn" value="layers">Layers</Tabs.Trigger>
           </Tabs.List>
           <Tabs.Content class="map-tab-content" value="filters">
-            <FilterPanel county={selected.name} bind:filters={draftFilters} />
+            <FilterPanel county={selected.name} bind:filters={draftFilters} {soilChoices} />
 <div class="flood-legend" aria-label="Flood parcel filter"><strong>FEMA flood parcel filter</strong>
 <select class="select" aria-label="Flood category" bind:value={floodCategory} onchange={() => { resetMatches(); if (floodCategory) floodOn = true; }}>
 <option value="">Any category (no flood filter)</option>
@@ -335,7 +356,7 @@ onMount(() => {
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
             <div class="results-heading">
-              <h1>{spatialParams ? 'Matching parcels' : 'Parcel results unavailable'}</h1>
+              <h1>Matching parcels</h1>
               {#if spatialParams}
                 {#if jurisdiction}<button class="btn btn-sm" onclick={() => selectJurisdiction(jurisdiction)}>Clear jurisdiction filter</button>{/if}
                 {#if matches}<p>{selected.name} County · {matches.count} {matches.count === 1 ? 'match' : 'matches'}</p>{/if}
@@ -345,10 +366,12 @@ onMount(() => {
                   <p>{mapCount} in map view</p>
                 {/if}
               {:else}
-                <p>{selected.name} County · Filter selections do not run a search.</p>
+                <p>{selected.name} County</p>
               {/if}
             </div>
-            <div class="empty"><p>{matchError || parcelError || (spatialParams ? (!matches ? 'Loading matches…' : matches.count ? 'County matches' : 'No matching parcels.') : parcels.length ? 'Select a visible parcel for flood evidence.' : 'Zoom in to see parcel boundaries.')}</p>
+            <div class="empty">
+              {#if parcelError}<p role="status">{parcelError}</p>{/if}
+              <p>{matchError || (!matches ? 'Loading matches…' : matches.count ? 'County matches' : 'No matching parcels.')}</p>
               {#if spatialParams && matches?.items.length}<ul aria-label="Matching parcels">{#each matches.items as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{:else if !spatialParams && parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}</button></li>{/each}</ul>{/if}
             </div>
             {#if spatialParams}<nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled={!cursorHistory.length} onclick={() => { matchCursor = cursorHistory.at(-1) ?? ''; cursorHistory = cursorHistory.slice(0, -1); }}>Previous</button><span>Page {cursorHistory.length + 1}</span><button class="btn btn-sm" disabled={!matches?.next_cursor} onclick={() => { cursorHistory = [...cursorHistory, matchCursor]; matchCursor = matches?.next_cursor ?? ''; }}>Next</button></nav>{/if}
