@@ -30,6 +30,6 @@ func NeedsScreenTx(ctx context.Context, tx interface {
  AND NOT EXISTS (SELECT 1 FROM parcels p LEFT JOIN soil_parcel_assessments a ON a.parcel_id=p.id AND a.run_id=r.id
  WHERE p.county_id=$1 AND p.source_name=$2
  AND (a.parcel_id IS NULL OR a.geometry_fingerprint IS DISTINCT FROM COALESCE(md5(ST_AsEWKB(p.shape)),'missing')))
- )`, countyID.String(), source, screeningMethod, assessmentMethod).Scan(&due)
+ )`, countyID.String(), source, screeningMethod, AssessmentMethod).Scan(&due)
 	return due, err
 }

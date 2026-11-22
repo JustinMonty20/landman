@@ -317,7 +317,7 @@ func (p *screeningPublication) Apply(ctx context.Context, tx pgx.Tx, observation
 	if err != nil {
 		return err
 	}
-	next := ingest.Fingerprint{Source: canonical, SourceVersion: "usda-response-v1", Normalized: normalized, NormalizedVersion: "usda-interpretation-v1", Geometry: geometry, GeometryVersion: "soil-set-v1"}
+	next := ingest.Fingerprint{Source: canonical, SourceVersion: "usda-response-v1", Normalized: normalized, NormalizedVersion: "usda-interpretation-v1", Geometry: geometry, GeometryVersion: soil.AssessmentMethod}
 	var surveyChanged bool
 	for key, date := range p.surveyDates {
 		var differs bool
@@ -375,6 +375,6 @@ WHERE m.set_id=$2::uuid AND m.map_unit_key=$3 AND d.survey_saved_on IS DISTINCT 
 			}
 		}
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,revision,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,published_run_id,observed_at) VALUES ($1::uuid,$2,$3,'usda-response-v1',$4,'usda-interpretation-v1',$5,'soil-set-v1',$6,$7,$8::uuid,$9::uuid,$10)`, observation.ID, revision, interpretationSource, canonical, normalized, geometry, cause, p.setID, runID, observation.Manifest.ObservedAt)
+	_, err = tx.Exec(ctx, `INSERT INTO soil_ingest_publications(capture_id,revision,source_name,canonical_version,canonical_digest,normalized_version,normalized_digest,geometry_version,geometry_digest,change_cause,published_set_id,published_run_id,observed_at) VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::uuid,$12::uuid,$13)`, observation.ID, revision, interpretationSource, next.SourceVersion, next.Source, next.NormalizedVersion, next.Normalized, next.GeometryVersion, next.Geometry, cause, p.setID, runID, observation.Manifest.ObservedAt)
 	return err
 }

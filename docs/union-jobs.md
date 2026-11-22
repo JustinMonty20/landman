@@ -171,6 +171,10 @@ Concurrent successful sources wait for a cross-process refresh lock before claim
 
 Required USDA or database failure preserves the prior screening head. Derived overlap updates and screening publication commit together. Historical polygon and legacy overlap rows remain in the database. Refresh writes only current-set overlaps; screening never treats old legacy joins as current evidence.
 
+Soil assessment method 2 calculates parcel intersections, uncovered area, and conflicts in the stored coordinate system (EPSG:3857). It projects only completed shapes to EPSG:2264 to measure acreage. It uses a repaired soil shape only if two PostGIS repair methods give the same valid, nonempty polygon area and the same boundary lines as the input. It does not change the stored source shape. If a repair fails this rule, screening fails and keeps the prior result. The error identifies the soil set and source object ID.
+
+A result from the previous assessment method is stale. Run `./landman run union.soil.screening` to refresh it from the stored soil set. To correct the latest eligible USDA capture without a network request, use `./landman replay union.soil.screening --snapshot UUID`. The capture must describe the current soil set.
+
 Scheduler errors and non-clean outcomes appear in process logs. A failure while connecting or waiting for refresh exclusion occurs before the derived attempt starts, so inspect logs as well as history. There is no persistent dispatch queue. After a crash between source commit and derived completion, use the manual screening command or wait for the next successful source run. A new source run starts its scan from the beginning.
 
 Offset paging and upserts do not prove a complete remote snapshot. Absent parcels are not deleted. See [the independent-schedule plan](../plans/union-independent-schedules.md) for the live gate and remaining verification.

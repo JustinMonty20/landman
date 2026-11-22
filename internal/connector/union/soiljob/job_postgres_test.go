@@ -252,11 +252,21 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if e := pool.QueryRow(ctx, `SELECT capture_id::text FROM soil_ingest_publications WHERE source_name=$1 ORDER BY observed_at DESC LIMIT 1`, interpretationSource).Scan(&currentScreenCapture); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := pool.Exec(ctx, `UPDATE soil_ingest_publications SET normalized_version='usda-interpretation-v0' WHERE capture_id=$1::uuid`, currentScreenCapture); e != nil {
+	if _, e := pool.Exec(ctx, `UPDATE soil_ingest_publications SET geometry_version='soil-set-v1' WHERE capture_id=$1::uuid`, currentScreenCapture); e != nil {
 		t.Fatal(e)
+	}
+	if _, e := pool.Exec(ctx, `UPDATE soil_screening_runs SET assessment_method='old-method' WHERE id IN (SELECT run_id FROM soil_screening_heads)`); e != nil {
+		t.Fatal(e)
+	}
+	if due, e := soil.NeedsScreenStored(ctx, pool, county.Union, polygonSource); e != nil || !due {
+		t.Fatalf("old soil method not due for refresh: %t %v", due, e)
 	}
 	if e := screen.Replay(ctx, currentScreenCapture); e != nil {
 		t.Fatal(e)
+	}
+	updated, e := soil.CurrentAssessment(ctx, pool, county.Union, polygonSource, parcelID)
+	if e != nil || updated == nil || updated.MethodVersion != soil.AssessmentMethod || updated.Freshness.Stale {
+		t.Fatalf("replay did not publish current soil method: %+v %v", updated, e)
 	}
 	if read("soil_screening_runs") != 3 || read("soil_screening_survey_dates") != 3 {
 		t.Fatal("current USDA correction failed to publish revised screening and preserve captured survey date")
