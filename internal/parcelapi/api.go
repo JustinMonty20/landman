@@ -747,6 +747,8 @@ func (h *Handler) detailRoute(w http.ResponseWriter, r *http.Request) {
 		h.floodDetail(w, r, parts[0])
 	case "vacancy":
 		h.vacancy(w, r, parts[0])
+	case "zoning", "roads":
+		h.qualificationDetail(w, r, parts[0], parts[1])
 	default:
 		http.NotFound(w, r)
 	}
