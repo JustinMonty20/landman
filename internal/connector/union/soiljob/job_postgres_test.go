@@ -306,6 +306,19 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if requestsBefore != noRequests || read("soil_screening_runs") != 3 {
 		t.Fatal("USDA replay issued request or republished historical run")
 	}
+	if _, e := pool.Exec(ctx, `UPDATE parcels SET shape=ST_Scale(shape,ST_MakePoint(0.5,0.5),ST_Centroid(shape)) WHERE id=$1`, parcelID); e != nil {
+		t.Fatal(e)
+	}
+	if e := screen.Replay(ctx, currentScreenCapture); e != nil {
+		t.Fatal(e)
+	}
+	moved, e := soil.CurrentAssessment(ctx, pool, county.Union, polygonSource, parcelID)
+	if e != nil || moved == nil || moved.Freshness.Stale || moved.TotalAcres == nil || updated.TotalAcres == nil || *moved.TotalAcres >= *updated.TotalAcres || !moved.Freshness.FreshUntil.Equal(updated.Freshness.FreshUntil) {
+		t.Fatalf("replay did not refresh changed parcel geometry at the original observation time: %+v %v", moved, e)
+	}
+	if e := screen.Replay(ctx, currentScreenCapture); e != nil || requestsBefore != noRequests || read("soil_screening_runs") != 4 {
+		t.Fatalf("unchanged replay after parcel refresh issued a request or published again: %v", e)
+	}
 	// Seal a complete historical USDA capture before another county geometry generation takes the head.
 	var manifestData []byte
 	if e := pool.QueryRow(ctx, `SELECT manifest FROM ingest_captures WHERE id=$1::uuid`, screenCapture).Scan(&manifestData); e != nil {
@@ -384,7 +397,7 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if e := pool.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&currentHead); e != nil {
 		t.Fatal(e)
 	}
-	if currentHead != previousHead || read("soil_screening_runs") != 3 {
+	if currentHead != previousHead || read("soil_screening_runs") != 4 {
 		t.Fatal("failed publication changed screening generation")
 	}
 	failedScreen := screen
@@ -401,7 +414,7 @@ func TestSoilJobCapturedGeometryRepeatAndReplay(t *testing.T) {
 	if e := pool.QueryRow(ctx, `SELECT run_id::text FROM soil_screening_heads WHERE county_id='union' AND source_name=$1`, polygonSource).Scan(&currentHead); e != nil {
 		t.Fatal(e)
 	}
-	if currentHead != previousHead || read("soil_screening_runs") != 3 || read("soil_polygon_parcels") != 1 {
+	if currentHead != previousHead || read("soil_screening_runs") != 4 || read("soil_polygon_parcels") != 1 {
 		t.Fatal("USDA failure changed published screening or overlaps")
 	}
 	if read("soil_screening_refresh_status") != 1 {

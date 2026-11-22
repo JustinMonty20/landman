@@ -18,11 +18,11 @@ func previousSoilFingerprint(ctx context.Context, tx pgx.Tx, source string) (ing
 	return previous, setID, captureID, err
 }
 
-func soilPublicationRevision(ctx context.Context, tx pgx.Tx, observation ingest.Observation, currentCapture string, previous, next ingest.Fingerprint, metadataChanged bool) (int, error) {
+func soilPublicationRevision(ctx context.Context, tx pgx.Tx, observation ingest.Observation, currentCapture string, previous, next ingest.Fingerprint, assessmentDue bool) (int, error) {
 	if !observation.Published {
 		return 1, nil
 	}
-	if currentCapture != observation.ID || (!metadataChanged && previous.Normalized == next.Normalized && previous.NormalizedVersion == next.NormalizedVersion && previous.Geometry == next.Geometry && previous.GeometryVersion == next.GeometryVersion) {
+	if currentCapture != observation.ID || (!assessmentDue && previous.Normalized == next.Normalized && previous.NormalizedVersion == next.NormalizedVersion && previous.Geometry == next.Geometry && previous.GeometryVersion == next.GeometryVersion) {
 		return 0, nil
 	}
 	var revision int

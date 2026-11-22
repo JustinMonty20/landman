@@ -88,7 +88,9 @@ func TestStoredRefreshCancellationRollsBackOverlapsAndHead(t *testing.T) {
 	if err := refresh(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	near(t, overlap(), 5000.0/43560)
+	if got := overlap(); got != 0.114784 {
+		t.Fatalf("stored overlap acres = %g, want 0.114784", got)
+	}
 	if assessment := f.read(parcelID); assessment.InterpretationSetRevision == previousHead || assessment.Freshness.Stale {
 		t.Fatal("successful retry did not publish the changed parcel")
 	}
@@ -144,7 +146,9 @@ func TestStoredRefreshUsesCurrentMembershipWithoutNewFetch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	near(t, activeAcres, 5000.0/43560)
+	if activeAcres != 0.114784 {
+		t.Fatalf("active stored overlap acres = %g, want 0.114784", activeAcres)
+	}
 	near(t, retiredAfter, retiredBefore)
 	var after string
 	if err := f.db.QueryRow(f.ctx, fingerprint, f.source).Scan(&after); err != nil {
