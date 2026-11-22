@@ -69,6 +69,7 @@ Name the file after the task (e.g., `auth-refactor.md`).
 - Before claiming which plans exist or that a capability is absent from plans, freshly list `plans/` and inspect any plan path the operator names; do not rely on an earlier or incomplete listing.
 - Before proposing architecture across sources, inspect the relevant existing plans and distinguish planned behavior from implemented code. If a referenced plan is missing from this checkout, say so instead of assuming its design.
 - Before editing code for an architecture-review recommendation, show how the proposed seam works with both the current input and any planned input the operator named. Wait for the operator's decision when they request this review first.
+- For map cache specs, list each current layer and its supported views. Separate the first test from the full delivery scope. State how the design accepts planned layer formats without adding those layers.
 - Before recommending new data sources or map layers, read the application-level plan. Prioritize sources against its user workflow and delivery sequence; distinguish required release inputs from optional enrichment, and do not treat public availability as a reason to expand product scope.
 - When a newer pattern is documented but not yet fully adopted, prefer the newer pattern.
 - For conflicting patterns, match the file you're editing.
