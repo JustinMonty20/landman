@@ -1,0 +1,1 @@
+- [Out-of-scope decision] Keep the proposed fix in Union parcel publication. The soil assessment code also intersects projected geometry. A separate change must verify that method against the stored coordinate system before it changes soil measurements.
