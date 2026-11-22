@@ -40,7 +40,7 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
   await expect(details).toContainText('Unknown coverage: 3.00 acres');
   await expect(details).toContainText('3710542500J · 2008-10-16');
   await page.getByRole('button', { name: 'Close parcel details' }).click();
-  const legendFilter = page.getByRole('button', { name: 'Filter parcels by Special flood hazard area (1% annual chance)' });
+  const legendFilter = page.getByRole('button', { name: 'Special flood hazard area (1% annual chance)', exact: true });
   await legendFilter.click();
   await expect(legendFilter).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('1 match');
@@ -49,7 +49,8 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
   await page.getByRole('tab', { name: 'Filters', exact: true }).click();
   await expect(page.getByRole('combobox', { name: 'Flood category' })).toHaveValue('sfha');
   await page.getByRole('tab', { name: 'Layers', exact: true }).click();
-  await page.getByRole('button', { name: 'Clear flood filter' }).click();
+  await legendFilter.press('Space');
+  await expect(legendFilter).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('Parcel results unavailable');
   await expect(page.getByRole('button', { name: 'FLOOD-TEST' })).toBeVisible();
 });

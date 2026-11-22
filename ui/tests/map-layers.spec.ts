@@ -102,8 +102,8 @@ test('Filters and Layers tabs retain independent selections across tabs and zoom
   await expect(townLabel).toBeVisible();
   await expect(page.getByText('Test Town ETJ', { exact: true })).toBeVisible();
   await expect(page.getByText('Test Highway', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Filter parcels by Zone X — 0.2% annual chance', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Filter parcels by Zone X — minimal flood hazard', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Zone X — 0.2% annual chance', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Zone X — minimal flood hazard', exact: true })).toBeVisible();
   for (const toggle of [zoning, roads, flood]) await expect(toggle).toBeChecked();
   await page.getByRole('button', { name: 'Hide matches' }).click();
   await page.screenshot({ path: testInfo.outputPath('03-layers-on.png') });

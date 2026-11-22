@@ -247,7 +247,10 @@ onMount(() => {
               {#if floodOn}
                 <div class="flood-legend">
                   {#each Object.entries(floodStyles) as [key, style]}
-                    <span><i style:background-color={style.color} aria-hidden="true"></i> {style.label} <button class="btn btn-sm" aria-label={`Filter parcels by ${style.label}`} aria-pressed={floodCategory === key} onclick={() => { floodCategory = key as FloodCategory; floodOn = true; resetMatches(); }}>{floodCategory === key ? 'Selected' : 'Filter'}</button></span>
+                    <button class="btn btn-sm legend-item" aria-pressed={floodCategory === key} onclick={() => {
+                      if (floodCategory === key) clearFlood();
+                      else { floodCategory = key as FloodCategory; resetMatches(); }
+                    }}><i style:background-color={style.color} aria-hidden="true"></i> {style.label}</button>
                   {/each}
                   {#if floodCategory}<label class="check"><input class="checkbox" type="checkbox" checked={floodContact === 'intersects'} onchange={(event) => { floodContact = event.currentTarget.checked ? 'intersects' : 'area'; resetMatches(); }} />Include boundary-only contacts</label><button class="btn btn-sm" onclick={clearFlood}>Clear flood filter</button>{/if}
                   <small>Source: FEMA National Flood Hazard Layer. Blank areas can have unknown coverage.</small>
@@ -388,7 +391,9 @@ h1 { font-size: 19px; font-weight: 650; }
 .jurisdiction-swatch { width: 1.2em; border-top: 2px dashed; }
 .road-key { color: #ff996b; }
 .flood-legend { display: grid; gap: 4px; width: fit-content; }
-.flood-legend i { display: inline-block; width: .8em; height: .8em; }
+.legend-item { justify-content: flex-start; gap: 6px; text-align: left; white-space: normal; }
+.legend-item[aria-pressed='true'] { background: var(--color-surface-700); box-shadow: inset 2px 0 var(--accent); }
+.flood-legend i { flex-shrink: 0; display: inline-block; width: .8em; height: .8em; }
 .selected-zoning { border-top: 1px solid var(--border); padding-top: 6px; }
 .selected-zoning li { margin-top: 4px; }
 .flood-details, .empty { overflow: auto; padding: 10px; }
