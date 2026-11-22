@@ -16,13 +16,26 @@ let mapTab = $state('filters');
 let draftFilters = $state(emptyFilterDraft());
 const selected = $derived(counties.find((county) => county.id === selectedId)!);
 const parcelView = $derived(detail !== 'region' && selected.status === 'configured');
-const filterCount = $derived(filterSelections(draftFilters).length);
 let viewport = $state<Viewport>();
 const layerQuery = $derived(parcelView && viewport ? mapLayerQuery(viewport) : '');
 let parcels = $state<ParcelShape[]>([]);
 let parcelError = $state('');
 let parcelID = $state('');
 let floodOn = $state(false);
+type FloodCategory = keyof typeof floodStyles;
+let floodCategory = $state<FloodCategory | ''>('');
+let floodContact = $state<'area' | 'intersects'>('area');
+const filterCount = $derived(filterSelections(draftFilters).length + (floodCategory ? 1 : 0));
+let matches = $state<{ items: { id: string; parcel_number: string | null; address: string | null }[]; count: number; next_cursor?: string; source_stamp: string }>();
+let matchError = $state('');
+let matchCursor = $state('');
+let cursorHistory = $state<string[]>([]);
+function resetMatches() { matchCursor = ''; cursorHistory = []; }
+let mapCount = $state<number | undefined>();
+let mapStamp = $state<string>();
+const floodParams = $derived(floodCategory ? new URLSearchParams({ flood_category: floodCategory, flood_contact: floodContact }) : undefined);
+function clearFlood() { floodCategory = ''; floodContact = 'area'; resetMatches(); }
+
 let flood = $state<FloodMap>();
 let floodError = $state('');
 let zoningOn = $state(false);
@@ -90,6 +103,9 @@ $effect(() => {
 let evidence = $state<FloodDetail>();
 let detailError = $state('');
 let parcelGeometry = $derived(parcelShapes(parcels));
+const floodGeometry = $derived(!floodOn || !flood ? emptyShapes : floodCategory
+  ? { ...flood, features: flood.features.filter((feature) => feature.properties?.category === floodCategory) }
+  : flood);
 const acreage = (value: number) => value > 0 && value < 0.01 ? '<0.01' : value.toFixed(2);
 const releaseDate = (value: string) => value.slice(0, 10);
 
@@ -101,12 +117,15 @@ function inspectParcel(id: string) {
 $effect(() => {
   const view = viewport;
   parcels = [];
+  mapCount = undefined;
+  mapStamp = undefined;
   parcelError = '';
-  if (!parcelView || !view || view.zoom < 13) return;
+  if (!parcelView || !view || (view.zoom < 13 && !floodParams)) return;
   const task = new AbortController();
   const params = viewportQuery(view);
-  readMapData<{ features: ParcelShape[] }>(`/api/v1/parcels/map?${params}`, task.signal).then((data) => {
-    if (!task.signal.aborted) parcels = data.features;
+  if (floodParams) for (const [key, value] of floodParams) params.set(key, value);
+  readMapData<{ mode: string; features?: ParcelShape[]; match_count: number; source_stamp: string }>(`/api/v1/parcels/map?${params}`, task.signal).then((data) => {
+    if (!task.signal.aborted) { parcels = data.features ?? []; mapCount = data.match_count; mapStamp = data.source_stamp; }
   }).catch((error: Error) => {
     if (!task.signal.aborted) parcelError = error.message === '413' ? 'Zoom in to see individual parcels.' : 'Parcel boundaries are unavailable.';
   });
@@ -120,7 +139,7 @@ $effect(() => {
     return;
   }
   const task = new AbortController();
-  readMapLayer<FloodMap>(`/api/v1/flood/map?${layerQuery}`, task.signal).then((data) => {
+  readMapLayer<FloodMap>(`/api/v1/flood/map?${layerQuery}${floodCategory ? `&flood_category=${floodCategory}` : ''}`, task.signal).then((data) => {
     if (!task.signal.aborted) flood = data;
   }).catch((error: Error) => {
     if (task.signal.aborted) return;
@@ -130,6 +149,20 @@ $effect(() => {
   return () => task.abort();
 });
 
+$effect(() => {
+ const params = floodParams;
+ const cursor = matchCursor;
+ matches = undefined;
+ matchError = '';
+ if (!parcelView || !params) return;
+ const task = new AbortController();
+ const query = new URLSearchParams(params);
+ if (cursor) query.set('cursor', cursor);
+ readMapData<NonNullable<typeof matches>>(`/api/v1/parcels?${query}`, task.signal).then(data => {
+  if (!task.signal.aborted) matches = data;
+ }).catch(() => { if (!task.signal.aborted) matchError = 'Matching parcels are unavailable.'; });
+ return () => task.abort();
+});
 $effect(() => {
   const id = parcelID;
   const currentRelease = flood?.release?.id;
@@ -177,7 +210,7 @@ onMount(() => {
 <div class="app">
   <header><a class="brand" href="/">▧ <span>landman</span></a></header>
   <main aria-label="Parcel discovery">
-    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={flood ?? emptyShapes} zoning={overlays.zoning ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
+    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={overlays.zoning ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if !parcelView && filterCount > 0 && selected.status === 'configured'}{@render countySummary()}{/if}
     {#if selected.status === 'locked'}<p class="locked-notice" role="status">{selected.name} County is locked. Parcel discovery is not available.</p>{/if}
     {#if parcelView}
@@ -197,6 +230,12 @@ onMount(() => {
           </Tabs.List>
           <Tabs.Content class="map-tab-content" value="filters">
             <FilterPanel county={selected.name} bind:filters={draftFilters} />
+<div class="flood-legend" aria-label="Flood parcel filter"><strong>FEMA flood parcel filter</strong>
+<select class="select" aria-label="Flood category" bind:value={floodCategory} onchange={() => { resetMatches(); if (floodCategory) floodOn = true; }}>
+<option value="">Any category (no flood filter)</option>
+{#each Object.entries(floodStyles) as [key, style]}<option value={key}>{style.label}</option>{/each}</select>
+{#if floodCategory}<label class="check"><input type="checkbox" class="checkbox" checked={floodContact === 'intersects'} onchange={(event) => { floodContact = event.currentTarget.checked ? 'intersects' : 'area'; resetMatches(); }} />Include boundary-only contacts</label><button class="btn btn-sm" onclick={clearFlood}>Clear flood filter</button>{/if}
+</div>
           </Tabs.Content>
           <Tabs.Content class="map-tab-content layer-tab" value="layers">
             <div class="map-layers" role="group" aria-label="Map layers">
@@ -207,9 +246,10 @@ onMount(() => {
             <div class="layer-legends">
               {#if floodOn}
                 <div class="flood-legend">
-                  {#each Object.values(floodStyles) as style}
-                    <span><i style:background-color={style.color} aria-hidden="true"></i> {style.label}</span>
+                  {#each Object.entries(floodStyles) as [key, style]}
+                    <span><i style:background-color={style.color} aria-hidden="true"></i> {style.label} <button class="btn btn-sm" aria-label={`Filter parcels by ${style.label}`} aria-pressed={floodCategory === key} onclick={() => { floodCategory = key as FloodCategory; floodOn = true; resetMatches(); }}>{floodCategory === key ? 'Selected' : 'Filter'}</button></span>
                   {/each}
+                  {#if floodCategory}<label class="check"><input class="checkbox" type="checkbox" checked={floodContact === 'intersects'} onchange={(event) => { floodContact = event.currentTarget.checked ? 'intersects' : 'area'; resetMatches(); }} />Include boundary-only contacts</label><button class="btn btn-sm" onclick={clearFlood}>Clear flood filter</button>{/if}
                   <small>Source: FEMA National Flood Hazard Layer. Blank areas can have unknown coverage.</small>
                   {#if flood?.overview && flood.release}<small>Overview: simplified flood boundaries.</small>{/if}
                   {#if floodError}<p role="status">{floodError}</p>{:else if flood?.release}<small>Archive issue date: {releaseDate(flood.release.issued_at)}</small>{:else if flood}<p role="status">No FEMA release is stored.</p>{/if}
@@ -298,14 +338,14 @@ onMount(() => {
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
             <div class="results-heading">
-              <h1>Parcel results unavailable</h1>
-              <p>{selected.name} County · Filter selections do not run a search.</p>
+              <h1>{floodCategory ? 'Matching parcels' : 'Visible parcels'}</h1>
+              <p>{#if floodCategory}{selected.name} County · {mapStamp && matches && mapStamp !== matches.source_stamp ? 'Data changed. Refresh map to compare counts.' : `${matches?.count ?? '…'} matches`}{#if mapCount && (!matches || !mapStamp || mapStamp === matches.source_stamp) !== undefined} · {mapCount} in map view{/if}{:else}{selected.name} County · Select a parcel to inspect flood evidence.{/if}</p>
               <label class="list-mode">Show<select class="select field-sm" disabled><option>All county matches</option><option>Matches in map view</option></select></label>
             </div>
-            <div class="empty"><p>{parcelError || (parcels.length ? 'Select a visible parcel for flood evidence.' : 'Zoom in to see parcel boundaries.')}</p>
-              {#if parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{/if}
+            <div class="empty"><p>{matchError || parcelError || (floodCategory ? (!matches ? 'Loading matches…' : matches.count ? 'County matches' : 'No matching parcels.') : parcels.length ? 'Select a visible parcel for flood evidence.' : 'Zoom in to see parcel boundaries.')}</p>
+              {#if floodCategory && matches?.items.length}<ul aria-label="Matching parcels">{#each matches.items as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{:else if !floodCategory && parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}</button></li>{/each}</ul>{/if}
             </div>
-            <nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled>Previous</button><span>Page 1 of 1</span><button class="btn btn-sm" disabled>Next</button></nav>
+            <nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled={!cursorHistory.length} onclick={() => { matchCursor = cursorHistory.at(-1) ?? ''; cursorHistory = cursorHistory.slice(0, -1); }}>Previous</button><span>Page 1 of 1</span><button class="btn btn-sm" disabled={!matches?.next_cursor} onclick={() => { cursorHistory = [...cursorHistory, matchCursor]; matchCursor = matches?.next_cursor ?? ''; }}>Next</button></nav>
           </section>
           {/if}
         </div>

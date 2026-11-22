@@ -89,6 +89,70 @@ func TestFloodMapAndParcelEvidence(t *testing.T) {
 	if ratio := detail.Zones[0].Acres / a.Parcel; ratio < .59 || ratio > .61 {
 		t.Fatalf("duplicate zone counted or wrong area: %f", ratio)
 	}
+	// Both Zone X subtypes remain distinct; boundary-only contact requires opt-in.
+	for _, stmt := range []string{
+		`INSERT INTO parcels(id,county_id,county_code,source_name,source_parcel_id,shape) VALUES ('a0000000-0000-4000-8000-000000000003','union','union','union_county_gis','neighbor',(SELECT ST_Translate(shape,ST_XMax(shape)-ST_XMin(shape),0) FROM parcels WHERE source_parcel_id='fixture'))`,
+		`INSERT INTO fema_zones SELECT '` + release + `','touch','AE','','T',ST_Multi(ST_Transform(shape,4269)),false,0 FROM parcels WHERE source_parcel_id='fixture'`,
+		`INSERT INTO fema_zones VALUES ('` + release + `','moderate','X','0.2 PCT ANNUAL CHANCE FLOOD HAZARD','F',ST_Multi(ST_MakeEnvelope(-80.585,34.991,-80.583,34.999,4269)),false,0)`,
+		`INSERT INTO fema_zones VALUES ('` + release + `','minimal','X','AREA OF MINIMAL FLOOD HAZARD','F',ST_Multi(ST_MakeEnvelope(-80.583,34.991,-80.581,34.999,4269)),false,0)`,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var list struct {
+		Count       int
+		Items       []Parcel
+		SourceStamp string `json:"source_stamp"`
+	}
+	var mapResult struct {
+		MatchCount  int64  `json:"match_count"`
+		SourceStamp string `json:"source_stamp"`
+		Features    []Feature
+	}
+	for _, check := range []struct {
+		category string
+		count    int
+	}{{"floodway", 1}, {"sfha", 1}, {"moderate", 1}, {"minimal", 1}, {"unclassified", 0}} {
+		path := "/api/v1/parcels?flood_category=" + check.category
+		request(path, &list)
+		if list.Count != check.count || len(list.Items) != check.count {
+			t.Fatalf("%s list: %+v", check.category, list)
+		}
+		request("/api/v1/parcels/map?bbox=-80.61,34.98,-80.575,35.01&zoom=15&flood_category="+check.category, &mapResult)
+		if mapResult.MatchCount != int64(check.count) || len(mapResult.Features) != check.count || mapResult.SourceStamp != list.SourceStamp {
+			t.Fatalf("%s map/list disagree: %+v %+v", check.category, mapResult, list)
+		}
+		var grid struct {
+			MatchCount  int64  `json:"match_count"`
+			SourceStamp string `json:"source_stamp"`
+		}
+		request("/api/v1/parcels/map?bbox=-80.61,34.98,-80.575,35.01&zoom=10&flood_category="+check.category, &grid)
+		if grid.MatchCount != int64(check.count) || grid.SourceStamp != list.SourceStamp {
+			t.Fatalf("%s county grid/list disagree: %d %d", check.category, grid.MatchCount, list.Count)
+		}
+		request("/api/v1/flood/map?bbox=-80.61,34.98,-80.575,35.01&zoom=15&flood_category="+check.category, &layer)
+		for _, feature := range layer.Features {
+			if feature.Properties.Category != check.category {
+				t.Fatalf("wrong category: %+v", feature.Properties)
+			}
+		}
+	}
+	request("/api/v1/parcels?flood_category=sfha&flood_contact=intersects", &list)
+	if list.Count != 2 {
+		t.Fatalf("boundary contact missing: %+v", list)
+	}
+	request("/api/v1/parcels/map?bbox=-80.61,34.98,-80.575,35.01&zoom=15&flood_category=sfha&flood_contact=intersects", &mapResult)
+	if mapResult.MatchCount != 2 || len(mapResult.Features) != 2 {
+		t.Fatalf("boundary map mismatch: %+v", mapResult)
+	}
+	for _, path := range []string{"/api/v1/parcels?flood_category=bogus", "/api/v1/parcels?flood_contact=area", "/api/v1/parcels/map?bbox=-80.61,34.98,-80.575,35.01&zoom=15&flood_category=sfha&flood_contact=bad", "/api/v1/flood/map?overview=true&flood_category=bogus"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != 400 {
+			t.Fatalf("%s: %d", path, w.Code)
+		}
+	}
 	if _, err := pool.Exec(ctx, `INSERT INTO fema_zones SELECT $1,'000-'||seq,'AE','','T',
  ST_Multi(ST_MakeEnvelope(CASE WHEN seq=1 THEN ST_XMin(viewport)-0.01 ELSE -80.6 END,34.99,
  CASE WHEN seq=1 THEN ST_XMin(viewport) ELSE -80.59 END,35,4269)),false,0
@@ -102,11 +166,18 @@ func TestFloodMapAndParcelEvidence(t *testing.T) {
 		t.Fatalf("over-limit flood request: %d", w.Code)
 	}
 	request("/api/v1/flood/map?overview=true", &layer)
-	if !layer.Overview || layer.Release.ID != release || len(layer.Features) != 2 || layer.Features[1].Properties.Subtype != "FLOODWAY" {
-		t.Fatalf("unexpected flood overview: %+v", layer)
+	if !layer.Overview || layer.Release.ID != release || len(layer.Features) != 4 || layer.Features[3].Properties.Subtype != "FLOODWAY" {
+		t.Fatalf("unexpected flood overview: %d features", len(layer.Features))
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM fema_release_head WHERE study_id='37179C'`); err != nil {
 		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/parcels?flood_category=sfha", "/api/v1/parcels/map?bbox=-80.61,34.98,-80.575,35.01&zoom=15&flood_category=sfha"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != 503 {
+			t.Fatalf("missing release must be unavailable: %s %d", path, w.Code)
+		}
 	}
 	var missing struct{ Status string }
 	request("/api/v1/parcels/"+parcel+"/flood", &missing)

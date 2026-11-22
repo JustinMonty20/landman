@@ -102,12 +102,7 @@ onMount(() => {
       map.addLayer({ id: 'jurisdiction-outline', type: 'line', source: 'zoning', filter: ['==', ['get', 'kind'], 'jurisdiction'], paint: { 'line-color': jurisdictionColor, 'line-width': 2, 'line-dasharray': [3, 2] } });
       map.addSource('flood-zones', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'flood-fill', type: 'fill', source: 'flood-zones', paint: {
-        'fill-color': ['case',
-          ['==', ['get', 'subtype'], 'FLOODWAY'], floodStyles.floodway.color,
-          ['==', ['get', 'sfha'], 'T'], floodStyles.sfha.color,
-          ['all', ['==', ['get', 'code'], 'X'], ['==', ['get', 'subtype'], '0.2 PCT ANNUAL CHANCE FLOOD HAZARD']], floodStyles.moderate.color,
-          ['all', ['==', ['get', 'code'], 'X'], ['==', ['get', 'subtype'], 'AREA OF MINIMAL FLOOD HAZARD']], floodStyles.minimal.color,
-          floodStyles.unclassified.color], 'fill-opacity': 0.42
+        'fill-color': ['match', ['get', 'category'], 'floodway', floodStyles.floodway.color, 'sfha', floodStyles.sfha.color, 'moderate', floodStyles.moderate.color, 'minimal', floodStyles.minimal.color, 'unclassified', floodStyles.unclassified.color, floodStyles.unclassified.color], 'fill-opacity': 0.42
       } });
       map.addSource('roads', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'roads', type: 'line', source: 'roads', paint: { 'line-color': '#ff996b', 'line-width': 2 } });

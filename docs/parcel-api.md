@@ -24,6 +24,8 @@ See [the measurement procedure](parcel-api-benchmark.md) and [the measured resul
 
 ## Union County map overlays
 
+See the [flood parcel API reference](flood-parcel-api.md) for flood category filters and match rules.
+
 - `GET /api/v1/qualification/map?layer=zoning&overview=true` returns larger zoning areas and simplified jurisdiction boundaries from the published zoning generation.
 - `GET /api/v1/qualification/map?layer=roads&overview=true` returns simplified centerlines for roads with a source class of Primary, Highway, or Expressway from the published roads generation.
 - `GET /api/v1/flood/map?overview=true` returns simplified polygons grouped by zone code, subtype, and special flood hazard designation from the published FEMA release.

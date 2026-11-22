@@ -10,6 +10,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// FEMA classification is authoritative for both map styling and parcel matching.
+const floodClassSQL = `CASE WHEN z.zone_subtype='FLOODWAY' THEN 'floodway'
+ WHEN z.sfha_flag='T' THEN 'sfha'
+ WHEN z.zone_code='X' AND z.zone_subtype='0.2 PCT ANNUAL CHANCE FLOOD HAZARD' THEN 'moderate'
+ WHEN z.zone_code='X' AND z.zone_subtype='AREA OF MINIMAL FLOOD HAZARD' THEN 'minimal'
+ ELSE 'unclassified' END`
+
 type floodRelease struct {
 	ID         string    `json:"id"`
 	IssuedAt   time.Time `json:"issued_at"`
@@ -32,17 +39,27 @@ type floodFeature struct {
 }
 
 type floodZone struct {
-	Code    string  `json:"code"`
-	Subtype string  `json:"subtype"`
-	SFHA    string  `json:"sfha"`
-	Acres   float64 `json:"acres,omitempty"`
+	Category string  `json:"category"`
+	Code     string  `json:"code"`
+	Subtype  string  `json:"subtype"`
+	SFHA     string  `json:"sfha"`
+	Acres    float64 `json:"acres,omitempty"`
 }
 
 func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if err := parse(q, "bbox", "zoom", "overview"); err != nil {
+	if err := parse(q, "bbox", "zoom", "overview", "flood_category"); err != nil {
 		bad(w, err)
 		return
+	}
+	category := q.Get("flood_category")
+	if _, ok := q["flood_category"]; ok {
+		switch category {
+		case "floodway", "sfha", "moderate", "minimal", "unclassified":
+		default:
+			bad(w, errors.New("invalid flood category"))
+			return
+		}
 	}
 	overview, err := parseOverlayOverview(q)
 	if err != nil {
@@ -73,7 +90,7 @@ func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
 	}
 	features := []floodFeature{}
 	if release != nil {
-		rows, err := tx.Query(ctx, query, append([]any{release.ID}, args...)...)
+		rows, err := tx.Query(ctx, query, append(append([]any{release.ID}, args...), category)...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -85,12 +102,14 @@ func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			item := floodFeature{Type: "Feature"}
-			if err := rows.Scan(&item.Properties.Code, &item.Properties.Subtype, &item.Properties.SFHA, &item.Geometry); err != nil {
+			if err := rows.Scan(&item.Properties.Code, &item.Properties.Subtype, &item.Properties.SFHA, &item.Properties.Category, &item.Geometry); err != nil {
 				unavailable(w)
 				return
 			}
 			if item.Geometry != nil {
-				features = append(features, item)
+				if category == "" || item.Properties.Category == category {
+					features = append(features, item)
+				}
 			}
 		}
 		if rows.Err() != nil {
@@ -101,16 +120,16 @@ func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
 	respond(w, map[string]any{"type": "FeatureCollection", "features": features, "release": release, "overview": overview})
 }
 
-const floodOverview = `SELECT zone_code,zone_subtype,sfha_flag,
+const floodOverview = `SELECT zone_code,zone_subtype,sfha_flag,` + floodClassSQL + `,
  ST_AsGeoJSON(ST_Transform(ST_Collect(ST_SimplifyPreserveTopology(shape,0.0008)),4326),7)::jsonb
- FROM fema_zones WHERE capture_id=$1 GROUP BY zone_code,zone_subtype,sfha_flag
+ FROM fema_zones z WHERE capture_id=$1 AND ($2::text='' OR ` + floodClassSQL + `=$2) GROUP BY zone_code,zone_subtype,sfha_flag
  ORDER BY (zone_subtype='FLOODWAY'),(sfha_flag='T'),zone_code,zone_subtype,sfha_flag`
 
 const floodViewport = `WITH bounds AS (SELECT ST_Transform(ST_MakeEnvelope($2,$3,$4,$5,4326),4269) AS shape), hits AS MATERIALIZED (
  SELECT z.zone_code,z.zone_subtype,z.sfha_flag,ST_CollectionExtract(ST_Intersection(z.shape,b.shape),3) AS shape
- FROM fema_zones z CROSS JOIN bounds b WHERE z.capture_id=$1 AND z.shape && b.shape AND ST_Intersects(z.shape,b.shape)
+ FROM fema_zones z CROSS JOIN bounds b WHERE z.capture_id=$1 AND ($7::text='' OR ` + floodClassSQL + `=$7) AND z.shape && b.shape AND ST_Intersects(z.shape,b.shape)
  ORDER BY z.source_id LIMIT 501
- ) SELECT zone_code,zone_subtype,sfha_flag,CASE WHEN NOT ST_IsEmpty(shape) THEN ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape, GREATEST(0.000001,0.0005 / power(2.0,$6::int-9))),4326),7)::jsonb END FROM hits`
+ ) SELECT zone_code,zone_subtype,sfha_flag,` + floodClassSQL + `,CASE WHEN NOT ST_IsEmpty(shape) THEN ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape, GREATEST(0.000001,0.0005 / power(2.0,$6::int-9))),4326),7)::jsonb END FROM hits z`
 
 func (h *Handler) floodDetail(w http.ResponseWriter, r *http.Request, id string) {
 	ctx := r.Context()
@@ -198,7 +217,7 @@ func readFloodZones(ctx context.Context, tx pgx.Tx, id, release string) ([]flood
 	rows, err := tx.Query(ctx, `WITH parcel AS MATERIALIZED (SELECT ST_Transform(shape,4269) AS g FROM parcels WHERE id=$1), pieces AS MATERIALIZED (
  SELECT z.zone_code,z.zone_subtype,z.sfha_flag,ST_CollectionExtract(ST_Intersection(z.shape,p.g),3) AS shape
  FROM fema_zones z CROSS JOIN parcel p WHERE z.capture_id=$2 AND z.shape && p.g AND ST_Intersects(z.shape,p.g)
- ) SELECT zone_code,zone_subtype,sfha_flag,ST_Area(ST_Transform(ST_Union(shape),2264))/43560.0 FROM pieces WHERE ST_Area(shape)>0 GROUP BY zone_code,zone_subtype,sfha_flag ORDER BY zone_code,zone_subtype,sfha_flag`, id, release)
+ ) SELECT zone_code,zone_subtype,sfha_flag,`+floodClassSQL+`,ST_Area(ST_Transform(ST_Union(shape),2264))/43560.0 FROM pieces z WHERE ST_Area(shape)>0 GROUP BY zone_code,zone_subtype,sfha_flag ORDER BY zone_code,zone_subtype,sfha_flag`, id, release)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +225,7 @@ func readFloodZones(ctx context.Context, tx pgx.Tx, id, release string) ([]flood
 	result := []floodZone{}
 	for rows.Next() {
 		var z floodZone
-		if err := rows.Scan(&z.Code, &z.Subtype, &z.SFHA, &z.Acres); err != nil {
+		if err := rows.Scan(&z.Code, &z.Subtype, &z.SFHA, &z.Category, &z.Acres); err != nil {
 			return nil, err
 		}
 		result = append(result, z)

@@ -27,6 +27,7 @@ const countyID = "union"
 const parcelSource = "union_county_gis"
 const maxBytes = 1 << 20
 
+var predicateParameter = regexp.MustCompile(`\$([0-9]+)`)
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 type Bounds struct{ West, South, East, North float64 }
@@ -39,6 +40,8 @@ type Filters struct {
 	EntityNameIndicator    *string
 	CorporateNameIndicator *string
 	Bounds                 *Bounds
+	FloodCategory          *string
+	FloodContact           string
 	PageSize               int
 	After                  string
 }
@@ -112,9 +115,9 @@ func parseFilters(q url.Values) (Filters, error) {
 
 func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	f := Filters{PageSize: 50}
-	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor"}
+	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor", "flood_category", "flood_contact"}
 	if mapQuery {
-		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom"}
+		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom", "flood_category", "flood_contact"}
 	}
 	if err := parse(q, allowed...); err != nil {
 		return f, err
@@ -170,6 +173,22 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 			*item.target = &v[0]
 		}
 	}
+	if raw, ok := q["flood_category"]; ok {
+		switch raw[0] {
+		case "floodway", "sfha", "moderate", "minimal", "unclassified":
+			f.FloodCategory = &raw[0]
+		default:
+			return f, errors.New("invalid flood category")
+		}
+	}
+	if raw, ok := q["flood_contact"]; ok {
+		if f.FloodCategory == nil || (raw[0] != "area" && raw[0] != "intersects") {
+			return f, errors.New("invalid flood contact")
+		}
+		f.FloodContact = raw[0]
+	} else if f.FloodCategory != nil {
+		f.FloodContact = "area"
+	}
 	if raw, ok := q["bbox"]; ok {
 		var e error
 		f.Bounds, e = parseBounds(raw[0])
@@ -193,7 +212,7 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	return f, nil
 }
 func (f Filters) active() bool {
-	return f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil
+	return f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil || f.FloodCategory != nil
 }
 func (f Filters) digest() string {
 	copy := f
@@ -241,7 +260,7 @@ func (f Filters) args() []any {
 		a[8] = f.Bounds.East
 		a[9] = f.Bounds.North
 	}
-	a = append(a, optString(f.OutOfStateMailing), optString(f.EntityNameIndicator), optString(f.CorporateNameIndicator))
+	a = append(a, optString(f.OutOfStateMailing), optString(f.EntityNameIndicator), optString(f.CorporateNameIndicator), optString(f.FloodCategory), f.FloodContact)
 	return a
 }
 
@@ -253,6 +272,12 @@ const predicate = `p.county_id=$1 AND p.source_name=$2
  AND ($11::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.out_of_state_mailing=$11))
 AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.entity_name_indicator=$12))
 AND ($13::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.corporate_name_indicator=$13))
+AND CASE WHEN $14::text IS NULL THEN true WHEN parcel_boundary_usable(p.shape) THEN EXISTS (
+ SELECT 1 FROM fema_release_head h JOIN fema_zones z ON z.capture_id=h.capture_id
+ WHERE h.study_id='37179C' AND ` + floodClassSQL + `=$14 AND z.shape && ST_Transform(p.shape,4269)
+ AND ST_Intersects(z.shape,ST_Transform(p.shape,4269))
+ AND ($15::text='intersects' OR ST_Relate(z.shape,ST_Transform(p.shape,4269),'2********'))
+) ELSE false END
 AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857)) END))`
 const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,p.likely_vacant,p.updated_at`
 
@@ -356,11 +381,15 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	} else if err != nil {
 		return "", err
 	}
+	var floodRevision string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT capture_id::text FROM fema_release_head WHERE study_id='37179C'),'')`).Scan(&floodRevision); err != nil {
+		return "", err
+	}
 	var labelRevision int64
 	if err := tx.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&labelRevision); err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision)))
+	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision, floodRevision)))
 	return hex.EncodeToString(h[:]), nil
 }
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -375,6 +404,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
+	if f.FloodCategory != nil {
+		release, err := activeFlood(r.Context(), tx)
+		if err != nil || release == nil {
+			unavailable(w)
+			return
+		}
+	}
 	s, e := stamp(r.Context(), tx)
 	if e != nil {
 		unavailable(w)
@@ -399,7 +435,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a := append(f.args(), after, f.PageSize+1)
-		rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$14::uuid ORDER BY p.id LIMIT $15`, a...)
+		rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$16::uuid ORDER BY p.id LIMIT $17`, a...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -501,42 +537,20 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 	respond(w, map[string]any{"items": items})
 }
 func (f Filters) mapMatch(args *[]any) string {
-	parts := []string{}
-	add := func(value any, column, op string) {
-		*args = append(*args, value)
-		parts = append(parts, fmt.Sprintf("%s %s $%d", column, op, len(*args)))
-	}
-	if f.AcresMin != nil {
-		add(*f.AcresMin, "p.mapped_acres", ">=")
-	}
-	if f.AcresMax != nil {
-		add(*f.AcresMax, "p.mapped_acres", "<=")
-	}
-	if f.LikelyVacant != nil {
-		add(*f.LikelyVacant, "p.likely_vacant", "=")
-	}
-	if f.Delinquent != nil {
-		*args = append(*args, *f.Delinquent)
-		parts = append(parts, fmt.Sprintf(`EXISTS (SELECT 1 FROM tax_delinquent_balances d JOIN tax_file_imports i ON i.active AND i.county_id=d.county_id AND i.source_name=d.source_name WHERE d.parcel_id=p.id AND d.balance_due>0) = $%d`, len(*args)))
-	}
-	for _, item := range []struct {
-		status *string
-		column string
-	}{{f.OutOfStateMailing, "out_of_state_mailing"}, {f.EntityNameIndicator, "entity_name_indicator"}, {f.CorporateNameIndicator, "corporate_name_indicator"}} {
-		if item.status != nil {
-			*args = append(*args, *item.status)
-			parts = append(parts, fmt.Sprintf("EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.%s=$%d)", item.column, len(*args)))
-		}
-	}
-	if len(parts) == 0 {
+	if !f.active() {
 		return "false"
 	}
-	return "COALESCE((" + strings.Join(parts, " AND ") + "), false)"
+	*args = append(*args, f.args()...)
+	// The shared predicate uses parameters 1..15; map queries reserve 1..6 for the viewport.
+	// Renumber its placeholders to the appended argument block.
+	return "(" + predicateParameter.ReplaceAllStringFunc(predicate, func(token string) string {
+		n, _ := strconv.Atoi(token[1:])
+		return fmt.Sprintf("$%d", n+len(*args)-15)
+	}) + ")"
 }
-
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator"); e != nil {
+	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "flood_category", "flood_contact"); e != nil {
 		bad(w, e)
 		return
 	}
@@ -560,6 +574,13 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
+	if f.FloodCategory != nil {
+		release, err := activeFlood(r.Context(), tx)
+		if err != nil || release == nil {
+			unavailable(w)
+			return
+		}
+	}
 	s, e := stamp(r.Context(), tx)
 	if e != nil {
 		unavailable(w)
@@ -619,13 +640,17 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	if total > 200 {
+	args := append(append([]any(nil), contextArgs...), z)
+	match := f.mapMatch(&args)
+	where := contextWhere
+	if f.FloodCategory != nil {
+		where += ` AND (` + match + `)`
+		match = `true`
+	} else if total > 200 {
 		http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 		return
 	}
-	args := append(append([]any(nil), contextArgs...), z)
-	match := f.mapMatch(&args)
-	rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$7::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+contextWhere+` ORDER BY p.id`, args...)
+	rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$7::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT 201`, args...)
 	if err != nil {
 		unavailable(w)
 		return
@@ -642,6 +667,11 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		item.Geometry = geometry
 		if item.Match {
 			matches++
+		}
+		if len(features) == 200 {
+			rows.Close()
+			http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
+			return
 		}
 		features = append(features, item)
 	}
