@@ -60,7 +60,7 @@ The boundaries are simplified for display. Do not use them for legal boundaries 
 
 ## Browser debugging and profiling
 
-Use the [Landman UI CDP skill](../.agents/skills/landman-ui-cdp/SKILL.md) to inspect browser errors and profile Svelte UI actions in a local Chromium session.
+Use the [Landman UI CDP skill](../.agents/skills/landman-ui-cdp/SKILL.md) to inspect browser errors and profile Svelte UI actions in a local Chromium session. Use the [Landman UI evidence skill](../.agents/skills/landman-ui-evidence/SKILL.md) for fixture-based QA screenshots and action recordings.
 
 ## Checks
 

@@ -1,0 +1,1 @@
+- [Unrelated bug or code smell] `ui/tests/filters.spec.ts` and `ui/tests/map-layers.spec.ts` have malformed route callback syntax in current uncommitted changes. This task only adds a QA evidence skill. Do not change the test files without operator direction.
