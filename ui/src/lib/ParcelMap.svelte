@@ -12,9 +12,10 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { counties, countyBounds, countyGeometry, mapDetail, type CountyId, type MapDetail } from './counties';
 
-let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, onzoning, parcels, flood, zoning, roads, parcelID }: {
+let { selected, focusRequest, parcelFocus, onselect, ondetail, onviewport, onparcel, onzoning, parcels, flood, zoning, roads, parcelID }: {
   selected: CountyId;
   focusRequest: number;
+  parcelFocus?: { point: [number, number] };
   onselect: (id: CountyId) => void;
   ondetail: (detail: MapDetail) => void;
   onviewport: (viewport: Viewport) => void;
@@ -166,6 +167,10 @@ $effect(() => {
   if (!ready || focusRequest === lastFocusRequest) return;
   lastFocusRequest = focusRequest;
   locateCounty();
+});
+$effect(() => {
+  if (!ready || !map || !parcelFocus) return;
+  map.jumpTo({ center: parcelFocus.point, zoom: Math.max(16, map.getZoom()) });
 });
 </script>
 <div class="map-frame">

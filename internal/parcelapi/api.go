@@ -693,7 +693,16 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		match = `false AND (` + match + `)`
 	}
 	var total, matches int64
-	if z < 13 {
+	outlineZoom, outlineLimit := 13, 200
+	if f.Browse {
+		outlineLimit = 4000
+		filters := f
+		filters.Browse = false
+		if filters.active() {
+			outlineZoom = 12
+		}
+	}
+	if z < outlineZoom {
 		type cell struct {
 			X       int   `json:"x"`
 			Y       int   `json:"y"`
@@ -741,7 +750,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	args := append(f.args(), z)
+	args := append(f.args(), z, outlineLimit+1)
 	where := mapWhere
 	if f.active() && (f.spatialFilter() || f.Foreclosure != nil || f.SoilType != nil || f.SoilRating != nil || f.Browse) {
 		where += ` AND (` + match + `)`
@@ -750,7 +759,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 		return
 	}
-	rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$21::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT 201`, args...)
+	rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$21::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT $22`, args...)
 	if err != nil {
 		unavailable(w)
 		return
@@ -768,7 +777,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		if item.Match {
 			matches++
 		}
-		if len(features) == 200 {
+		if len(features) == outlineLimit {
 			rows.Close()
 			http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 			return
@@ -783,6 +792,19 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	}
 	if e = tx.Commit(r.Context()); e != nil {
 		unavailable(w)
+		return
+	}
+	if f.Browse {
+		type outline struct {
+			ID       string          `json:"id"`
+			Geometry json.RawMessage `json:"geometry"`
+			Match    bool            `json:"match"`
+		}
+		outlines := make([]outline, len(features))
+		for i, feature := range features {
+			outlines[i] = outline{feature.ID, feature.Geometry, feature.Match}
+		}
+		respond(w, map[string]any{"mode": "features", "features": outlines, "context_count": total, "match_count": matches, "source_stamp": s})
 		return
 	}
 	respond(w, map[string]any{"mode": "features", "features": features, "context_count": total, "match_count": matches, "source_stamp": s})

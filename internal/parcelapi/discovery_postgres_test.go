@@ -153,12 +153,19 @@ func TestDiscoveryPublishedFiltersPostGIS(t *testing.T) {
 				t.Fatalf("list %s missing %d: %v", query, i, got)
 			}
 		}
-		for _, zoom := range []int{8, 14} {
+		for _, zoom := range []int{8, 12, 14} {
 			code, m := get(fmt.Sprintf("/api/v1/parcels/map?bbox=%s&zoom=%d&%s", bbox, zoom, query))
 			if code != 200 || int(m["match_count"].(float64)) != len(want) {
 				t.Fatalf("map %d %s: %d %v", zoom, query, code, m)
 			}
-			if zoom == 14 {
+			expectOutlines := zoom == 14 || (zoom == 12 && strings.Contains(query, "discovery=browse&"))
+			if expectOutlines && m["mode"] != "features" {
+				t.Fatalf("expected outlines at zoom %d for %s: %v", zoom, query, m["mode"])
+			}
+			if !expectOutlines && m["mode"] != "grid" {
+				t.Fatalf("expected grid at zoom %d for %s: %v", zoom, query, m["mode"])
+			}
+			if expectOutlines {
 				seen := map[string]bool{}
 				for _, raw := range m["features"].([]any) {
 					f := raw.(map[string]any)
@@ -180,6 +187,7 @@ func TestDiscoveryPublishedFiltersPostGIS(t *testing.T) {
 	}
 	match("discovery=browse", 0, 1, 2, 3, 4, 5, 6, 7)
 	match("foreclosure=true", 0, 1)
+	match("discovery=browse&foreclosure=true", 0, 1)
 	match("foreclosure=false", 2, 3, 4, 5, 6, 7)
 	match("soil_type="+url.QueryEscape(stamp+"-active"), 0, 1, 2)
 	match("soil_type=" + url.QueryEscape(stamp+"-retired"))

@@ -13,7 +13,10 @@ test('default, combined and cleared county discovery', async ({ page }, info) =>
    const combined = url.searchParams.has('foreclosure');
    return route.fulfill({ json: { items: combined ? [{ id: '00000000-0000-0000-0000-000000000001', parcel_number: 'P-1', address: 'Fixture Road' }] : [{ id: '00000000-0000-0000-0000-000000000001', parcel_number: 'P-1', address: 'Fixture Road' }, { id: '00000000-0000-0000-0000-000000000002', parcel_number: 'P-2', address: 'Other Road' }], count: combined ? 1 : 2, source_stamp: 'fixture' } });
   }
-  if (url.pathname === '/api/v1/parcels/map') return route.fulfill({ json: { mode: 'grid', cells: [], match_count: url.searchParams.has('foreclosure') ? 1 : 2, context_count: 2, source_stamp: 'fixture' } });
+  if (url.pathname === '/api/v1/parcels/map') {
+   if (Number(url.searchParams.get('zoom')) >= 13) return route.fulfill({ status: 413 });
+   return route.fulfill({ json: { mode: 'grid', cells: [], match_count: url.searchParams.has('foreclosure') ? 1 : 2, context_count: 2, source_stamp: 'fixture' } });
+  }
   return route.abort();
  });
  await page.goto('/?county=37179');
@@ -33,4 +36,11 @@ test('default, combined and cleared county discovery', async ({ page }, info) =>
  await expect(panel).toContainText('2 matches');
  await expect(panel).toContainText('P-2');
  await page.screenshot({ path: info.outputPath('03-cleared.png'), fullPage: true });
+ const outlineLimit = panel.getByText('Too many parcels to draw. Zoom in or apply a filter.');
+ for (let n = 0; n < 6 && !(await outlineLimit.isVisible()); n++) {
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+ }
+ await expect(outlineLimit).toBeVisible();
+ await expect(panel).toContainText('2 in map view');
+ await page.screenshot({ path: info.outputPath('04-outline-limit.png'), fullPage: true });
 });

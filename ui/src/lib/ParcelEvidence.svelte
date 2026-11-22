@@ -1,8 +1,8 @@
 <script lang="ts">
 import { readMapData, type FloodDetail } from './flood';
-let { id, floodOn, zoningOn, roadsOn, releaseId }: { id: string; floodOn: boolean; zoningOn: boolean; roadsOn: boolean; releaseId?: string } = $props();
+let { id, floodOn, zoningOn, roadsOn, releaseId, onlocation }: { id: string; floodOn: boolean; zoningOn: boolean; roadsOn: boolean; releaseId?: string; onlocation: (id: string, point: [number, number] | null) => void } = $props();
 type Section<T> = { status: 'loading' } | { status: 'unavailable' } | { status: 'ready'; data: T };
-type Facts = { parcel: { parcel_number: string | null; address: string | null; mapped_acres: string | null; likely_vacant: boolean; updated_at: string }; source: string; source_parcel_id: string; owner_labels: null | Record<string, string | null>; sales: { date: string | null; amount: string | null; deed_book: string | null; deed_page: string | null }[] };
+type Facts = { location?: { type: 'Point'; coordinates: [number, number] } | null; parcel: { parcel_number: string | null; address: string | null; mapped_acres: string | null; likely_vacant: boolean; updated_at: string }; source: string; source_parcel_id: string; owner_labels: null | Record<string, string | null>; sales: { date: string | null; amount: string | null; deed_book: string | null; deed_page: string | null }[] };
 type Tax = { bills: Record<string, unknown>[]; delinquent_balances: Record<string, unknown>[]; reported_delinquent_total: string | null; pipeline: Record<string, unknown>[]; foreclosure_cases: Record<string, unknown>[]; note: string };
 type Soil = { available: boolean; reason?: string; evidence_level: string; total_acres: number | null; uses: { use: string; rated: { rating: string; area: { acres: number } }[]; unrated: { acres: number }; uncovered: { acres: number }; ambiguous: { acres: number }; next_step: string }[]; warnings: string[]; freshness: { stale: boolean; reasons: string[]; fresh_until: string; refresh_failed_at: string | null } };
 type Freshness = { stale: boolean; reasons: string[]; source_fetched_at: string | null; refresh_failed_at: string | null };
@@ -24,7 +24,11 @@ function load<T>(id: string, section: string, assign: (state: Section<T>) => voi
  }).catch(() => { if (!task.signal.aborted) assign({ status: 'unavailable' }); });
  return () => task.abort();
 }
-$effect(() => { if (!id) return; return load<Facts>(id, '', state => facts = state); });
+$effect(() => { if (!id) return; const selected = id; return load<Facts>(selected, '', state => {
+  facts = state;
+  if (state.status === 'ready') onlocation(selected, state.data.location?.coordinates ?? null);
+  if (state.status === 'unavailable') onlocation(selected, null);
+ }); });
 $effect(() => { if (!id) return; return load<Tax>(id, 'tax', state => tax = state); });
 $effect(() => { if (!id) return; return load<Vacancy>(id, 'vacancy', state => vacancy = state); });
 $effect(() => { if (!id) return; return load<Soil>(id, 'soil', state => soil = state); });

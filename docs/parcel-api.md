@@ -26,7 +26,7 @@ See [the measurement procedure](parcel-api-benchmark.md) and [the measured resul
 
 ## Browse and filter parcels
 
-Send `discovery=browse` to the list and map routes to include unfiltered parcels. With an active filter in browse mode, the close-zoom map returns only matching outlines. The list pages county matches unless you also send `bbox`. The map always requires `bbox` and `zoom`.
+Send `discovery=browse` to the list and map routes to include unfiltered parcels. With an active filter in browse mode, the close-zoom map returns only matching outlines. The list pages county matches unless you also send `bbox`. The map always requires `bbox` and `zoom`. In browse mode, unfiltered outlines start at zoom 13. Filtered outlines can start at zoom 12. Browse outlines contain `id`, `geometry`, and `match` only. The API returns 413 if the view exceeds 4,000 outlines or 1 MiB. Request zoom 11 with the same bounds and filters for a count grid.
 
 Use `foreclosure=true` to match a record in either published foreclosure feed. The result does not establish an open case or an upcoming sale. Use `soil_type` with a map-unit key from `GET /api/v1/parcels/soil-types`. That route returns up to 500 named units from the active soil set. Soil type matches positive-area overlap. Edge or point contact does not count.
 

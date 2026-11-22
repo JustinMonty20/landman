@@ -11,6 +11,9 @@ import '../style.css';
 let selectedId = $state<CountyId>('37179');
 let detail = $state<MapDetail>('region');
 let focusRequest = $state(0);
+let parcelFocus = $state<{ point: [number, number] }>();
+let pendingParcelFocus = '';
+let parcelFocusError = $state(false);
 let panelOpen = $state(true);
 let mapPanelOpen = $state(true);
 let mapTab = $state('filters');
@@ -158,9 +161,18 @@ const floodGeometry = $derived(!floodOn || !flood ? emptyShapes : floodCategory
 const acreage = (value: number) => value > 0 && value < 0.01 ? '<0.01' : value.toFixed(2);
 const releaseDate = (value: string) => value.slice(0, 10);
 
-function inspectParcel(id: string) {
+function inspectParcel(id: string, focus = false) {
+  pendingParcelFocus = focus ? id : '';
+  parcelFocusError = false;
   parcelID = id;
   panelOpen = true;
+}
+
+function focusParcelFromList(id: string, point: [number, number] | null) {
+  if (parcelID !== id || pendingParcelFocus !== id) return;
+  pendingParcelFocus = '';
+  if (point) parcelFocus = { point };
+  else parcelFocusError = true;
 }
 
 $effect(() => {
@@ -173,10 +185,18 @@ $effect(() => {
   const task = new AbortController();
   const params = viewportQuery(view);
   if (spatialParams) for (const [key, value] of spatialParams) params.set(key, value);
-  readMapData<{ mode: string; features?: ParcelShape[]; match_count: number; source_stamp: string }>(`/api/v1/parcels/map?${params}`, task.signal).then((data) => {
+  type ParcelMapData = { mode: string; features?: ParcelShape[]; match_count: number; source_stamp: string };
+  const load = () => readMapData<ParcelMapData>(`/api/v1/parcels/map?${params}`, task.signal);
+  load().catch(async (error: Error) => {
+    if (error.message !== '413' || task.signal.aborted) throw error;
+    params.set('zoom', '11');
+    const summary = await load();
+    if (!task.signal.aborted) parcelError = 'Too many parcels to draw. Zoom in or apply a filter.';
+    return summary;
+  }).then((data) => {
     if (!task.signal.aborted) { parcels = data.features ?? []; mapCount = data.match_count; mapStamp = data.source_stamp; }
-  }).catch((error: Error) => {
-    if (!task.signal.aborted) parcelError = error.message === '413' ? 'Zoom in to see individual parcels.' : 'Parcel boundaries are unavailable.';
+  }).catch(() => {
+    if (!task.signal.aborted) parcelError = 'Parcel boundaries are unavailable.';
   });
   return () => task.abort();
 });
@@ -240,7 +260,7 @@ onMount(() => {
 <div class="app">
   <header><a class="brand" href="/">▧ <span>landman</span></a></header>
   <main aria-label="Parcel discovery">
-    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={(jurisdiction ? jurisdictionMap : overlays.zoning) ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
+    <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} {parcelFocus} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={(jurisdiction ? jurisdictionMap : overlays.zoning) ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if !parcelView && filterCount > 0 && selected.status === 'configured'}{@render countySummary()}{/if}
     {#if selected.status === 'locked'}<p class="locked-notice" role="status">{selected.name} County is locked. Parcel discovery is not available.</p>{/if}
     {#if parcelView}
@@ -351,7 +371,7 @@ onMount(() => {
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <div class="flood-details" aria-live="polite"><ParcelEvidence id={parcelID} {floodOn} {zoningOn} {roadsOn} releaseId={flood?.release?.id} /></div>
+            <div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence onlocation={focusParcelFromList} id={parcelID} {floodOn} {zoningOn} {roadsOn} releaseId={flood?.release?.id} /></div>
           </section>
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
@@ -372,7 +392,7 @@ onMount(() => {
             <div class="empty">
               {#if parcelError}<p role="status">{parcelError}</p>{/if}
               <p>{matchError || (!matches ? 'Loading matches…' : matches.count ? 'County matches' : 'No matching parcels.')}</p>
-              {#if spatialParams && matches?.items.length}<ul aria-label="Matching parcels">{#each matches.items as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{:else if !spatialParams && parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}</button></li>{/each}</ul>{/if}
+              {#if spatialParams && matches?.items.length}<ul aria-label="Matching parcels">{#each matches.items as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id, true)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{:else if !spatialParams && parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}</button></li>{/each}</ul>{/if}
             </div>
             {#if spatialParams}<nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled={!cursorHistory.length} onclick={() => { matchCursor = cursorHistory.at(-1) ?? ''; cursorHistory = cursorHistory.slice(0, -1); }}>Previous</button><span>Page {cursorHistory.length + 1}</span><button class="btn btn-sm" disabled={!matches?.next_cursor} onclick={() => { cursorHistory = [...cursorHistory, matchCursor]; matchCursor = matches?.next_cursor ?? ''; }}>Next</button></nav>{/if}
           </section>
