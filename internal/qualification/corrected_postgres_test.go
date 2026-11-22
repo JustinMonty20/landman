@@ -50,6 +50,20 @@ func TestCapturedQualificationFullStoredReplay(t *testing.T) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		if kind == "sample" && (id == "190" || id == "195") {
+			var envelope map[string]json.RawMessage
+			var features []json.RawMessage
+			stub := json.RawMessage(`{"attributes":{"OBJECTID":231245,"ZONE":"R-40","PETITION":" ","URL":" "},"geometry":{"rings":[]}}`)
+			if id == "195" {
+				stub = json.RawMessage(`{"attributes":{"OBJECTID":117793,"NAME":"Test municipality","LAST_UPDATE":null}}`)
+			}
+			if err := json.Unmarshal(b, &envelope); err != nil || json.Unmarshal(envelope["features"], &features) != nil {
+				http.Error(w, "invalid fixture envelope", 500)
+				return
+			}
+			envelope["features"], _ = json.Marshal(append(features, stub))
+			b, _ = json.Marshal(envelope)
+		}
 		if r.URL.Query().Get("returnCountOnly") == "true" {
 			var sample struct {
 				Features []json.RawMessage `json:"features"`
@@ -95,6 +109,9 @@ func TestCapturedQualificationFullStoredReplay(t *testing.T) {
 				t.Fatal(e)
 			}
 			expected += len(sample.Features)
+			if layer == 190 || layer == 195 {
+				expected++
+			}
 		}
 		count, err := store.Refresh(ctx, source, group)
 		if err != nil || count != expected {
@@ -105,6 +122,21 @@ func TestCapturedQualificationFullStoredReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		generations = append(generations, id)
+	}
+	for _, tc := range []struct {
+		table, attribute, value string
+		layer, id               int
+	}{{"qualification_zones", "district_code", "R-40", 190, 231245}, {"qualification_jurisdictions", "name", "Test municipality", 195, 117793}} {
+		for _, gen := range []string{generations[0], generations[2]} {
+			var retained bool
+			query := fmt.Sprintf(`SELECT p.shape IS NULL AND p.raw_shape IS NULL AND p.repair_status='missing_geometry'
+AND r.missing_geometry_count=1 AND r.feature_count=(SELECT count(*) FROM %s WHERE generation_id=$1 AND layer_id=$2)
+AND p.%s=$4 FROM %s p JOIN qualification_layer_receipts r USING(generation_id,layer_id)
+WHERE p.generation_id=$1 AND p.layer_id=$2 AND p.source_id=$3`, tc.table, tc.attribute, tc.table)
+			if err := pool.QueryRow(ctx, query, gen, tc.layer, tc.id, tc.value).Scan(&retained); err != nil || !retained {
+				t.Fatalf("layer %d missing polygon not retained: %v", tc.layer, err)
+			}
+		}
 	}
 	for _, tc := range []struct {
 		table     string

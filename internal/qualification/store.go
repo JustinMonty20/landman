@@ -80,15 +80,31 @@ func (s Store) refresh(ctx context.Context, source *union.GISSource, group strin
 	}
 	for _, id := range union.QualificationLayers(group) {
 		var receipt union.QualificationReceipt
-		receipt, err = source.FetchQualificationLayer(ctx, id, func(f union.QualificationFeature) error { return s.insertFeature(ctx, gen, f) })
+		missing := 0
+		receipt, err = source.FetchQualificationLayer(ctx, id, func(f union.QualificationFeature) error {
+			switch feature := f.(type) {
+			case union.ZoneFeature:
+				if feature.Shape == nil {
+					missing++
+				}
+			case union.JurisdictionFeature:
+				if feature.Shape == nil {
+					missing++
+				}
+			}
+			return s.insertFeature(ctx, gen, f)
+		})
 		if err != nil {
 			return processed, err
 		}
 		if id == 221 && receipt.Count == 0 {
 			return processed, errors.New("county boundary is empty")
 		}
-		if _, err = s.Pool.Exec(ctx, `INSERT INTO qualification_layer_receipts(generation_id,layer_id,feature_count,source_srid,service_url,source_metadata) VALUES($1,$2,$3,$4,$5,$6)`, gen, id, receipt.Count, receipt.SourceSRID, receipt.ServiceURL, receipt.Metadata); err != nil {
+		if _, err = s.Pool.Exec(ctx, `INSERT INTO qualification_layer_receipts(generation_id,layer_id,feature_count,source_srid,service_url,source_metadata,missing_geometry_count) VALUES($1,$2,$3,$4,$5,$6,$7)`, gen, id, receipt.Count, receipt.SourceSRID, receipt.ServiceURL, receipt.Metadata, missing); err != nil {
 			return processed, err
+		}
+		if missing > 0 {
+			log.Printf("[union.gis.%s] generation=%s layer=%d: retained %d of %d records without polygons", group, gen, id, missing, receipt.Count)
 		}
 		processed += receipt.Count
 	}
@@ -125,6 +141,11 @@ func (s Store) insertFeature(ctx context.Context, gen string, feature union.Qual
 	switch f := feature.(type) {
 	case union.ZoneFeature:
 		identity = f.SourceIdentity
+		if f.Shape == nil {
+			_, err = s.Pool.Exec(ctx, `INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,repair_status,repair_delta_m2,jurisdiction,district_code,district_description,case_reference,official_url,source_date)
+VALUES($1,$2,$3,$4,'missing_geometry',0,$5,NULLIF($6,''),NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Jurisdiction, f.DistrictCode, f.Description, f.CaseReference, f.OfficialURL, f.SourceDate)
+			break
+		}
 		_, err = s.Pool.Exec(ctx, `WITH input AS (SELECT ST_Multi(ST_GeomFromEWKB($5)) g),
 repair AS (SELECT g, ST_Multi(ST_CollectionExtract(ST_MakeValid(g),3)) fixed FROM input)
 INSERT INTO qualification_zones(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2,jurisdiction,district_code,district_description,case_reference,official_url,source_date)
@@ -136,6 +157,11 @@ THEN fixed END,g,CASE WHEN ST_IsValid(g) THEN 'original' ELSE 'repaired' END,
 CASE WHEN ST_IsValid(g) THEN 0 ELSE abs(ST_Area(fixed)-ST_Area(g)) END,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),NULLIF($11,'') FROM repair`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Shape, f.Jurisdiction, f.DistrictCode, f.Description, f.CaseReference, f.OfficialURL, f.SourceDate)
 	case union.JurisdictionFeature:
 		identity = f.SourceIdentity
+		if f.Shape == nil {
+			_, err = s.Pool.Exec(ctx, `INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,source_srid,repair_status,repair_delta_m2,name,source_date)
+VALUES($1,$2,$3,$4,'missing_geometry',0,$5,$6)`, gen, f.LayerID, f.SourceID, f.SourceSRID, f.Name, f.SourceDate)
+			break
+		}
 		_, err = s.Pool.Exec(ctx, `WITH input AS (SELECT ST_Multi(ST_GeomFromEWKB($5)) g),
 repair AS (SELECT g, ST_Multi(ST_CollectionExtract(ST_MakeValid(g),3)) fixed FROM input)
 INSERT INTO qualification_jurisdictions(generation_id,layer_id,source_id,source_srid,shape,raw_shape,repair_status,repair_delta_m2,name,source_date)
