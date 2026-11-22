@@ -1,0 +1,2 @@
+- [Out of scope] Zoning and the test database guard stay outside this verification pass. The operator asked to continue with soil only.
+- [Out of scope] The proposed overlay runs as audit SQL in a disposable database. It does not select a production soil repair policy or change the import code.

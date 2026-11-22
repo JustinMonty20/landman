@@ -1,0 +1,2 @@
+- [Out of scope] Terrain has a prototype report but no registered import job on `main`. This audit checks the published jobs, not the terrain prototype.
+- [Out of scope] The audit records data and code differences. It does not change the operator database or repair any source shapes.

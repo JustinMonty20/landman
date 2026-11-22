@@ -1,0 +1,2 @@
+- [Out of scope] The operator deferred test database isolation and will reset the operator database later. The audit used read-only queries and did not change either policy.
+- [Out of scope] The audit tested soil repair candidates without publishing them. Agreement between geometry tools does not authorize a source repair policy.

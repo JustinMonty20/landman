@@ -1,0 +1,1 @@
+- [Scope tangent] GNU Make also keeps literal quotes in the tax and FEMA path assignments in `.env`. This task covers the shared parcel evidence directory only. Review those paths separately before using `make run` for all sources.
