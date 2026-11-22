@@ -1,0 +1,1 @@
+- **Out-of-scope decision:** Keep session caching outside the map cache proposal. Measure session queries separately because session caching changes how quickly the API detects revocation.

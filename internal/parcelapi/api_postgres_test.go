@@ -141,6 +141,17 @@ func TestHTTPPostGIS(t *testing.T) {
 			t.Errorf("%s: %d", path, code)
 		}
 	}
+	for _, layer := range []string{"zoning", "roads"} {
+		if code, body := request("/api/v1/parcels/" + ids[0] + "/" + layer); code != 200 || body["available"] != false || body["freshness"] == nil {
+			t.Fatalf("%s unavailable: %d %v", layer, code, body)
+		}
+		if code, _ := request("/api/v1/parcels/00000000-0000-0000-0000-000000000000/" + layer); code != 404 {
+			t.Fatalf("%s missing parcel: %d", layer, code)
+		}
+		if code, _ := request("/api/v1/parcels/" + ids[0] + "/" + layer + "?bad=1"); code != 400 {
+			t.Fatalf("%s invalid query: %d", layer, code)
+		}
+	}
 	code, tax := request("/api/v1/parcels/" + ids[0] + "/tax")
 	if code != 200 || tax["reported_delinquent_total"] != nil || tax["delinquent_year_count"] != float64(0) {
 		t.Fatalf("missing tax %d %v", code, tax)

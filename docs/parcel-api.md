@@ -9,6 +9,8 @@ The Go API serves stored Union County evidence under `/api/v1`. Send a valid sam
 | `/api/v1/parcels/map?bbox=west,south,east,north&zoom=12&likely_vacant=true` | Neutral context and filtered match counts. Zoom below 13 returns 16 by 16 grid cells. Closer zoom returns up to 200 simplified geometries, or 413 instead of incomplete features. |
 | `/api/v1/parcels/{id}` | Parcel summary, source identity, sale evidence, and location point. |
 | `/api/v1/parcels/{id}/tax` | Active-file bill amounts, reported delinquent balances by year, pipeline entries, and foreclosure cases. Money is a decimal string. `reported_delinquent_total` is null without active balance evidence, not zero due or a payoff quote. |
+| `/api/v1/parcels/{id}/zoning` | Stored zoning overlap, jurisdiction, unmapped and ambiguous area, and source freshness; `available: false` when unpublished. |
+| `/api/v1/parcels/{id}/roads` | Stored nearest-road assessment, bounded search state, county-edge warning and source freshness; `available: false` when unpublished. Distance is not legal access. |
 | `/api/v1/parcels/{id}/soil` | Published soil assessment and its freshness, or `available: false` if no assessment exists. |
 | `/api/v1/sources` | Parcel update time, active tax file identities, soil generations, latest job outcomes, and last clean imports. Artifact paths and raw errors stay private. |
 

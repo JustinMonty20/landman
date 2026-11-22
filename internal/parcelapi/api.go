@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/JustinMonty20/landman/internal/county"
+	"github.com/JustinMonty20/landman/internal/qualification"
 	"github.com/JustinMonty20/landman/internal/soil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -746,6 +747,8 @@ func (h *Handler) detailRoute(w http.ResponseWriter, r *http.Request) {
 		h.floodDetail(w, r, parts[0])
 	case "vacancy":
 		h.vacancy(w, r, parts[0])
+	case "zoning", "roads":
+		h.qualificationDetail(w, r, parts[0], parts[1])
 	default:
 		http.NotFound(w, r)
 	}
@@ -927,4 +930,34 @@ func (h *Handler) tax(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	respond(w, map[string]any{"bills": json.RawMessage(bills), "delinquent_balances": json.RawMessage(balances), "reported_delinquent_total": reportedTotal, "delinquent_year_count": delinquentYears, "pipeline": json.RawMessage(pipeline), "foreclosure_cases": json.RawMessage(cases), "source_stamp": s, "note": "Missing evidence is not a verified zero or a payoff quote"})
+}
+
+// qualificationDetail exposes only published parcel-scoped assessments.
+func (h *Handler) qualificationDetail(w http.ResponseWriter, r *http.Request, id, layer string) {
+	var ok bool
+	if err := h.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM parcels WHERE id=$1 AND county_id=$2 AND source_name=$3)`, id, countyID, parcelSource).Scan(&ok); err != nil {
+		unavailable(w)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if layer == "zoning" {
+		result, err := qualification.CurrentZoning(r.Context(), h.pool, id)
+		if err != nil {
+			unavailable(w)
+			return
+		}
+		result.Freshness.RefreshError = nil
+		respond(w, result)
+	} else {
+		result, err := qualification.CurrentRoads(r.Context(), h.pool, id)
+		if err != nil {
+			unavailable(w)
+			return
+		}
+		result.Freshness.RefreshError = nil
+		respond(w, result)
+	}
 }
