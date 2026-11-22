@@ -16,6 +16,7 @@ You are a principal engineer.
 ## Rules
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
 - The buyer writes handwritten notes outside the application. Lead tracking means a personal scratchpad, explicit lead states, and follow-up reminders to the buyer—not AI outreach, mailing preparation/exports, campaigns, or owner-facing message delivery. Do not add those features without explicit operator authorization.
+- For database rebuild advice, list the verified paths for each source. Distinguish fresh import, replay on a populated database, and replay on an empty database. State which paths need capture metadata or fixture setup. Do not infer a full rebuild from separate source tests.
 - Before marking a countywide importer ready, compare the documented row count with the source page limit. Test multi-page capture, completeness checks, and replay when the layer exceeds one page. Call a single-page capture a diagnostic, not a countywide import.
 - Before recommending a live import command, compare the latest observed source count with the code's row, receipt, byte, and time limits. State any known gate that will reject the run.
 - Before promising equal job deadlines across standalone, aggregate, and scheduled commands, trace each job's inclusion and both outer and inner context deadlines. A job absent from the aggregate command cannot have an aggregate deadline.
