@@ -4,10 +4,20 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
   const id = 'a0000000-0000-4000-8000-000000000001';
   const release = { id, issued_at: '2026-09-14T00:00:00Z', observed_at: '2026-09-15T00:00:00Z' };
   const geometry = { type: 'Polygon', coordinates: [[[-80.6, 35], [-80.59, 35], [-80.59, 35.01], [-80.6, 35]]] };
+  const requests = new Set<string>();
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin !== testInfo.project.use.baseURL || /^\/(api|auth)(\/|$)/.test(url.pathname)) return route.abort();
+    return route.continue();
+  });
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.searchParams.get('flood_category') === 'sfha') requests.add(url.pathname);
+  });
   await page.route('**/api/me', (route) => route.fulfill({ json: { id, email: 'buyer@example.test', name: 'Buyer' } }));
   await page.route('**/api/v1/parcels?*', (route) => route.fulfill({ json: { items: [{ id, parcel_number: 'FLOOD-TEST', address: null }], count: 1, source_stamp: 'fixture' } }));
-await page.route('**/api/v1/flood/map?*', (route) => route.fulfill({ json: {
+  await page.route('**/api/v1/flood/map?*', (route) => route.fulfill({ json: {
     type: 'FeatureCollection', release, features: [{ type: 'Feature', geometry, properties: { category: 'sfha', code: 'AE', subtype: '', sfha: 'T' } }]
   } }));
   await page.route('**/api/v1/parcels/map?*', (route) => route.fulfill({ json: { features: [{ id, parcel_number: 'FLOOD-TEST', address: null, geometry }] } }));
@@ -30,10 +40,16 @@ await page.route('**/api/v1/flood/map?*', (route) => route.fulfill({ json: {
   await expect(details).toContainText('Unknown coverage: 3.00 acres');
   await expect(details).toContainText('3710542500J · 2008-10-16');
   await page.getByRole('button', { name: 'Close parcel details' }).click();
-await page.getByRole('button', { name: 'Filter parcels by Special flood hazard area (1% annual chance)' }).click();
-await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('1 matches');
-await page.screenshot({ path: testInfo.outputPath('flood-selection.png'), fullPage: true });
-await page.getByRole('button', { name: 'Clear flood filter' }).click();
-await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('Visible parcels');
+  const legendFilter = page.getByRole('button', { name: 'Filter parcels by Special flood hazard area (1% annual chance)' });
+  await legendFilter.click();
+  await expect(legendFilter).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('1 match');
+  await expect.poll(() => [...requests].sort()).toEqual(['/api/v1/flood/map', '/api/v1/parcels', '/api/v1/parcels/map']);
+  await page.screenshot({ path: testInfo.outputPath('flood-selection.png'), fullPage: true });
+  await page.getByRole('tab', { name: 'Filters', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Flood category' })).toHaveValue('sfha');
+  await page.getByRole('tab', { name: 'Layers', exact: true }).click();
+  await page.getByRole('button', { name: 'Clear flood filter' }).click();
+  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('Parcel results unavailable');
   await expect(page.getByRole('button', { name: 'FLOOD-TEST' })).toBeVisible();
 });

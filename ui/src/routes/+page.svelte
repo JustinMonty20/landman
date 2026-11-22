@@ -338,14 +338,22 @@ onMount(() => {
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
             <div class="results-heading">
-              <h1>{floodCategory ? 'Matching parcels' : 'Visible parcels'}</h1>
-              <p>{#if floodCategory}{selected.name} County · {mapStamp && matches && mapStamp !== matches.source_stamp ? 'Data changed. Refresh map to compare counts.' : `${matches?.count ?? '…'} matches`}{#if mapCount && (!matches || !mapStamp || mapStamp === matches.source_stamp) !== undefined} · {mapCount} in map view{/if}{:else}{selected.name} County · Select a parcel to inspect flood evidence.{/if}</p>
-              <label class="list-mode">Show<select class="select field-sm" disabled><option>All county matches</option><option>Matches in map view</option></select></label>
+              <h1>{floodCategory ? 'Matching parcels' : 'Parcel results unavailable'}</h1>
+              {#if floodCategory}
+                {#if matches}<p>{selected.name} County · {matches.count} {matches.count === 1 ? 'match' : 'matches'}</p>{/if}
+                {#if matches && mapStamp && mapStamp !== matches.source_stamp}
+                  <p>Data changed. Refresh the map to compare counts.</p>
+                {:else if matches && mapCount !== undefined && mapStamp === matches.source_stamp}
+                  <p>{mapCount} in map view</p>
+                {/if}
+              {:else}
+                <p>{selected.name} County · Filter selections do not run a search.</p>
+              {/if}
             </div>
             <div class="empty"><p>{matchError || parcelError || (floodCategory ? (!matches ? 'Loading matches…' : matches.count ? 'County matches' : 'No matching parcels.') : parcels.length ? 'Select a visible parcel for flood evidence.' : 'Zoom in to see parcel boundaries.')}</p>
               {#if floodCategory && matches?.items.length}<ul aria-label="Matching parcels">{#each matches.items as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}{parcel.address ? ` · ${parcel.address}` : ''}</button></li>{/each}</ul>{:else if !floodCategory && parcels.length}<ul aria-label="Visible parcels">{#each parcels as parcel (parcel.id)}<li><button class="btn btn-sm" onclick={() => inspectParcel(parcel.id)}>{parcel.parcel_number ?? 'Parcel ' + parcel.id.slice(0, 8)}</button></li>{/each}</ul>{/if}
             </div>
-            <nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled={!cursorHistory.length} onclick={() => { matchCursor = cursorHistory.at(-1) ?? ''; cursorHistory = cursorHistory.slice(0, -1); }}>Previous</button><span>Page 1 of 1</span><button class="btn btn-sm" disabled={!matches?.next_cursor} onclick={() => { cursorHistory = [...cursorHistory, matchCursor]; matchCursor = matches?.next_cursor ?? ''; }}>Next</button></nav>
+            {#if floodCategory}<nav class="pagination" aria-label="Result pages"><button class="btn btn-sm" disabled={!cursorHistory.length} onclick={() => { matchCursor = cursorHistory.at(-1) ?? ''; cursorHistory = cursorHistory.slice(0, -1); }}>Previous</button><span>Page {cursorHistory.length + 1}</span><button class="btn btn-sm" disabled={!matches?.next_cursor} onclick={() => { cursorHistory = [...cursorHistory, matchCursor]; matchCursor = matches?.next_cursor ?? ''; }}>Next</button></nav>{/if}
           </section>
           {/if}
         </div>

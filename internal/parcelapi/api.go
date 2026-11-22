@@ -27,7 +27,6 @@ const countyID = "union"
 const parcelSource = "union_county_gis"
 const maxBytes = 1 << 20
 
-var predicateParameter = regexp.MustCompile(`\$([0-9]+)`)
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 type Bounds struct{ West, South, East, North float64 }
@@ -264,21 +263,34 @@ func (f Filters) args() []any {
 	return a
 }
 
-const predicate = `p.county_id=$1 AND p.source_name=$2
- AND ($3::float8 IS NULL OR p.mapped_acres >= $3)
+const filterPredicate = `($3::float8 IS NULL OR p.mapped_acres >= $3)
  AND ($4::float8 IS NULL OR p.mapped_acres <= $4)
  AND ($5::boolean IS NULL OR p.likely_vacant=$5)
  AND ($6::boolean IS NULL OR EXISTS (SELECT 1 FROM tax_delinquent_balances d WHERE d.parcel_id=p.id AND d.balance_due>0 AND EXISTS (SELECT 1 FROM tax_file_imports i WHERE i.active AND i.county_id=d.county_id AND i.source_name=d.source_name) )=$6)
  AND ($11::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.out_of_state_mailing=$11))
 AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.entity_name_indicator=$12))
 AND ($13::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.corporate_name_indicator=$13))
-AND CASE WHEN $14::text IS NULL THEN true WHEN parcel_boundary_usable(p.shape) THEN EXISTS (
- SELECT 1 FROM fema_release_head h JOIN fema_zones z ON z.capture_id=h.capture_id
- WHERE h.study_id='37179C' AND ` + floodClassSQL + `=$14 AND z.shape && ST_Transform(p.shape,4269)
- AND ST_Intersects(z.shape,ST_Transform(p.shape,4269))
- AND ($15::text='intersects' OR ST_Relate(z.shape,ST_Transform(p.shape,4269),'2********'))
-) ELSE false END
-AND ($7::float8 IS NULL OR (p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857)) END))`
+AND ($14::text IS NULL OR p.id IN (SELECT id FROM flood_matches))`
+
+const parcelScope = `p.county_id=$1 AND p.source_name=$2`
+const viewport = `p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857)) END`
+const listScope = parcelScope + ` AND ($7::float8 IS NULL OR (` + viewport + `))`
+const predicate = listScope + ` AND (` + filterPredicate + `)`
+
+// The padded envelope finds candidates in the parcel index. Only native FEMA coordinates decide contact.
+const floodMatchQuery = `WITH flood_matches AS MATERIALIZED (
+ SELECT DISTINCT candidate.id
+ FROM fema_release_head h JOIN fema_zones z ON z.capture_id=h.capture_id
+ CROSS JOIN LATERAL (
+  SELECT p.id FROM parcels p WHERE ` + listScope + `
+  AND p.shape && ST_Transform(ST_Expand(ST_Envelope(z.shape),0.001),3857)
+  AND CASE WHEN parcel_boundary_usable(p.shape) THEN CASE WHEN $15::text='intersects'
+   THEN ST_Intersects(z.shape,ST_Transform(p.shape,4269))
+   ELSE ST_Relate(z.shape,ST_Transform(p.shape,4269),'2********') END ELSE false END
+  OFFSET 0
+ ) candidate
+ WHERE h.study_id='37179C' AND ` + floodClassSQL + `=$14::text
+) `
 const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,p.likely_vacant,p.updated_at`
 
 func scanParcel(row pgx.Row) (Parcel, error) {
@@ -429,13 +441,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	count := int64(0)
 	next := ""
 	if f.active() {
-		e = tx.QueryRow(r.Context(), `SELECT count(*) FROM parcels p WHERE `+predicate, f.args()...).Scan(&count)
+		e = tx.QueryRow(r.Context(), floodMatchQuery+`SELECT count(*) FROM parcels p WHERE `+predicate, f.args()...).Scan(&count)
 		if e != nil {
 			unavailable(w)
 			return
 		}
 		a := append(f.args(), after, f.PageSize+1)
-		rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$16::uuid ORDER BY p.id LIMIT $17`, a...)
+		rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$16::uuid ORDER BY p.id LIMIT $17`, a...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -536,18 +548,6 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, map[string]any{"items": items})
 }
-func (f Filters) mapMatch(args *[]any) string {
-	if !f.active() {
-		return "false"
-	}
-	*args = append(*args, f.args()...)
-	// The shared predicate uses parameters 1..15; map queries reserve 1..6 for the viewport.
-	// Renumber its placeholders to the appended argument block.
-	return "(" + predicateParameter.ReplaceAllStringFunc(predicate, func(token string) string {
-		n, _ := strconv.Atoi(token[1:])
-		return fmt.Sprintf("$%d", n+len(*args)-15)
-	}) + ")"
-}
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "flood_category", "flood_contact"); e != nil {
@@ -589,6 +589,11 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	b := f.Bounds
 	contextArgs := []any{countyID, parcelSource, b.West, b.South, b.East, b.North}
 	const contextWhere = `p.county_id=$1 AND p.source_name=$2 AND p.shape && ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($3,$4,$5,$6,4326),3857)) END`
+	const mapWhere = parcelScope + ` AND ` + viewport
+	match := `COALESCE((` + filterPredicate + `), false)`
+	if !f.active() {
+		match = `false AND (` + match + `)`
+	}
 	var total, matches int64
 	if z < 13 {
 		type cell struct {
@@ -598,14 +603,12 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 			Matches int64 `json:"matches"`
 		}
 		cells := []cell{}
-		args := append([]any(nil), contextArgs...)
-		match := f.mapMatch(&args)
 		// Cell position is display-only; intersection and match use the original polygon.
-		rows, err := tx.Query(r.Context(), `SELECT greatest(0,least(15,floor((ST_X(location)-$3)*16/($5-$3))))::int AS x,
- greatest(0,least(15,floor((ST_Y(location)-$4)*16/($6-$4))))::int AS y,
+		rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT greatest(0,least(15,floor((ST_X(location)-$7)*16/($9-$7))))::int AS x,
+ greatest(0,least(15,floor((ST_Y(location)-$8)*16/($10-$8))))::int AS y,
  count(*),count(*) FILTER (WHERE match)
  FROM (SELECT ST_Transform(ST_PointOnSurface(p.shape),4326) AS location, (`+match+`) AS match
- FROM parcels p WHERE `+contextWhere+`) located GROUP BY x,y ORDER BY x,y`, args...)
+ FROM parcels p WHERE `+mapWhere+`) located GROUP BY x,y ORDER BY x,y`, f.args()...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -640,9 +643,8 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	args := append(append([]any(nil), contextArgs...), z)
-	match := f.mapMatch(&args)
-	where := contextWhere
+	args := append(f.args(), z)
+	where := mapWhere
 	if f.FloodCategory != nil {
 		where += ` AND (` + match + `)`
 		match = `true`
@@ -650,7 +652,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 		return
 	}
-	rows, err := tx.Query(r.Context(), `SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$7::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT 201`, args...)
+	rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$16::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT 201`, args...)
 	if err != nil {
 		unavailable(w)
 		return
