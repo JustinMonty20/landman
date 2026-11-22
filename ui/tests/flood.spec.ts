@@ -16,7 +16,7 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
   } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Inspect Union, NC', exact: true }).click();
-  await page.getByText('Map layers', { exact: true }).click();
+  await page.getByRole('tab', { name: 'Layers', exact: true }).click();
   await page.getByRole('checkbox', { name: 'FEMA flood zones' }).check();
   await expect(page.getByText('Archive issue date: 2026-09-14', { exact: true })).toBeVisible();
   for (let i = 0; i < 6; i++) {

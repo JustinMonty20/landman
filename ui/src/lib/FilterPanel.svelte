@@ -21,7 +21,7 @@ async function remove(key: keyof FilterDraft) {
 }
 </script>
 
-<aside class="filter-panel grouped-filters" id="filters" aria-label="Parcel filters">
+<aside class="grouped-filters" aria-label="Parcel filters">
   <div class="panel-heading">
     <h2>Filter {county} parcels</h2>
     <p>Parcel data is not connected yet. Selections do not run a search.</p>

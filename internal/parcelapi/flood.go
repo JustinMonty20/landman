@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -41,19 +40,24 @@ type floodZone struct {
 
 func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if err := parse(q, "bbox", "zoom"); err != nil {
+	if err := parse(q, "bbox", "zoom", "overview"); err != nil {
 		bad(w, err)
 		return
 	}
-	b, err := parseBounds(q.Get("bbox"))
+	overview, err := parseOverlayOverview(q)
 	if err != nil {
 		bad(w, err)
 		return
 	}
-	zoom, err := strconv.Atoi(q.Get("zoom"))
-	if err != nil || zoom < 9 || zoom > 22 || b.East-b.West > 3 || b.North-b.South > 3 {
-		bad(w, errors.New("flood map requires zoom 9..22 and bounds no wider than 3 degrees"))
-		return
+	query := floodOverview
+	var args []any
+	if !overview {
+		args, err = overlayViewportArgs(q, 9, 3)
+		if err != nil {
+			bad(w, err)
+			return
+		}
+		query = floodViewport
 	}
 	ctx := r.Context()
 	tx, err := h.tx(ctx)
@@ -69,11 +73,7 @@ func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
 	}
 	features := []floodFeature{}
 	if release != nil {
-		rows, err := tx.Query(ctx, `WITH bounds AS (SELECT ST_Transform(ST_MakeEnvelope($2,$3,$4,$5,4326),4269) AS shape), hits AS MATERIALIZED (
- SELECT z.zone_code,z.zone_subtype,z.sfha_flag,ST_CollectionExtract(ST_Intersection(z.shape,b.shape),3) AS shape
- FROM fema_zones z CROSS JOIN bounds b WHERE z.capture_id=$1 AND z.shape && b.shape AND ST_Intersects(z.shape,b.shape)
- ORDER BY z.source_id LIMIT 501
- ) SELECT zone_code,zone_subtype,sfha_flag,CASE WHEN NOT ST_IsEmpty(shape) THEN ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape, GREATEST(0.000001,0.0005 / power(2.0,$6::int-9))),4326),7)::jsonb END FROM hits`, release.ID, b.West, b.South, b.East, b.North, zoom)
+		rows, err := tx.Query(ctx, query, append([]any{release.ID}, args...)...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -98,8 +98,19 @@ func (h *Handler) floodMap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	respond(w, map[string]any{"type": "FeatureCollection", "features": features, "release": release})
+	respond(w, map[string]any{"type": "FeatureCollection", "features": features, "release": release, "overview": overview})
 }
+
+const floodOverview = `SELECT zone_code,zone_subtype,sfha_flag,
+ ST_AsGeoJSON(ST_Transform(ST_Collect(ST_SimplifyPreserveTopology(shape,0.0008)),4326),7)::jsonb
+ FROM fema_zones WHERE capture_id=$1 GROUP BY zone_code,zone_subtype,sfha_flag
+ ORDER BY (zone_subtype='FLOODWAY'),(sfha_flag='T'),zone_code,zone_subtype,sfha_flag`
+
+const floodViewport = `WITH bounds AS (SELECT ST_Transform(ST_MakeEnvelope($2,$3,$4,$5,4326),4269) AS shape), hits AS MATERIALIZED (
+ SELECT z.zone_code,z.zone_subtype,z.sfha_flag,ST_CollectionExtract(ST_Intersection(z.shape,b.shape),3) AS shape
+ FROM fema_zones z CROSS JOIN bounds b WHERE z.capture_id=$1 AND z.shape && b.shape AND ST_Intersects(z.shape,b.shape)
+ ORDER BY z.source_id LIMIT 501
+ ) SELECT zone_code,zone_subtype,sfha_flag,CASE WHEN NOT ST_IsEmpty(shape) THEN ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(shape, GREATEST(0.000001,0.0005 / power(2.0,$6::int-9))),4326),7)::jsonb END FROM hits`
 
 func (h *Handler) floodDetail(w http.ResponseWriter, r *http.Request, id string) {
 	ctx := r.Context()

@@ -21,3 +21,15 @@ The `published_soil.soil_set_id` belongs to the returned screening run. The sepa
 Tax `fetched_at` values retain the stored file-observation time. The tax job reads operator-supplied files. These timestamps do not establish that the application downloaded a county file or that its balances remain current.
 
 See [the measurement procedure](parcel-api-benchmark.md) and [the measured results](parcel-api-performance.md).
+
+## Union County map overlays
+
+- `GET /api/v1/qualification/map?layer=zoning&overview=true` returns larger zoning areas and simplified jurisdiction boundaries from the published zoning generation.
+- `GET /api/v1/qualification/map?layer=roads&overview=true` returns simplified centerlines for roads with a source class of Primary, Highway, or Expressway from the published roads generation.
+- `GET /api/v1/flood/map?overview=true` returns simplified polygons grouped by zone code, subtype, and special flood hazard designation from the published FEMA release.
+
+The zoning map also returns named point features for municipalities and extraterritorial jurisdictions (ETJs). The roads map returns up to 30 named point features for main roads. A label point is for display, not measurement.
+
+`GET /api/v1/qualification/zoning?lon=-80.595&lat=34.995` returns the active zoning generation and the distinct stored districts at the selected point. It uses full stored polygons, not map shapes. Each district has a jurisdiction and the stored code, description, case reference, and source record date. Fields the source did not supply are empty strings. More than one district can be present. The result does not establish permitted use.
+
+Overview requests do not accept `bbox` or `zoom`. The response sets `overview: true`. The shapes are for map display only. Blank areas do not establish that zoning or flood data is absent or that a road does not exist. For more detail, omit `overview` and send `bbox` and `zoom`. The existing feature and response limits apply. The UI uses the county overview if a detail request exceeds a display limit.

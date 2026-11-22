@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -22,33 +23,36 @@ type qualificationFeature struct {
 
 func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if err := parse(q, "bbox", "zoom", "layer"); err != nil {
+	if err := parse(q, "bbox", "zoom", "layer", "overview"); err != nil {
 		bad(w, err)
 		return
 	}
-	b, err := parseBounds(q.Get("bbox"))
+	overview, err := parseOverlayOverview(q)
 	if err != nil {
 		bad(w, err)
 		return
 	}
 	group := q.Get("layer")
-	minZoom, query := 9, zoneViewport
+	minZoom, maxSpan := 9, 3.0
+	viewport, county := zoneViewport, zoneOverview
 	switch group {
 	case "zoning":
 	case "roads":
-		minZoom, query = 13, roadViewport
+		minZoom, maxSpan = 13, 0.25
+		viewport, county = roadViewport, roadOverview
 	default:
 		bad(w, errors.New("layer must be zoning or roads"))
 		return
 	}
-	zoom, err := strconv.Atoi(q.Get("zoom"))
-	maxSpan := 3.0
-	if group == "roads" {
-		maxSpan = 0.25
-	}
-	if err != nil || zoom < minZoom || zoom > 22 || b.East-b.West > maxSpan || b.North-b.South > maxSpan {
-		bad(w, errors.New("zoom or bounds outside layer limits"))
-		return
+	query := county
+	var args []any
+	if !overview {
+		args, err = overlayViewportArgs(q, minZoom, maxSpan)
+		if err != nil {
+			bad(w, err)
+			return
+		}
+		query = viewportBounds + viewport + viewportGeometry
 	}
 	ctx := r.Context()
 	tx, err := h.tx(ctx)
@@ -66,14 +70,14 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRow(ctx, `SELECT g.id::text,g.fetched_at,f.failed_at FROM qualification_heads h JOIN qualification_generations g ON g.id=h.generation_id AND g.source_group=h.source_group LEFT JOIN qualification_refresh_failures f ON f.source_group=h.source_group AND f.failed_at>=g.started_at WHERE h.source_group=$1 AND g.completed_at IS NOT NULL`, group).Scan(&gen.ID, &gen.FetchedAt, &gen.RefreshFailedAt)
 	features := []qualificationFeature{}
 	if errors.Is(err, pgx.ErrNoRows) {
-		respond(w, map[string]any{"type": "FeatureCollection", "features": features, "generation": nil})
+		respond(w, map[string]any{"type": "FeatureCollection", "features": features, "generation": nil, "overview": overview})
 		return
 	}
 	if err != nil {
 		unavailable(w)
 		return
 	}
-	rows, err := tx.Query(ctx, viewportBounds+query+viewportGeometry, gen.ID, b.West, b.South, b.East, b.North, zoom)
+	rows, err := tx.Query(ctx, query, append([]any{gen.ID}, args...)...)
 	if err != nil {
 		unavailable(w)
 		return
@@ -98,8 +102,89 @@ func (h *Handler) qualificationMap(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	respond(w, map[string]any{"type": "FeatureCollection", "features": features, "generation": gen})
+	labelQuery := jurisdictionLabels
+	if group == "roads" {
+		labelQuery = roadLabels
+	}
+	labels, err := readMapLabels(ctx, tx, labelQuery, gen.ID)
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	features = append(features, labels...)
+	respond(w, map[string]any{"type": "FeatureCollection", "features": features, "generation": gen, "overview": overview})
 }
+
+const jurisdictionLabels = `WITH anchors AS (
+ SELECT DISTINCT ON (layer_id,name) layer_id,name,shape FROM qualification_jurisdictions
+ WHERE generation_id=$1 AND shape IS NOT NULL AND name<>''
+ ORDER BY layer_id,name,ST_Area(shape) DESC,source_id
+ ) SELECT CASE layer_id WHEN 195 THEN 'municipality_label' ELSE 'etj_label' END,name,
+ ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(shape),4326),7)::jsonb FROM anchors ORDER BY layer_id DESC,name LIMIT 101`
+
+const majorRoadClasses = `lower(trim(road_class)) IN ('primary','highway','expressway')`
+
+const roadLabels = `WITH parts AS (
+ SELECT trim(name) AS name, CASE lower(trim(road_class)) WHEN 'expressway' THEN 0 WHEN 'highway' THEN 1 ELSE 2 END AS priority,
+ r.layer_id,r.source_id,d.path,d.geom,ST_Length(d.geom) AS length
+ FROM qualification_roads r CROSS JOIN LATERAL ST_Dump(r.shape) d
+ WHERE generation_id=$1 AND trim(name)<>'' AND ` + majorRoadClasses + `
+ ), anchors AS (
+ SELECT DISTINCT ON (lower(name)) name,priority,geom,length FROM parts WHERE length>0
+ ORDER BY lower(name),priority,length DESC,layer_id,source_id,path
+ ) SELECT 'road_label', name, ST_AsGeoJSON(ST_Transform(ST_LineInterpolatePoint(geom,0.5),4326),7)::jsonb
+ FROM anchors ORDER BY priority,length DESC,name LIMIT 30`
+
+func readMapLabels(ctx context.Context, tx pgx.Tx, query, generation string) ([]qualificationFeature, error) {
+	rows, err := tx.Query(ctx, query, generation)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var features []qualificationFeature
+	for rows.Next() {
+		if len(features) == 100 {
+			return nil, errors.New("map label limit exceeded")
+		}
+		f := qualificationFeature{Type: "Feature"}
+		if err := rows.Scan(&f.Properties.Kind, &f.Properties.Name, &f.Geometry); err != nil {
+			return nil, err
+		}
+		features = append(features, f)
+	}
+	return features, rows.Err()
+}
+
+func parseOverlayOverview(q url.Values) (bool, error) {
+	if !q.Has("overview") {
+		return false, nil
+	}
+	if q.Get("overview") != "true" || q.Has("bbox") || q.Has("zoom") {
+		return false, errors.New("overview must be true and cannot include bbox or zoom")
+	}
+	return true, nil
+}
+
+func overlayViewportArgs(q url.Values, minZoom int, maxSpan float64) ([]any, error) {
+	b, err := parseBounds(q.Get("bbox"))
+	if err != nil {
+		return nil, err
+	}
+	zoom, err := strconv.Atoi(q.Get("zoom"))
+	if err != nil || zoom < minZoom || zoom > 22 || b.East-b.West > maxSpan || b.North-b.South > maxSpan {
+		return nil, errors.New("zoom or bounds outside layer limits")
+	}
+	return []any{b.West, b.South, b.East, b.North, zoom}, nil
+}
+
+const zoneOverview = `SELECT 'zoning', '', ST_AsGeoJSON(ST_Transform(ST_Collect(ST_SimplifyPreserveTopology(shape,100)),4326),7)::jsonb
+ FROM qualification_zones WHERE generation_id=$1 AND ST_Area(shape)>=35000 HAVING count(*)>0
+ UNION ALL
+ SELECT 'jurisdiction', '', ST_AsGeoJSON(ST_Transform(ST_Collect(ST_SimplifyPreserveTopology(ST_Boundary(shape),100)),4326),7)::jsonb
+ FROM qualification_jurisdictions WHERE generation_id=$1 AND shape IS NOT NULL HAVING count(*)>0`
+
+const roadOverview = `SELECT 'roads', '', ST_AsGeoJSON(ST_Transform(ST_Collect(ST_SimplifyPreserveTopology(shape,50)),4326),7)::jsonb
+ FROM qualification_roads WHERE generation_id=$1 AND ` + majorRoadClasses + ` HAVING count(*)>0`
 
 const viewportBounds = `WITH bounds AS (SELECT ST_Transform(ST_MakeEnvelope($2,$3,$4,$5,4326),3857) AS shape), hits AS MATERIALIZED (`
 const zoneViewport = `

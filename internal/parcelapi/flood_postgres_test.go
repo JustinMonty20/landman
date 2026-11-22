@@ -60,6 +60,7 @@ func TestFloodMapAndParcelEvidence(t *testing.T) {
 		}
 	}
 	var layer struct {
+		Overview bool
 		Release  floodRelease
 		Features []floodFeature
 	}
@@ -99,6 +100,10 @@ func TestFloodMapAndParcelEvidence(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/flood/map?bbox=-80.61,34.98,-80.58,35.01&zoom=15", nil))
 	if w.Code != 413 {
 		t.Fatalf("over-limit flood request: %d", w.Code)
+	}
+	request("/api/v1/flood/map?overview=true", &layer)
+	if !layer.Overview || layer.Release.ID != release || len(layer.Features) != 2 || layer.Features[1].Properties.Subtype != "FLOODWAY" {
+		t.Fatalf("unexpected flood overview: %+v", layer)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM fema_release_head WHERE study_id='37179C'`); err != nil {
 		t.Fatal(err)
