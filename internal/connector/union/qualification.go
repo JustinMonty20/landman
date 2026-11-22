@@ -23,6 +23,8 @@ import (
 	"github.com/twpayne/go-geom/xy/location"
 )
 
+var errMissingRoadGeometry = errors.New("missing road geometry")
+
 const (
 	QualificationZoning   = "zoning"
 	QualificationRoads    = "roads"
@@ -32,10 +34,11 @@ const (
 // QualificationFeature is a typed county feature with a generation-scoped source identity.
 type QualificationFeature interface{ qualificationFeature() }
 type QualificationReceipt struct {
-	Count      int
-	SourceSRID int
-	ServiceURL string
-	Metadata   json.RawMessage
+	Count          int
+	SourceSRID     int
+	ServiceURL     string
+	Metadata       json.RawMessage
+	OmittedRoadIDs []int64
 }
 type SourceIdentity struct {
 	LayerID    int
@@ -165,8 +168,11 @@ func parseQualificationFeature(spec qualificationLayer, raw json.RawMessage, sri
 	var shape geom.T
 	if spec.kind == QualificationRoads {
 		geo, ok := asMap(value["geometry"])
+		if value["geometry"] == nil {
+			return nil, errMissingRoadGeometry
+		}
 		if !ok {
-			return nil, errors.New("missing road geometry")
+			return nil, errors.New("invalid road geometry")
 		}
 		paths, ok := geo["paths"].([]interface{})
 		if !ok || len(paths) == 0 {
@@ -382,6 +388,7 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 		size = count
 	}
 	seen := map[int64]bool{}
+	var omittedRoadIDs []int64
 	fields := append([]string(nil), required...)
 	if spec.kind == QualificationZoning && (spec.id == 190 || spec.id == 173) {
 		fields = append(fields, "URL")
@@ -443,6 +450,24 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 				return QualificationReceipt{}, err
 			}
 			f, e := parseQualificationFeature(spec, raw, sourceSRID)
+			if errors.Is(e, errMissingRoadGeometry) && spec.kind == QualificationRoads {
+				var row struct {
+					Attributes struct {
+						OBJECTID json.Number `json:"OBJECTID"`
+					} `json:"attributes"`
+				}
+				if err := json.Unmarshal(raw, &row); err != nil {
+					return QualificationReceipt{}, fmt.Errorf("offset %d: decode omitted road identity: %w", offset, err)
+				}
+				id, err := row.Attributes.OBJECTID.Int64()
+				if err != nil || id < 0 || seen[id] {
+					return QualificationReceipt{}, fmt.Errorf("offset %d: invalid or repeated omitted road OBJECTID %s", offset, row.Attributes.OBJECTID)
+				}
+				seen[id] = true
+				omittedRoadIDs = append(omittedRoadIDs, id)
+				log.Printf("[union.gis.roads] Road Centerlines (layer %d) offset=%d OBJECTID=%d: omitted missing geometry", spec.id, offset, id)
+				continue
+			}
 			if e != nil {
 				return QualificationReceipt{}, fmt.Errorf("offset %d: %w", offset, e)
 			}
@@ -475,7 +500,7 @@ func (s *GISSource) FetchQualificationLayer(ctx context.Context, id int, consume
 	if latest != count {
 		return QualificationReceipt{}, fmt.Errorf("count drift: %d to %d", count, latest)
 	}
-	return QualificationReceipt{Count: count, SourceSRID: sourceSRID, ServiceURL: endpoint, Metadata: meta}, nil
+	return QualificationReceipt{Count: count, SourceSRID: sourceSRID, ServiceURL: endpoint, Metadata: meta, OmittedRoadIDs: omittedRoadIDs}, nil
 }
 
 func (s *GISSource) qualificationCount(ctx context.Context, u string) (int, error) {

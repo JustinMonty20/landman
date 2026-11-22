@@ -2,6 +2,7 @@ package qualification
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -100,13 +101,32 @@ func (s Store) refresh(ctx context.Context, source *union.GISSource, group strin
 		if id == 221 && receipt.Count == 0 {
 			return processed, errors.New("county boundary is empty")
 		}
+		if len(receipt.OmittedRoadIDs) != 0 {
+			var metadata map[string]json.RawMessage
+			if err = json.Unmarshal(receipt.Metadata, &metadata); err != nil {
+				return processed, fmt.Errorf("decode road metadata: %w", err)
+			}
+			metadata["omitted_road_objectids"], err = json.Marshal(receipt.OmittedRoadIDs)
+			if err != nil {
+				return processed, fmt.Errorf("encode omitted road IDs: %w", err)
+			}
+			receipt.Metadata, err = json.Marshal(metadata)
+			if err != nil {
+				return processed, fmt.Errorf("encode road metadata: %w", err)
+			}
+			if len(receipt.OmittedRoadIDs)*5 >= receipt.Count {
+				log.Printf("[union.gis.roads] WARNING: %d/%d roads lack geometry (at least 20%%); source coverage is incomplete", len(receipt.OmittedRoadIDs), receipt.Count)
+			} else {
+				log.Printf("[union.gis.roads] omitted %d/%d roads with no geometry; IDs retained in layer receipt", len(receipt.OmittedRoadIDs), receipt.Count)
+			}
+		}
 		if _, err = s.Pool.Exec(ctx, `INSERT INTO qualification_layer_receipts(generation_id,layer_id,feature_count,source_srid,service_url,source_metadata,missing_geometry_count) VALUES($1,$2,$3,$4,$5,$6,$7)`, gen, id, receipt.Count, receipt.SourceSRID, receipt.ServiceURL, receipt.Metadata, missing); err != nil {
 			return processed, err
 		}
 		if missing > 0 {
 			log.Printf("[union.gis.%s] generation=%s layer=%d: retained %d of %d records without polygons", group, gen, id, missing, receipt.Count)
 		}
-		processed += receipt.Count
+		processed += receipt.Count - len(receipt.OmittedRoadIDs)
 	}
 	tx, e := s.Pool.Begin(ctx)
 	if e != nil {
