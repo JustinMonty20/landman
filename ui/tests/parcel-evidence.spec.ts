@@ -58,7 +58,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  const sites = panel.getByRole('list', { name: 'External research sites' });
  await expect(sites.getByRole('listitem')).toHaveCount(3);
  await expect(panel).toContainText('County parcel number: 00123450');
- for (const [name, url] of [['Union County property records', 'https://property.spatialest.com/nc/union'], ['Union County tax records', 'https://unionnc.devnetwedge.com/']] as const) {
+ for (const [name, url] of [['Union County property records', 'https://property.spatialest.com/nc/union#/property/00123450'], ['Union County tax records', 'https://unionnc.devnetwedge.com/parcel/view/00123450/2026']] as const) {
   const link = sites.getByRole('link', { name });
   await expect(link).toHaveAttribute('href', url);
   await expect(link).toHaveAttribute('target', '_blank');
@@ -68,6 +68,17 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  expect(requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first))).toHaveLength(evidenceRequests);
  expect(externalRequests).toEqual([]);
  await page.screenshot({ path: testInfo.outputPath('research-links.png'), fullPage: true });
+ for (const [name, url, pattern] of [
+   ['Union County property records', 'https://property.spatialest.com/nc/union#/property/00123450', 'https://property.spatialest.com/**'],
+   ['Union County tax records', 'https://unionnc.devnetwedge.com/parcel/view/00123450/2026', 'https://unionnc.devnetwedge.com/**']
+ ] as const) {
+   await page.context().route(pattern, route => route.fulfill({ contentType: 'text/html', body: '<title>County record fixture</title>' }));
+   const newTab = page.waitForEvent('popup');
+   await sites.getByRole('link', { name }).click();
+   const recordTab = await newTab;
+   await expect(recordTab).toHaveURL(url);
+   await recordTab.close();
+ }
  const canvas = page.locator('canvas.maplibregl-canvas');
  const bounds = (await canvas.boundingBox())!;
  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
@@ -77,6 +88,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  }).toPass({ timeout: 5000 });
  await page.mouse.click(center.x, center.y);
  await expect(panel).toContainText('County parcel number: 00123450');
+ await expect(sites.getByRole('link', { name: 'Union County property records' })).toHaveAttribute('href', 'https://property.spatialest.com/nc/union#/property/00123450');
  await expect(sites.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', /center=34\.89%2C-80\.7.*basemap=satellite/);
  expect(requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first))).toHaveLength(evidenceRequests);
  await page.screenshot({ path: testInfo.outputPath('research-map-reselected.png'), fullPage: true });
@@ -106,6 +118,9 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('Parcel');
  await panel.getByRole('tab', { name: 'Research links' }).click();
  await expect(panel).toContainText('County parcel number: Not recorded');
+ await expect(panel.getByRole('link', { name: 'Union County property records' })).toHaveCount(0);
+ await expect(panel.getByRole('link', { name: 'Union County tax records' })).toHaveCount(0);
+ await expect(panel).toContainText('A county parcel number is required');
  await expect(panel.getByRole('link', { name: 'Open satellite view' })).toHaveCount(0);
  await expect(panel).not.toContainText('00123450');
  await page.screenshot({ path: testInfo.outputPath('research-missing.png'), fullPage: true });

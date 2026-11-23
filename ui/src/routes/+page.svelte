@@ -421,13 +421,21 @@ return () => task.abort();
               <Tabs.Content value="research">
               <div class="research-content">
                 <ul aria-label="External research sites" class="research-sites">
-                  <li><a href="https://property.spatialest.com/nc/union" target="_blank" rel="noopener noreferrer">Union County property records</a> · Search county property details by parcel number.</li>
-                  <li><a href="https://unionnc.devnetwedge.com/" target="_blank" rel="noopener noreferrer">Union County tax records</a> · Search tax bills and payment information by parcel number; verify available tax years at the site.</li>
+                  {#if currentResearch?.parcelNumber}
+                    <li><a href={'https://property.spatialest.com/nc/union#/property/' + encodeURIComponent(currentResearch.parcelNumber)} target="_blank" rel="noopener noreferrer">Union County property records</a> · Open the selected parcel’s county property record.</li>
+                  {:else}
+                    <li>Union County property records · A county parcel number is required to open the property record.</li>
+                  {/if}
+                  {#if currentResearch?.parcelNumber}
+                    <li><a href={'https://unionnc.devnetwedge.com/parcel/view/' + encodeURIComponent(currentResearch.parcelNumber) + '/2026'} target="_blank" rel="noopener noreferrer">Union County tax records</a> · Open the selected parcel’s 2026 tax record and payment information.</li>
+                  {:else}
+                    <li>Union County tax records · A county parcel number is required to open the tax record.</li>
+                  {/if}
                   {#if currentResearch?.coordinates && currentResearch.coordinates.every(Number.isFinite)}
                     <li><a href={'https://www.google.com/maps/@?api=1&map_action=map&center=' + currentResearch.coordinates[1] + '%2C' + currentResearch.coordinates[0] + '&zoom=18&basemap=satellite'} target="_blank" rel="noopener noreferrer">Open satellite view</a> · Point inside stored parcel; imagery does not show boundaries or guarantee currency.</li>
                   {/if}
                 </ul>
-                <p>County parcel number: {currentResearch ? currentResearch.parcelNumber || 'Not recorded' : 'Loading…'}. Use this number to search the county sites; these links open search pages, not a specific parcel. An unavailable lookup does not mean the county has no record.</p>
+                <p>County parcel number: {currentResearch ? currentResearch.parcelNumber || 'Not recorded' : 'Loading…'}. Both county links open this parcel directly. The tax link opens the 2026 record. An unavailable lookup does not mean the county has no record.</p>
               </div>
               </Tabs.Content>
             </Tabs>

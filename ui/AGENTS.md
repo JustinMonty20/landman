@@ -1,4 +1,5 @@
 # Parcel UI
+- For external parcel research, use the operator-specified parcel URL with the county parcel number. Preserve leading zeros and open it in a new tab. Show an unavailable state when the number is missing. Use a general search page only when the operator approves that fallback.
 
 - Keep the application header to the brand and account controls.
 - Keep map status compact. Show a county/filter summary only when filters are active. Keep search and panel positions fixed across zoom levels; omit visible view-level headings.
