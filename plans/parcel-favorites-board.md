@@ -31,6 +31,10 @@ Use the existing Go API and Svelte application. Do not add another service, iden
 - Quick actions and board moves invoke the same state-change operation. Do not infer lead state from owner labels, county updates, or elapsed time.
 - Use stable card ordering by favorite creation time and ID within each state initially. Manual card ordering within a state is outside this plan.
 
+### Exclusion with a reason
+
+Preserve the browser plan's explicit exclude-lead action. Exclusion is a separate private flag with a required nonempty reason, not a reserved state. It leaves the favorite in its user-selected state. Show an Excluded label and the reason on the card and in parcel details. Show excluded favorites by default; provide an explicit hide-excluded control. Record exclusion and restoration in activity. Restoration clears the active flag and reason but retains their history. Exclusion cancels pending reminders in the same transaction; restoration does not reactivate them. Reject new reminders while excluded. Users can still edit notes and change state. Removing or permanently deleting a favorite remains a separate action.
+
 ### Notes and activity
 
 Each user and parcel pair has its own scratchpad. Use dated plain-text entries. Allow entry creation, editing, and deletion. Show created and edited times. Render text safely; do not accept executable HTML. Moving states does not change notes. Different users have independent notes for the same parcel.
@@ -39,7 +43,7 @@ Keep a separate activity history for favorite changes, state changes, reminder a
 
 ### Removal and permanent deletion
 
-Removing a favorite hides its card and cancels pending reminders atomically. Retain its notes, state, and history. Explain this behavior in the confirmation. Favoriting again restores the private record and its retained state; canceled reminders stay canceled.
+Removing a favorite hides its card and cancels pending reminders atomically. Retain its notes, state, and history. Reject new reminders while the favorite is inactive. Explain this behavior in the confirmation. Favoriting again restores the private record and its retained state; canceled reminders stay canceled.
 
 Provide a separate confirmed action to permanently delete the user's tracking record, notes, activity, and reminders. Do not delete shared county parcels or other users' records. A later favorite starts a new private record. Account deletion must remove all account-owned CRM data; account self-service deletion is not added by this plan.
 
@@ -53,7 +57,7 @@ Use a new migration at the next free version at implementation time. Do not rese
 | --- | --- |
 | `user_lead_states` | User ID, state UUID, name, normalized name, sort position, timestamps, revision. Unique user/name and user/state keys. |
 | `user_crm_settings` | One row per user; default state with a same-user composite foreign key. |
-| `user_parcels` | User ID, parcel UUID, state ID, favorite flag, favorite creation time, timestamps, revision. Unique user/parcel. Same-user state foreign key. Restrictive parcel reference. |
+| `user_parcels` | User ID, parcel UUID, state ID, favorite flag, exclusion flag and reason, favorite creation time, timestamps, revision. Require a nonempty reason exactly when excluded. Unique user/parcel. Same-user state foreign key. Restrictive parcel reference. |
 | `user_parcel_notes` | Entry UUID, user/parcel reference, body, timestamps, revision. |
 | `user_parcel_activity` | Entry UUID, user/parcel reference, typed activity, occurrence time, creation time, limited structured evidence, revision for editable manual entries. Preserve state-name snapshots for historical display after rename or deletion. |
 | `user_parcel_reminders` | Reminder UUID, user/parcel reference, task text, due instant, input timezone, status, timestamps, revision. |
@@ -74,6 +78,7 @@ All proposed routes are under `/api/me`. The server derives ownership from the s
 | `/crm/settings` | Change default state. |
 | `/favorites/{parcel_id}` | Read private tracking summary; idempotently favorite; remove favorite; permanently delete private tracking through a separate confirmed operation. |
 | `/favorites/{parcel_id}/state` | Change state with expected revision. |
+| `/favorites/{parcel_id}/exclusion` | Exclude with a required reason or restore, with expected revision. |
 | `/favorites/{parcel_id}/notes` | Page, create, edit, and delete scratchpad entries. |
 | `/favorites/{parcel_id}/activity` | Page history and manage dated manual entries. |
 | `/favorites/{parcel_id}/reminders` | Create, edit, complete, snooze, reschedule, and cancel personal tasks. |
@@ -120,10 +125,11 @@ Page cards per column and load note history on demand. Do not fetch full parcel 
 - [ ] Use seeded two-account fixtures for routine tests. Do not require live county sources, operator files, or full-county imports.
 - [ ] Run focused Go tests, database integration tests, UI checks/unit tests/build, and the repository CI equivalents selected under [review verification](../docs/review-verification.md).
 - [ ] After UI changes, use `/landman-ui-evidence` for desktop/tablet board actions, keyboard moves, notes, state management, removal, reminders, and two-account isolation. Give reviewers artifact paths, actions, expected/observed results, and evidence limits.
+- [ ] Verify exclusion reasons, visible excluded cards, reminder cancellation, rejected reminder creation for excluded or inactive favorites, restoration without reminder reactivation, and independence from custom states. Verify that dated manual contact records do not send owner messages.
 - [ ] Before implementation acceptance, agree numeric latency and response-size budgets. Measure board pages and writes with at least 1,000 favorites, 50 states, and two simultaneous users. This fixture is a test baseline, not a product limit. Measure larger state counts before claiming unlimited practical scale.
 
 Select independent review checks for ownership/database integrity and UI/reminder behavior at implementation time. This architecture-only PR needs document consistency, link, naming, and independent design review. It does not require application builds or browser evidence because it changes no application behavior.
 
 ## Exclusions
 
-No multiple lists, multiple boards, shared/team boards, owner-facing delivery, generated messages, mailing exports, campaigns, recurring tasks, or automated lead-state inference. Manual buyer contact remains outside the application. Estate/trust label work and current checkout UI changes are separate work.
+No multiple lists, multiple boards, shared/team boards, owner-facing delivery, generated messages, mailing exports, campaigns, recurring tasks, or automated lead-state inference. Actual buyer contact and handwritten note creation remain outside the application. Users can record those manual actions and their dates inside the application. Estate/trust label work and current checkout UI changes are separate work.
