@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -101,6 +102,8 @@ func newServer(ctx context.Context, pool *pgxpool.Pool, c Config, issuer string)
 	s.mux.HandleFunc("GET /auth/google/callback", s.callback)
 	s.mux.HandleFunc("POST /auth/logout", s.logout)
 	s.mux.HandleFunc("GET /api/me", s.me)
+	s.mux.HandleFunc("GET /api/me/parcel-detail-groups", s.getParcelDetailGroups)
+	s.mux.HandleFunc("PUT /api/me/parcel-detail-groups", s.putParcelDetailGroups)
 	return s, nil
 }
 
@@ -299,6 +302,97 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(user)
 }
 
+// The account's detail selection is independent of map layers and parcel reads.
+var detailGroupOrder = []string{"acreage", "ownership", "tax", "vacancy", "soil", "zoning", "roads", "flood"}
+
+type detailGroupsResponse struct {
+	Groups []string `json:"groups"`
+}
+
+func (s *server) detailUser(w http.ResponseWriter, r *http.Request) (User, bool) {
+	user, err := s.currentUser(r)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "Sign-in required", http.StatusUnauthorized)
+		return User{}, false
+	}
+	if err != nil {
+		unavailable(w)
+		return User{}, false
+	}
+	return user, true
+}
+
+func (s *server) getParcelDetailGroups(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.detailUser(w, r)
+	if !ok {
+		return
+	}
+	var groups []string
+	if err := s.pool.QueryRow(r.Context(), "SELECT parcel_detail_groups FROM app_users WHERE id=$1", user.ID).Scan(&groups); err != nil {
+		unavailable(w)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detailGroupsResponse{Groups: groups})
+}
+
+func (s *server) putParcelDetailGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != s.origin {
+		http.Error(w, "Invalid request origin", http.StatusForbidden)
+		return
+	}
+	user, ok := s.detailUser(w, r)
+	if !ok {
+		return
+	}
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "Expected JSON", http.StatusUnsupportedMediaType)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 512)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request struct {
+		Groups *[]string `json:"groups"`
+	}
+	if err := decoder.Decode(&request); err != nil || request.Groups == nil {
+		http.Error(w, "Invalid groups", http.StatusBadRequest)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	selected := make(map[string]bool, len(*request.Groups))
+	for _, group := range *request.Groups {
+		valid := false
+		for _, allowed := range detailGroupOrder {
+			if group == allowed {
+				valid = true
+				break
+			}
+		}
+		if !valid || selected[group] {
+			http.Error(w, "Invalid groups", http.StatusBadRequest)
+			return
+		}
+		selected[group] = true
+	}
+	groups := make([]string, 0, len(selected))
+	for _, group := range detailGroupOrder {
+		if selected[group] {
+			groups = append(groups, group)
+		}
+	}
+	if _, err := s.pool.Exec(r.Context(), "UPDATE app_users SET parcel_detail_groups=$1 WHERE id=$2", groups, user.ID); err != nil {
+		unavailable(w)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detailGroupsResponse{Groups: groups})
+}
+
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Origin") != s.origin {
 		http.Error(w, "Invalid request origin", http.StatusForbidden)
@@ -328,6 +422,10 @@ func CheckSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		if !exists {
 			return fmt.Errorf("missing %s; apply the authentication migration first", table)
 		}
+	}
+	var column bool
+	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='app_users' AND column_name='parcel_detail_groups')").Scan(&column); err != nil || !column {
+		return errors.New("missing parcel detail preferences migration")
 	}
 	return nil
 }

@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 
 const first = 'a0000000-0000-4000-8000-000000000001';
 const second = 'a0000000-0000-4000-8000-000000000002';
-const origin = 'http://127.0.0.1:5174';
-test('selected result keeps core and soil while optional layers follow switches', async ({ page }, testInfo) => {
+const origin = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? '5174'}`;
+test('selected result keeps saved evidence when map layers change', async ({ page }, testInfo) => {
  await page.emulateMedia({ reducedMotion: 'reduce' });
  await page.route('**/*', route => {
   const url = new URL(route.request().url());
@@ -11,6 +11,7 @@ test('selected result keeps core and soil while optional layers follow switches'
   return route.continue();
  });
  await page.route('**/api/me', route => route.fulfill({ json: { id: first, email: 'fixture@example.test', name: 'Fixture' } }));
+ await page.route('**/api/me/parcel-detail-groups', route => route.fulfill({ json: { groups: ['acreage', 'soil', 'tax', 'zoning', 'roads', 'flood'] } }));
  const requested: string[] = [];
  await page.route('**/api/v1/**', route => {
   const url = new URL(route.request().url()); requested.push(url.pathname);
@@ -45,8 +46,9 @@ test('selected result keeps core and soil while optional layers follow switches'
  await expect(panel).toContainText('Parcel FIRST');
  await expect(panel).toContainText('No published soil assessment');
  await expect(panel).toContainText('Reported delinquent total: unknown');
- expect(requested.some(path => path.endsWith('/flood'))).toBe(false);
- expect(requested.some(path => path.endsWith('/zoning'))).toBe(false);
+ await expect(panel).toContainText('No FEMA release is stored');
+ expect(requested.some(path => path.endsWith('/flood'))).toBe(true);
+ expect(requested.some(path => path.endsWith('/zoning'))).toBe(true);
  await page.screenshot({ path: testInfo.outputPath('parcel-core.png'), fullPage: true });
  await page.getByRole('checkbox', { name: 'Zoning and jurisdiction' }).check();
  await page.getByRole('checkbox', { name: 'Roads' }).check();
@@ -59,10 +61,10 @@ test('selected result keeps core and soil while optional layers follow switches'
  await expect(panel.getByRole('region', { name: 'Road evidence' })).toBeVisible();
  await page.screenshot({ path: testInfo.outputPath('parcel-layers-bottom.png'), fullPage: true });
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).uncheck();
- await expect(panel.getByRole('region', { name: 'Flood evidence' })).toHaveCount(0);
+ await expect(panel.getByRole('region', { name: 'Flood evidence' })).toBeVisible();
  await page.getByRole('button', { name: 'Close parcel details' }).click();
  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('FIRST');
  await page.getByRole('button', { name: /SECOND/ }).click();
  await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('Parcel SECOND');
- await expect(panel.getByRole('status')).toHaveText('Parcel location is unavailable.');
+ await expect(panel.getByRole('status').filter({ hasText: 'Parcel location is unavailable.' })).toBeVisible();
 });

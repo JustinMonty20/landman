@@ -2,12 +2,34 @@
 import { onMount } from 'svelte';
 import { Tabs } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
+import { detailGroups, defaultDetailGroups, parseDetailGroups, type DetailGroup } from '../lib/detailGroups';
 import ParcelMap, { jurisdictionColor, zoningColor } from '../lib/ParcelMap.svelte';
 import FilterPanel from '../lib/FilterPanel.svelte';
 import { emptyFilterDraft, filterSelections } from '../lib/filterDraft';
 import { counties, type CountyId, type MapDetail } from '../lib/counties';
 import { emptyShapes, floodStyles, mapLayerQuery, parcelShapes, readMapData, readMapLayer, viewportQuery, type FloodDetail, type FloodMap, type ParcelShape, type Viewport } from '../lib/flood';
 import '../style.css';
+let groups = $state<DetailGroup[]>(defaultDetailGroups);
+let draftGroups = $state<DetailGroup[]>(defaultDetailGroups);
+let preferenceStatus = $state('Loading saved details…');
+let editingDetails = $state(false);
+let savingDetails = $state(false);
+function toggleGroup(group: DetailGroup) {
+ draftGroups = draftGroups.includes(group) ? draftGroups.filter(item => item !== group) : detailGroups.filter(item => item.id === group || draftGroups.includes(item.id)).map(item => item.id);
+}
+async function saveGroups() {
+ savingDetails = true;
+ preferenceStatus = 'Saving…';
+ try {
+  const response = await fetch('/api/me/parcel-detail-groups', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: draftGroups }) });
+  if (!response.ok) throw new Error();
+  groups = parseDetailGroups(await response.json());
+  draftGroups = [...groups];
+  editingDetails = false;
+  preferenceStatus = 'Detail groups saved.';
+ } catch { preferenceStatus = 'Could not save detail groups. Try again.'; }
+ finally { savingDetails = false; }
+}
 let selectedId = $state<CountyId>('37179');
 let detail = $state<MapDetail>('region');
 let focusRequest = $state(0);
@@ -245,8 +267,16 @@ function selectCounty(id: CountyId) {
   panelOpen = true;
 }
 onMount(() => {
+  const task = new AbortController();
+  fetch('/api/me/parcel-detail-groups', { signal: task.signal }).then(async response => {
+    if (!response.ok) throw new Error();
+    groups = parseDetailGroups(await response.json());
+    draftGroups = [...groups];
+    preferenceStatus = '';
+  }).catch(() => { if (!task.signal.aborted) preferenceStatus = 'Saved details unavailable. Showing default groups; changes cannot be saved until reconnected.'; });
   const county = counties.find((county) => county.id === new URL(window.location.href).searchParams.get('county'));
   if (county) selectCounty(county.id);
+return () => task.abort();
 });
 </script>
 {#snippet countySummary()}
@@ -371,7 +401,9 @@ onMount(() => {
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence onlocation={focusParcelFromList} id={parcelID} {floodOn} {zoningOn} {roadsOn} releaseId={flood?.release?.id} /></div>
+            <div class="detail-editor"><button class="btn btn-sm" aria-expanded={editingDetails} onclick={() => { draftGroups = [...groups]; editingDetails = !editingDetails; }}>Choose detail groups</button>
+{#if editingDetails}<form onsubmit={(event) => { event.preventDefault(); saveGroups(); }}><fieldset disabled={savingDetails}><legend>Show in parcel details</legend>{#each detailGroups as group}<label class="check"><input type="checkbox" class="checkbox" checked={draftGroups.includes(group.id)} onchange={() => toggleGroup(group.id)} />{group.label}</label>{/each}<button class="btn btn-sm" type="submit">Save details</button></fieldset></form>{/if}<p role="status" aria-live="polite">{preferenceStatus}</p></div>
+<div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence id={parcelID} {groups} releaseId={flood?.release?.id} onlocation={focusParcelFromList} /></div>
           </section>
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
@@ -435,6 +467,8 @@ h1 { font-size: 19px; font-weight: 650; }
 .flood-legend i { flex-shrink: 0; display: inline-block; width: .8em; height: .8em; }
 .selected-zoning { border-top: 1px solid var(--border); padding-top: 6px; }
 .selected-zoning li { margin-top: 4px; }
+.detail-editor { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.detail-editor fieldset { display: grid; gap: 4px; }
 .flood-details, .empty { overflow: auto; padding: 10px; }
 .coverage-link { position: absolute; bottom: 12px; right: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; color: #93c5fd; }
 :global(input:disabled), :global(select:disabled), :global(button:disabled) { opacity: .6; cursor: not-allowed; }
