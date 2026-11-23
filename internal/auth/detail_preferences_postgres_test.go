@@ -4,6 +4,8 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,9 +20,15 @@ func TestParcelDetailFields(t *testing.T) {
 	if r := f.request("GET", endpoint); r.Code != 401 {
 		t.Fatalf("anonymous GET: %d", r.Code)
 	}
-	if r := f.request("GET", endpoint, first); r.Code != 200 || !strings.Contains(r.Body.String(), `"fields":["mapped_acres","soil_septic"]`) {
-		t.Fatalf("default: %d %s", r.Code, r.Body.String())
+	checkDefault := func(cookie *http.Cookie) {
+		t.Helper()
+		r := f.request("GET", endpoint, cookie)
+		var response detailFieldsResponse
+		if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &response) != nil || !slices.Equal(response.Fields, detailFieldOrder) {
+			t.Fatalf("default: %d %s", r.Code, r.Body.String())
+		}
 	}
+	checkDefault(first)
 	put := func(cookie *http.Cookie, body, origin string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("PUT", testOrigin+endpoint, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
@@ -46,9 +54,7 @@ func TestParcelDetailFields(t *testing.T) {
 	if r := put(first, `{"fields":["soil_septic","mapped_acres","delinquent_total"]}`, testOrigin); r.Code != 200 || !strings.Contains(r.Body.String(), `"fields":["mapped_acres","delinquent_total","soil_septic"]`) {
 		t.Fatalf("canonical PUT: %d %s", r.Code, r.Body.String())
 	}
-	if r := f.request("GET", endpoint, second); !strings.Contains(r.Body.String(), `"fields":["mapped_acres","soil_septic"]`) {
-		t.Fatalf("second account changed: %s", r.Body.String())
-	}
+	checkDefault(second)
 	if r := put(first, `{"fields":[]}`, testOrigin); r.Code != 200 || !strings.Contains(r.Body.String(), `"fields":[]`) {
 		t.Fatalf("empty selection: %d %s", r.Code, r.Body.String())
 	}

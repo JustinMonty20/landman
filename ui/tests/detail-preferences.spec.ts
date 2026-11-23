@@ -80,4 +80,10 @@ test('saved compact groups persist across parcels and reload, including empty se
   await expect(panel.getByRole('region', { name: 'Mapped acreage' })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('empty-detail.png') });
   expect(stored).toEqual([]);
+  await panel.getByRole('button', { name: 'Choose detail fields' }).click();
+  await panel.getByRole('checkbox', { name: 'Mapped acreage', exact: true }).check();
+  await panel.getByRole('button', { name: 'Save details' }).click();
+  await expect(panel.getByRole('region', { name: 'Mapped acreage', exact: true })).toContainText('2.50 acres');
+  expect(stored).toEqual(['mapped_acres']);
+  await page.screenshot({ path: testInfo.outputPath('added-field.png') });
 });

@@ -11,7 +11,7 @@ export const detailGroups = [
 ] as const;
 export type DetailField = typeof detailGroups[number]['fields'][number]['id'];
 export const detailFields = detailGroups.flatMap(group => [...group.fields]) as { id: DetailField; label: string }[];
-export const defaultDetailFields: DetailField[] = ['mapped_acres', 'soil_septic'];
+export const defaultDetailFields: DetailField[] = detailFields.map(({ id }) => id);
 export function parseDetailFields(value: unknown): DetailField[] {
  if (!value || typeof value !== 'object' || !('fields' in value) || !Array.isArray(value.fields) ||
   value.fields.some((field: unknown) => !detailFields.some(item => item.id === field)) ||
