@@ -1,0 +1,7 @@
+# Individual parcel detail fields
+
+One account-owned canonical `text[]` of allowlisted field IDs controls the parcel detail display, not API/SQL projection. Groups organize the picker only. Show all fields by default. Let users remove fields or add them again in the picker. A change to the default does not replace saved choices. An empty array is intentional. Identity always appears. GET/PUT `/api/me/parcel-detail-fields` uses `{ "fields": [...] }`, exact same-origin PUT and authenticated account identity. Branch-only migration 000045 changed names in place; deployment must check for an applied earlier draft before release. No live migration was run here.
+
+Selected fields alone render, including per-use soil ratings. Fact/identity API remains unchanged, and optional category requests fire only when one of that category's fields is selected. Owner names use a separate authenticated read of current county parcel name columns, requested only when owner name selected. No mailing addresses or contact data. Data from category endpoints is not a field-level wire projection. Missing and stale source evidence remains explicit; soil, road and zoning data are screening, not approvals. Map/list and basemap are unchanged.
+
+Verification: UI check/build/unit and desktop/tablet browser preference tests, scoped Go and migrated disposable PostGIS tests when available. CI 45098509490 had two tablet timeout failures in discovery and map-layers (48 passed); proxy logs show backend connection refused; investigate independently of preference changes.

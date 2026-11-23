@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 
 const first = 'a0000000-0000-4000-8000-000000000001';
 const second = 'a0000000-0000-4000-8000-000000000002';
-const origin = 'http://127.0.0.1:5174';
-test('selected result keeps core and soil while optional layers follow switches', async ({ page }, testInfo) => {
+const origin = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? '5174'}`;
+test('selected result keeps saved evidence when map layers change', async ({ page }, testInfo) => {
  await page.emulateMedia({ reducedMotion: 'reduce' });
  await page.route('**/*', route => {
   const url = new URL(route.request().url());
@@ -11,6 +11,7 @@ test('selected result keeps core and soil while optional layers follow switches'
   return route.continue();
  });
  await page.route('**/api/me', route => route.fulfill({ json: { id: first, email: 'fixture@example.test', name: 'Fixture' } }));
+ await page.route('**/api/me/parcel-detail-fields', route => route.fulfill({ json: { fields: ['mapped_acres', 'soil_septic', 'delinquent_total', 'zoning_district', 'road_distance', 'flood_unknown'] } }));
  const requested: string[] = [];
  await page.route('**/api/v1/**', route => {
   const url = new URL(route.request().url()); requested.push(url.pathname);
@@ -42,27 +43,28 @@ test('selected result keeps core and soil while optional layers follow switches'
  await page.getByRole('button', { name: /FIRST · Fixture Way/ }).click();
  await moved;
  const panel = page.getByRole('region', { name: 'Parcel evidence' });
- await expect(panel).toContainText('Parcel FIRST');
+ await expect(panel).toContainText('FIRST · Fixture Way');
  await expect(panel).toContainText('No published soil assessment');
- await expect(panel).toContainText('Reported delinquent total: unknown');
- expect(requested.some(path => path.endsWith('/flood'))).toBe(false);
- expect(requested.some(path => path.endsWith('/zoning'))).toBe(false);
+ await expect(panel).toContainText('Not recorded');
+ await expect(panel).toContainText('No FEMA release stored');
+ expect(requested.some(path => path.endsWith('/flood'))).toBe(true);
+ expect(requested.some(path => path.endsWith('/zoning'))).toBe(true);
  await page.screenshot({ path: testInfo.outputPath('parcel-core.png'), fullPage: true });
  await page.getByRole('checkbox', { name: 'Zoning and jurisdiction' }).check();
  await page.getByRole('checkbox', { name: 'Roads' }).check();
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).check();
  await expect(panel).toContainText('No published zoning assessment');
- await expect(panel).toContainText('Evidence is temporarily unavailable');
- await expect(panel).toContainText('No FEMA release is stored');
+ await expect(panel).toContainText('Evidence temporarily unavailable');
+ await expect(panel).toContainText('No FEMA release stored');
  await page.screenshot({ path: testInfo.outputPath('parcel-layers.png'), fullPage: true });
- await panel.getByRole('region', { name: 'Road evidence' }).scrollIntoViewIfNeeded();
- await expect(panel.getByRole('region', { name: 'Road evidence' })).toBeVisible();
+ await panel.getByRole('region', { name: 'Mapped road distance' }).scrollIntoViewIfNeeded();
+ await expect(panel.getByRole('region', { name: 'Mapped road distance' })).toBeVisible();
  await page.screenshot({ path: testInfo.outputPath('parcel-layers-bottom.png'), fullPage: true });
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).uncheck();
- await expect(panel.getByRole('region', { name: 'Flood evidence' })).toHaveCount(0);
+ await expect(panel.getByRole('region', { name: 'Unknown coverage acreage' })).toBeVisible();
  await page.getByRole('button', { name: 'Close parcel details' }).click();
  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('FIRST');
  await page.getByRole('button', { name: /SECOND/ }).click();
- await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('Parcel SECOND');
- await expect(panel.getByRole('status')).toHaveText('Parcel location is unavailable.');
+ await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('SECOND · Fixture Way');
+ await expect(panel.getByRole('status').filter({ hasText: 'Parcel location is unavailable.' })).toBeVisible();
 });

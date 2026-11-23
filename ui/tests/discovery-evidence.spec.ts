@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('default, combined and cleared county discovery', async ({ page }, info) => {
- const origin = 'http://127.0.0.1:5174';
+ const origin = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? '5174'}`;
  await page.emulateMedia({ reducedMotion: 'reduce' });
  await page.route('**/*', async route => {
   const url = new URL(route.request().url());

@@ -5,6 +5,7 @@
 
 <script lang="ts">
 import { onMount } from 'svelte';
+import { addBasemap, basemapSource, isBasemapRequest } from './basemap';
 import { Map, Marker, NavigationControl, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 import type { FeatureCollection } from 'geojson';
 import { emptyShapes, floodStyles, type Viewport } from './flood';
@@ -31,6 +32,8 @@ let container: HTMLDivElement;
 let map: Map | undefined;
 let ready = $state(false);
 let failed = $state(false);
+let contextAdded = $state(false);
+let contextFailed = $state(false);
 let lastFocusRequest = 0;
 let markers: Marker[] = [];
 let layerMarkers: Marker[] = [];
@@ -54,6 +57,10 @@ const padding = { top: 110, bottom: 185, left: 35, right: 35 };
 function reportDetail() {
   if (!map) return;
   const detail = mapDetail(map.getZoom());
+  if (ready && detail !== 'region' && !contextAdded) {
+    addBasemap(map, 'county-hit');
+    contextAdded = true;
+  }
   markers.forEach((marker) => { marker.getElement().hidden = detail === 'parcels'; });
   ondetail(detail);
   placeMapLabels();
@@ -77,15 +84,26 @@ onMount(() => {
     map = new Map({
       container, bounds: countyBounds(), fitBoundsOptions: { padding, maxZoom: 8.5 },
       attributionControl: false,
+      transformRequest: (url) => isBasemapRequest(url) ? { url, referrerPolicy: 'no-referrer' } : { url },
       style: { version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#24272b' } }] }
     });
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right');
-    map.on('error', () => { failed = true; });
+    map.on('error', (event) => {
+      const { error } = event;
+      if (('sourceId' in event && event.sourceId === basemapSource) ||
+          ('url' in error && typeof error.url === 'string' && isBasemapRequest(error.url))) {
+        contextFailed = true;
+      } else {
+        failed = true;
+      }
+    });
     map.on('load', () => {
       if (!map) return;
       map.addSource('counties', { type: 'geojson', data: countyGeometry });
+      map.addLayer({ id: 'county-hit', type: 'fill', source: 'counties', maxzoom: 13, paint: { 'fill-opacity': 0 } });
       map.addLayer({ id: 'county-fill', type: 'fill', source: 'counties', paint: {
-        'fill-color': ['match', ['get', 'status'], 'configured', '#35567d', '#303438'], 'fill-opacity': 0.5
+        'fill-color': ['match', ['get', 'status'], 'configured', '#35567d', '#303438'],
+        'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8.5, 0.5, 11, 0]
       } });
       map.addLayer({ id: 'county-outline', type: 'line', source: 'counties', paint: { 'line-color': '#a3aab4', 'line-width': 1.5 } });
       map.addLayer({ id: 'county-selection', type: 'line', source: 'counties', filter: ['==', ['get', 'id'], selected], paint: { 'line-color': '#edba71', 'line-width': 3 } });
@@ -122,11 +140,11 @@ onMount(() => {
         }
         if (hit || zoningHit) return;
         if (mapDetail(map.getZoom()) === 'parcels') return;
-        const county = counties.find((county) => county.id === map?.queryRenderedFeatures(event.point, { layers: ['county-fill'] })[0]?.properties?.id);
+        const county = counties.find((county) => county.id === map?.queryRenderedFeatures(event.point, { layers: ['county-hit'] })[0]?.properties?.id);
         if (county) onselect(county.id);
       });
-      map.on('mouseenter', 'county-fill', () => { if (map) map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'county-fill', () => { if (map) map.getCanvas().style.cursor = ''; });
+      map.on('mouseenter', 'county-hit', () => { if (map) map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'county-hit', () => { if (map) map.getCanvas().style.cursor = ''; });
       map.on('mouseenter', 'parcel-hit', () => { if (map) map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'parcel-hit', () => { if (map) map.getCanvas().style.cursor = ''; });
       ready = true;
@@ -176,18 +194,35 @@ $effect(() => {
 <div class="map-frame">
   <div class="canvas" bind:this={container} aria-label="County outline map"></div>
   <div class="map-actions">
-    <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={showRegion}>Show all counties</button>
-    <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={() => onselect(selected)}>Locate selected county</button>
-    <div class="source">Boundaries: U.S. Census Bureau · Display only</div>
+    <div class="map-navigation">
+      <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={showRegion}>Show all counties</button>
+      <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={() => onselect(selected)}>Locate selected county</button>
+    </div>
+    <div class="source">
+      <div>Boundaries: U.S. Census Bureau · Display only</div>
+      {#if contextAdded}
+        <div class="map-credit" aria-label="Basemap attribution">
+          <a href="https://openmaptiles.org/">© OpenMapTiles</a> · <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>
+        </div>
+      {/if}
+      {#if contextFailed}<div role="status">Some basemap details are unavailable.</div>{/if}
+    </div>
   </div>
   {#if failed}<p class="failure" role="status">Map unavailable. Open County coverage to select a county.</p>{/if}
 </div>
 <style>
 .map-frame { position: relative; height: 100%; min-height: 380px; }
 .canvas { position: absolute; inset: 0; }
-.map-actions { position: absolute; bottom: 12px; left: 12px; right: 150px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.map-actions { position: absolute; bottom: 12px; left: 12px; right: 150px; display: flex; align-items: end; gap: 8px; pointer-events: none; }
+.map-navigation { display: flex; flex: none; gap: 8px; pointer-events: auto; }
+@media (max-width: 600px) {
+  .map-actions { flex-direction: column-reverse; align-items: start; right: 12px; }
+  .map-actions .source { max-width: calc(100% - 130px); }
+}
 .failure, .source { background: var(--surface); padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; pointer-events: none; }
-.source { font-size: 10px; }
+.source { min-width: 0; overflow-wrap: anywhere; font-size: 10px; line-height: 1.35; padding: 4px 8px; }
+.map-credit { pointer-events: auto; }
+.map-credit a { text-decoration: underline; }
 .failure { position: absolute; bottom: 155px; left: 12px; right: 12px; }
 :global(.layer-map-label) { color: #f3e9a8; background: #24272be8; padding: 1px 4px; border-radius: 3px; font-size: 11px; white-space: nowrap; pointer-events: none; }
 :global(.road-map-label) { color: #ffb691; font-size: 10px; }
