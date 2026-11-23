@@ -192,8 +192,8 @@ const releaseDate = (value: string) => value.slice(0, 10);
 function inspectParcel(id: string, focus = false) {
   pendingParcelFocus = focus ? id : '';
   parcelFocusError = false;
+  if (parcelID !== id) research = undefined;
   parcelID = id;
-  research = undefined;
   panelOpen = true;
 }
 
@@ -418,7 +418,8 @@ return () => task.abort();
 {#if editingDetails}<form onsubmit={(event) => { event.preventDefault(); saveFields(); }}><fieldset disabled={savingDetails}><legend>Show individual fields in parcel details</legend>{#each detailGroups as group}<div class="field-picker-group"><strong>{group.label}</strong>{#each group.fields as field}<label class="check"><input type="checkbox" class="checkbox" checked={draftFields.includes(field.id)} onchange={() => toggleField(field.id)} />{field.label}</label>{/each}</div>{/each}<button class="btn btn-sm" type="submit">Save details</button></fieldset></form>{/if}<p role="status" aria-live="polite">{preferenceStatus}</p></div>
 <div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence id={parcelID} fields={groups} releaseId={flood?.release?.id} onlocation={focusParcelFromList} onresearch={updateResearch} /></div>
               </Tabs.Content>
-              <Tabs.Content value="research" class="research-content">
+              <Tabs.Content value="research">
+              <div class="research-content">
                 <ul aria-label="External research sites" class="research-sites">
                   <li><a href="https://property.spatialest.com/nc/union" target="_blank" rel="noopener noreferrer">Union County property records</a> · Search county property details by parcel number.</li>
                   <li><a href="https://unionnc.devnetwedge.com/" target="_blank" rel="noopener noreferrer">Union County tax records</a> · Search tax bills and payment information by parcel number; verify available tax years at the site.</li>
@@ -427,6 +428,7 @@ return () => task.abort();
                   {/if}
                 </ul>
                 <p>County parcel number: {currentResearch ? currentResearch.parcelNumber || 'Not recorded' : 'Loading…'}. Use this number to search the county sites; these links open search pages, not a specific parcel. An unavailable lookup does not mean the county has no record.</p>
+              </div>
               </Tabs.Content>
             </Tabs>
           </section>

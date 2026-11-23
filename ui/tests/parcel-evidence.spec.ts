@@ -18,7 +18,12 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.route('**/api/v1/**', route => {
   const url = new URL(route.request().url()); requested.push(url.pathname);
   if (url.pathname === '/api/v1/parcels') return route.fulfill({ json: { items: [{ id: first, parcel_number: '00123450', address: 'Fixture Way' }, { id: second, parcel_number: 'SECOND', address: null }], count: 2, source_stamp: 'fixture' } });
-  if (url.pathname === '/api/v1/parcels/map') return route.fulfill({ json: { features: [], match_count: 2, source_stamp: 'fixture' } });
+  if (url.pathname === '/api/v1/parcels/map') {
+   const [west, south, east, north] = (url.searchParams.get('bbox') ?? '').split(',').map(Number);
+   const atFirst = Number(url.searchParams.get('zoom')) >= 16 && west < -80.7 && east > -80.7 && south < 34.89 && north > 34.89;
+   const ring = [[-80.701, 34.889], [-80.699, 34.889], [-80.699, 34.891], [-80.701, 34.891], [-80.701, 34.889]];
+   return route.fulfill({ json: { features: atFirst ? [{ id: first, geometry: { type: 'Polygon', coordinates: [ring] }, match: true }] : [], match_count: 2, source_stamp: 'fixture' } });
+  }
   if (url.pathname.endsWith('/soil')) return route.fulfill({ json: { available: false, reason: 'no published assessment' } });
   if (url.pathname.endsWith('/tax')) return route.fulfill({ json: { bills: [], delinquent_balances: [], reported_delinquent_total: null, pipeline: [], foreclosure_cases: [], note: 'Missing evidence is not a verified zero or a payoff quote' } });
   if (url.pathname.endsWith('/vacancy')) return route.fulfill({ json: { available: false, tier: 'unknown', reason: 'validated_evidence_not_published' } });
@@ -63,6 +68,18 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  expect(requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first))).toHaveLength(evidenceRequests);
  expect(externalRequests).toEqual([]);
  await page.screenshot({ path: testInfo.outputPath('research-links.png'), fullPage: true });
+ const canvas = page.locator('canvas.maplibregl-canvas');
+ const bounds = (await canvas.boundingBox())!;
+ const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+ await expect(async () => {
+  await page.mouse.move(center.x, center.y);
+  await expect(canvas).toHaveCSS('cursor', 'pointer', { timeout: 250 });
+ }).toPass({ timeout: 5000 });
+ await page.mouse.click(center.x, center.y);
+ await expect(panel).toContainText('County parcel number: 00123450');
+ await expect(sites.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', /center=34\.89%2C-80\.7.*basemap=satellite/);
+ expect(requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first))).toHaveLength(evidenceRequests);
+ await page.screenshot({ path: testInfo.outputPath('research-map-reselected.png'), fullPage: true });
  await panel.getByRole('tab', { name: 'Evidence', exact: true }).click();
  await expect(panel.getByRole('link', { name: 'Open satellite view' })).toHaveCount(0);
  await expect(panel).toContainText('No published soil assessment');
