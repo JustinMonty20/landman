@@ -69,6 +69,8 @@ test('saved compact groups persist across parcels and reload, including empty se
   await page.getByRole('button', { name: /FIRST · Fixture Way/ }).click();
   await expect(panel.getByRole('region', { name: 'Reported delinquent total' })).toBeVisible();
   await panel.getByRole('button', { name: 'Choose detail fields' }).click();
+  await expect(panel.getByRole('checkbox', { name: 'Owner name' })).toBeChecked();
+  await page.screenshot({ path: testInfo.outputPath('individual-field-picker.png') });
   await panel.getByRole('checkbox', { name: 'Mapped acreage', exact: true }).uncheck();
   await panel.getByRole('checkbox', { name: 'Reported delinquent total' }).uncheck();
   await panel.getByRole('checkbox', { name: 'Owner name' }).uncheck();
