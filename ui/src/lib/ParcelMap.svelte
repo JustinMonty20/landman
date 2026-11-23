@@ -194,8 +194,10 @@ $effect(() => {
 <div class="map-frame">
   <div class="canvas" bind:this={container} aria-label="County outline map"></div>
   <div class="map-actions">
-    <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={showRegion}>Show all counties</button>
-    <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={() => onselect(selected)}>Locate selected county</button>
+    <div class="map-navigation">
+      <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={showRegion}>Show all counties</button>
+      <button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" disabled={!ready || failed} onclick={() => onselect(selected)}>Locate selected county</button>
+    </div>
     <div class="source">
       <div>Boundaries: U.S. Census Bureau · Display only</div>
       {#if contextAdded}
@@ -211,9 +213,14 @@ $effect(() => {
 <style>
 .map-frame { position: relative; height: 100%; min-height: 380px; }
 .canvas { position: absolute; inset: 0; }
-.map-actions { position: absolute; bottom: 12px; left: 12px; right: 150px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.map-actions { position: absolute; bottom: 12px; left: 12px; right: 150px; display: flex; align-items: end; gap: 8px; pointer-events: none; }
+.map-navigation { display: flex; flex: none; gap: 8px; pointer-events: auto; }
+@media (max-width: 600px) {
+  .map-actions { flex-direction: column-reverse; align-items: start; right: 12px; }
+  .map-actions .source { max-width: calc(100% - 130px); }
+}
 .failure, .source { background: var(--surface); padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; pointer-events: none; }
-.source { font-size: 10px; line-height: 1.35; padding: 4px 8px; }
+.source { min-width: 0; overflow-wrap: anywhere; font-size: 10px; line-height: 1.35; padding: 4px 8px; }
 .map-credit { pointer-events: auto; }
 .map-credit a { text-decoration: underline; }
 .failure { position: absolute; bottom: 155px; left: 12px; right: 12px; }

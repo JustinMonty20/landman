@@ -45,19 +45,28 @@ test('clicking Union opens filters and preserves panel preferences across zoom l
   await expect(page.getByRole('heading', { name: 'Filter Union parcels' })).toBeVisible();
 });
 
-test('map navigation remains clickable with both county panels open', async ({ page }) => {
+test('map navigation remains clickable with wide attribution and both county panels open', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Inspect Union, NC', exact: true }).click();
   await expect(page.getByRole('complementary', { name: 'Parcel filters' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Matching parcels' })).toBeVisible();
-  await page.getByRole('button', { name: 'Locate selected county', exact: true }).click();
-  await page.getByRole('button', { name: 'Show all counties', exact: true }).click();
+  await expect(page.getByText('Some basemap details are unavailable.')).toBeVisible();
+  await page.addStyleTag({ content: '.map-credit { font-size: 18px; }' });
+  const panel = page.getByRole('region', { name: 'Map panel' });
+  const locate = page.getByRole('button', { name: 'Locate selected county', exact: true });
+  const region = page.getByRole('button', { name: 'Show all counties', exact: true });
+  const edge = (await panel.boundingBox())!;
+  for (const button of [locate, region]) {
+    expect((await button.boundingBox())!.y).toBeGreaterThanOrEqual(edge.y + edge.height);
+  }
+  await locate.click();
+  await region.click();
   await expect(page.getByRole('searchbox')).toHaveCount(0);
   await expect(page.locator('.county-map-label:visible')).toHaveCount(9);
   await page.getByRole('button', { name: 'Locate selected county', exact: true }).click();
   await expect(page.getByRole('complementary', { name: 'Parcel filters' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Matching parcels' })).toBeVisible();
-  await page.screenshot({ path: `test-results/${test.info().project.name}-open-panel-navigation.png` });
+  await page.screenshot({ path: testInfo.outputPath('open-panel-navigation.png') });
 });
 
 test('zoom and map movement change detail without changing the selected county', async ({ page }) => {
