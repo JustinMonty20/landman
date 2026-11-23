@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onMount } from 'svelte';
+import { onMount, tick } from 'svelte';
 import { Tabs } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import { detailGroups, detailFields, defaultDetailFields, parseDetailFields, type DetailField } from '../lib/detailGroups';
@@ -39,6 +39,11 @@ let parcelFocusError = $state(false);
 let panelOpen = $state(true);
 let mapPanelOpen = $state(true);
 let mapTab = $state('filters');
+let evidenceTab = $state('evidence');
+let research = $state<{ id: string; parcelNumber: string | null; coordinates: [number, number] | null }>();
+function updateResearch(id: string, parcelNumber: string | null, coordinates: [number, number] | null) {
+  if (id === parcelID) research = { id, parcelNumber, coordinates };
+}
 let draftFilters = $state(emptyFilterDraft());
 const selected = $derived(counties.find((county) => county.id === selectedId)!);
 const parcelView = $derived(detail !== 'region' && selected.status === 'configured');
@@ -47,6 +52,51 @@ const layerQuery = $derived(parcelView && viewport ? mapLayerQuery(viewport) : '
 let parcels = $state<ParcelShape[]>([]);
 let parcelError = $state('');
 let parcelID = $state('');
+const currentResearch = $derived(research?.id === parcelID ? research : undefined);
+type ParcelSuggestion = { id: string; parcel_number: string | null; address: string | null };
+let finderText = $state('');
+let finderOpen = $state(false);
+let suggestions = $state<ParcelSuggestion[]>([]);
+let finderStatus = $state('');
+let activeSuggestion = $state(0);
+const finderQuery = $derived(finderText.trim());
+$effect(() => {
+  const query = finderQuery;
+  const available = parcelView;
+  const county = selectedId;
+  suggestions = [];
+  finderStatus = '';
+  activeSuggestion = 0;
+  if (!available || county !== '37179') return;
+  const length = new TextEncoder().encode(query).length;
+  if (length < 2) return;
+  if (length > 80) { finderStatus = 'Enter 80 bytes or fewer.'; return; }
+  const task = new AbortController();
+  finderStatus = 'Searching…';
+  readMapData<{ items: ParcelSuggestion[] }>(`/api/v1/parcels/lookup?q=${encodeURIComponent(query)}`, task.signal).then(data => {
+    if (task.signal.aborted) return;
+    suggestions = data.items;
+    finderStatus = data.items.length ? '' : 'No parcels found.';
+  }).catch(() => { if (!task.signal.aborted) finderStatus = 'Parcel search is unavailable. Try again.'; });
+  return () => task.abort();
+});
+function chooseSuggestion(parcel: ParcelSuggestion) {
+  finderOpen = false;
+  finderText = '';
+  inspectParcel(parcel.id, true);
+}
+function finderKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') { finderOpen = false; return; }
+  if (!suggestions.length) return;
+  if (!finderOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) finderOpen = true;
+  if (!finderOpen) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    activeSuggestion = (activeSuggestion + (event.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length;
+    void tick().then(() => document.getElementById(`parcel-suggestion-${activeSuggestion}`)?.scrollIntoView({ block: 'nearest' }));
+  }
+  if (event.key === 'Enter') { event.preventDefault(); chooseSuggestion(suggestions[activeSuggestion]); }
+}
 let floodOn = $state(false);
 type FloodCategory = keyof typeof floodStyles;
 let floodCategory = $state<FloodCategory | ''>('');
@@ -186,6 +236,7 @@ const releaseDate = (value: string) => value.slice(0, 10);
 function inspectParcel(id: string, focus = false) {
   pendingParcelFocus = focus ? id : '';
   parcelFocusError = false;
+  if (parcelID !== id) research = undefined;
   parcelID = id;
   panelOpen = true;
 }
@@ -260,7 +311,7 @@ function showSelectedFilters() {
   if (detail === 'region') selectCounty(selectedId);
 }
 function selectCounty(id: CountyId) {
-  if (selectedId !== id) parcelID = '';
+  if (selectedId !== id) { parcelID = ''; finderText = ''; finderOpen = false; }
   selectedId = id;
   focusRequest += 1;
   detail = 'county';
@@ -295,8 +346,13 @@ return () => task.abort();
     {#if selected.status === 'locked'}<p class="locked-notice" role="status">{selected.name} County is locked. Parcel discovery is not available.</p>{/if}
     {#if parcelView}
       <div class="map-controls">
-        <div class="search-row"><label class="search"><span>Find parcel ID or address</span><input class="input" type="search" aria-describedby="parcel-availability" placeholder={`Find parcel in ${selected.name} County`} disabled /></label></div>
-        <span class="sr-only" id="parcel-availability">Parcel search and filters are unavailable. Zoom in and select a parcel to see flood evidence.</span>
+        <div class="search-row" onfocusout={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) finderOpen = false; }}>
+          <label class="search"><span>Find parcel ID or address</span><input class="input" type="search" role="combobox" aria-autocomplete="list" aria-expanded={finderOpen && !!finderQuery} aria-controls="parcel-suggestions" aria-activedescendant={finderOpen && suggestions.length ? `parcel-suggestion-${activeSuggestion}` : undefined} placeholder={`Find parcel in ${selected.name} County`} bind:value={finderText} onfocus={() => finderOpen = true} oninput={() => finderOpen = true} onkeydown={finderKeydown} /></label>
+          {#if finderOpen && finderQuery}<div id="parcel-suggestions" class="search-suggestions" role="listbox" aria-label="Parcel suggestions">
+            {#each suggestions as parcel, index (parcel.id)}<button id={`parcel-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion} onclick={() => chooseSuggestion(parcel)}>{parcel.address || 'Address not recorded'} · {parcel.parcel_number || `Parcel ${parcel.id.slice(0, 8)}`}</button>{/each}
+            {#if finderStatus}<p role="status">{finderStatus}</p>{/if}
+          </div>{/if}
+        </div>
         {#if filterCount > 0}{@render countySummary()}{/if}
       </div>
     {/if}
@@ -401,9 +457,37 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
+            <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
+              <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
+                <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="research">Research links</Tabs.Trigger>
+              </Tabs.List>
+              <Tabs.Content value="evidence">
             <div class="detail-editor"><button class="btn btn-sm" aria-expanded={editingDetails} onclick={() => { draftFields = [...groups]; editingDetails = !editingDetails; }}>Choose detail fields</button>
 {#if editingDetails}<form onsubmit={(event) => { event.preventDefault(); saveFields(); }}><fieldset disabled={savingDetails}><legend>Show individual fields in parcel details</legend>{#each detailGroups as group}<div class="field-picker-group"><strong>{group.label}</strong>{#each group.fields as field}<label class="check"><input type="checkbox" class="checkbox" checked={draftFields.includes(field.id)} onchange={() => toggleField(field.id)} />{field.label}</label>{/each}</div>{/each}<button class="btn btn-sm" type="submit">Save details</button></fieldset></form>{/if}<p role="status" aria-live="polite">{preferenceStatus}</p></div>
-<div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence id={parcelID} fields={groups} releaseId={flood?.release?.id} onlocation={focusParcelFromList} /></div>
+<div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence id={parcelID} fields={groups} releaseId={flood?.release?.id} onlocation={focusParcelFromList} onresearch={updateResearch} /></div>
+              </Tabs.Content>
+              <Tabs.Content value="research">
+              <div class="research-content">
+                <ul aria-label="External research sites" class="research-sites">
+                  {#if currentResearch?.parcelNumber}
+                    <li><a href={'https://property.spatialest.com/nc/union#/property/' + encodeURIComponent(currentResearch.parcelNumber)} target="_blank" rel="noopener noreferrer">Union County property records</a> · Open the selected parcel’s county property record.</li>
+                  {:else}
+                    <li>Union County property records · A county parcel number is required to open the property record.</li>
+                  {/if}
+                  {#if currentResearch?.parcelNumber}
+                    <li><a href={'https://unionnc.devnetwedge.com/parcel/view/' + encodeURIComponent(currentResearch.parcelNumber) + '/2026'} target="_blank" rel="noopener noreferrer">Union County tax records</a> · Open the selected parcel’s 2026 tax record and payment information.</li>
+                  {:else}
+                    <li>Union County tax records · A county parcel number is required to open the tax record.</li>
+                  {/if}
+                  {#if currentResearch?.coordinates && currentResearch.coordinates.every(Number.isFinite)}
+                    <li><a href={'https://earth.google.com/web/search/' + currentResearch.coordinates[1] + ',' + currentResearch.coordinates[0]} target="_blank" rel="noopener noreferrer">Open satellite view</a> · Google Earth at a point inside the stored parcel. Imagery does not show boundaries or guarantee currency.</li>
+                  {/if}
+                </ul>
+                <p>County parcel number: {currentResearch ? currentResearch.parcelNumber || 'Not recorded' : 'Loading…'}. Both county links open this parcel directly. The tax link opens the 2026 record. An unavailable lookup does not mean the county has no record.</p>
+              </div>
+              </Tabs.Content>
+            </Tabs>
           </section>
           {:else}
           <section class="results" id="parcel-panel" aria-label="Matching parcels">
@@ -438,7 +522,6 @@ return () => task.abort();
 <style>
 h1 { font-size: 19px; font-weight: 650; }
 .results .pagination { margin-top: auto; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .map-controls { max-width: 440px; right: 330px; }
 .county-summary { position: absolute; top: 12px; left: 12px; right: 65px; width: fit-content; max-width: calc(100% - 77px); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 11px; cursor: pointer; }
 .map-controls .county-summary { position: static; max-width: 100%; }
@@ -468,6 +551,10 @@ h1 { font-size: 19px; font-weight: 650; }
 .selected-zoning { border-top: 1px solid var(--border); padding-top: 6px; }
 .selected-zoning li { margin-top: 4px; }
 .field-picker-group { display: grid; gap: 3px; margin: 7px 0; }
+.research-content { padding: 12px 14px; font-size: 13px; line-height: 1.5; overflow-y: auto; }
+.research-sites { list-style: disc; padding-left: 20px; margin-bottom: 14px; }
+.research-sites li { margin-bottom: 12px; }
+.research-sites a { color: #93c5fd; text-decoration: underline; }
 .detail-editor { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .detail-editor fieldset { display: grid; gap: 4px; }
 .flood-details, .empty { overflow: auto; padding: 10px; }

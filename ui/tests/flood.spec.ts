@@ -37,7 +37,7 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
   }
   await page.getByRole('button', { name: 'FLOOD-TEST' }).click();
   const details = page.getByRole('region', { name: 'Parcel evidence' });
-  await expect(details).toContainText('AE: 7.00 acres');
+  await expect(details).toContainText('AE subtype not recorded: 7.00 acres');
   await expect(details).toContainText('3.00 acres');
   await page.getByRole('button', { name: 'Close parcel details' }).click();
   const legendFilter = page.getByRole('button', { name: 'Special flood hazard area (1% annual chance)', exact: true });

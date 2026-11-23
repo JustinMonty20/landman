@@ -51,6 +51,17 @@ func TestHTTPPostGIS(t *testing.T) {
 		}
 		return w.Code, body
 	}
+	if _, err := pool.Exec(ctx, `UPDATE parcels SET valuation_land=123000,valuation_improvement=0,valuation_total=123000,valuation_assessed=NULL WHERE id=$1`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := request("/api/v1/parcels/" + ids[0]); code != 200 {
+		t.Fatalf("parcel detail status %d", code)
+	} else {
+		values := body["valuation"].(map[string]any)
+		if values["land"] != "123000.00" || values["improvement"] != "0.00" || values["total"] != "123000.00" || values["assessed"] != nil {
+			t.Fatalf("parcel valuations (null and zero distinct): %v", values)
+		}
+	}
 	if code, body := request("/api/v1/parcels/" + ids[0] + "/vacancy"); code != 200 || body["tier"] != "unknown" || body["available"] != false {
 		t.Fatalf("unverified vacancy %d %v", code, body)
 	}

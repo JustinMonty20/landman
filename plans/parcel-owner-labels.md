@@ -2,7 +2,7 @@
 
 Union County's GIS layer 215 supplies current owner names (`CURR_NAME1`, `CURR_NAME2`) and current mailing address (`CURR_STATE`, among other fields). Label parcels for **mailing outside North Carolina** and for **legal-entity designators in the current owner's name**. The former is not proof of the owner's residence; the latter is a name-based indicator, not a verified Secretary of State registration or beneficial-ownership finding. A corporation is a subset of entities: an LLC must not be called a corporation.
 
-This plan is classification and queryability only. It does not send alerts, infer death/probate, scrape court or deeds sites, buy RPA extracts, or build contact enrichment. The action backlog lives in `.agents/diary/parcel-actions.md`, not here.
+This plan covers classification and parcel filtering, including separate estate and trust name signals. It does not send alerts, infer death/probate, scrape court or deeds sites, buy RPA extracts, or build contact enrichment. The action backlog lives in `.agents/diary/parcel-actions.md`, not here.
 
 ## Inputs and boundaries
 
@@ -27,8 +27,38 @@ Rules:
 
 1. Trim whitespace, uppercase the state, and accept only known two-letter USPS states plus DC and territories; `NC` is `no`, another recognized state/territory is `yes`. Missing, malformed, military routing (`AA`, `AE`, `AP`), and foreign addresses are `unknown` until the format is investigated. Do not infer a state from ZIP code or street text.
 2. Trim and case-fold current owner names; normalize periods and repeated whitespace for suffix matching. Match **whole-word legal suffixes at the end of a complete name line** (allow trailing punctuation), not arbitrary substrings or sale grantors. Corporate: `INC`, `INCORPORATED`, `CORP`, `CORPORATION`. Other entity: `LLC`, `LP`, `LLP`, `LTD`, `LIMITED`, `PLC`, `PC` (including punctuated spellings such as `L.L.C.`). If either owner line contains a complete match, report the suffix and that line. A complete corporation match wins when both classes appear. Never match `CO`/`COMPANY` as high confidence.
-3. If both current owner lines are empty, both name indicators are `unknown`; if names exist without a recognized suffix, both are `not_detected`. Do not concatenate two possibly distinct owners to manufacture a suffix: `CURR_NAME1=ACME`, `CURR_NAME2=LLC` needs review, not a high-confidence entity match. Likewise `TRUST`, `ESTATE`, `HEIRS`, `ET AL`, and apparent business words without a suffix do not imply a corporation; consider separate review signals later.
+3. If both current owner lines are empty, both name indicators are `unknown`; if names exist without a recognized suffix, both are `not_detected`. Do not concatenate two possibly distinct owners to manufacture a suffix: `CURR_NAME1=ACME`, `CURR_NAME2=LLC` needs review, not a high-confidence entity match. Likewise `TRUST`, `ESTATE`, `HEIRS`, `ET AL`, and apparent business words without a suffix do not imply a corporation. Classify estate and trust terms separately under the contract below.
 4. When a source record changes, **recompute** labels from the new snapshot, including clearing a prior `matched`/`yes` on missing or changed fields. Do not retain stale classifications, and do not interpret `updated_at` as a recording date or as evidence of an owner change.
+
+## Estate and trust name signals
+
+Estate and trust name signals are in scope. Keep them separate from the entity and corporation labels. They indicate text in current owner names, not verified legal ownership, death, or probate status.
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `estate_name_indicator` | `matched`, `not_detected`, `unknown` | A current owner name contains an estate term. A match does not establish an active estate or probate case. |
+| `trust_name_indicator` | `matched`, `not_detected`, `unknown` | A current owner name contains a trust term. A match does not establish trust type, beneficiaries, or trustee authority. |
+
+### Matching rules
+
+1. Use only `Owner.CurrentName1` and `Owner.CurrentName2`. Normalize case, punctuation, and repeated whitespace. Inspect each line separately. Do not use sale grantors or tax-year owner snapshots.
+2. Match whole words anywhere in a name line. Initial estate terms are `ESTATE` and `ESTATE OF`. Initial trust terms are `TRUST`, `TRUSTEE`, and `TRUSTEES`. Select the longest matching phrase on a line. If both lines match the same signal, retain line 1 as evidence.
+3. Exclude the phrase `REAL ESTATE` from estate matching. A separate estate term on the same line can still match. Do not match substrings such as `ESTATES`, `TRUSTED`, or `TRUSTING`. Abbreviations such as `EST`, `TR`, and `TTEE` require source evidence before inclusion. `HEIRS` and `ET AL` alone do not match either signal.
+4. If both names are blank, return `unknown` for both signals. If a name exists but no term matches a signal, return `not_detected` for that signal. This does not prove the owner is not an estate or trust.
+5. Allow both signals to match. Keep them independent of entity and corporation matches. For example, `ACME TRUST LLC` can match trust and entity without matching corporation. Businesses with `TRUST` in their names can match. State this limit in the UI.
+6. Retain the matched term and current owner line number separately for each positive signal. Do not copy full owner names into the label table. Clear evidence when a source change removes a match.
+
+### Delivery and verification
+
+- [ ] Extend the existing classifier and result types with both signals and their separate evidence. Preserve the existing entity and corporation rules.
+- [ ] Add a new migration for existing installations. Do not edit applied migrations. Constrain states and require term and line evidence exactly when each signal is `matched`. Add indexes for positive parcel filters.
+- [ ] Extend storage, API results, and the canonical parcel publication transaction. Recompute both signals when current owner fields change, including changes to blank values. A failed import must preserve the previous parcel and label snapshot.
+- [ ] Add a bounded, restart-safe classification job over stored Union GIS parcels. Route it through `jobs.Runner.Run` with a stable job ID. Do not fetch source data. Verify that every eligible parcel has both statuses after completion.
+- [ ] Add separate filters named **Estate name detected** and **Trust name detected**. Each selects its `matched` state only. Selecting both includes parcels that match either signal. Combine this selection with other parcel criteria under the existing filter rules. Keep unknown and negative states distinct in API results. Show the matched term and owner line in parcel evidence with the name-only limitation.
+- [ ] Test either owner line, case and punctuation variants, `ESTATE OF JANE DOE`, `JANE DOE ESTATE`, `DOE FAMILY TRUST`, `JANE DOE TRUSTEE`, `DOE TRUSTEES`, both signals together, and trust plus LLC. Test blank names, ordinary personal names, `ACME REAL ESTATE LLC`, excluded substrings, and abbreviations. Confirm estate and trust terms alone do not imply entity or corporation matches.
+- [ ] Test repeated classification, removed terms, blank fields, rollback, stored-data classification, filter results, and filter combinations. Verify evidence constraints and parcel-delete cascade behavior.
+- [ ] Inspect stored source examples for false positives before release. Report counts and matching limits. Do not describe this check as legal verification.
+- [ ] Rebuild the Svelte UI and collect asserted browser evidence with `/landman-ui-evidence` for each filter, combined selection, empty results, and displayed evidence.
 
 ## Work and evidence
 
@@ -54,4 +84,4 @@ Rules:
 
 ## Further insights (not part of this plan)
 
-The same stored GIS snapshots may support *candidate* signals such as mailing/situs mismatch (situs address is incomplete), tax-year-versus-current-owner discrepancy (expected timing differences), valuation or building changes, owner-plus-mailing-address portfolio candidates (shared mailboxes are not proof of common ownership), and trust/estate terms in owner names. The Union tax-file plan separately covers delinquency and foreclosure. None is a verified death, probate case, corporate registration, or timely deed recording; investigate their source semantics and false-positive rates before implementing alerts. Next steps for actions are tracked in `.agents/diary/parcel-actions.md`.
+The same stored GIS snapshots may support *candidate* signals such as mailing/situs mismatch (situs address is incomplete), tax-year-versus-current-owner discrepancy (expected timing differences), valuation or building changes, owner-plus-mailing-address portfolio candidates (shared mailboxes are not proof of common ownership). Estate and trust name signals are included in this plan. The Union tax-file plan separately covers delinquency and foreclosure. None is a verified death, probate case, corporate registration, or timely deed recording; investigate their source semantics and false-positive rates before implementing alerts. Next steps for actions are tracked in `.agents/diary/parcel-actions.md`.

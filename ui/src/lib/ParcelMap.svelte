@@ -5,7 +5,7 @@
 
 <script lang="ts">
 import { onMount } from 'svelte';
-import { addBasemap, basemapSource, isBasemapRequest } from './basemap';
+import { addBasemap, basemapSource, isBasemapRequest, mapBackground } from './basemap';
 import { Map, Marker, NavigationControl, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 import type { FeatureCollection } from 'geojson';
 import { emptyShapes, floodStyles, type Viewport } from './flood';
@@ -85,7 +85,7 @@ onMount(() => {
       container, bounds: countyBounds(), fitBoundsOptions: { padding, maxZoom: 8.5 },
       attributionControl: false,
       transformRequest: (url) => isBasemapRequest(url) ? { url, referrerPolicy: 'no-referrer' } : { url },
-      style: { version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#24272b' } }] }
+      style: { version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': mapBackground } }] }
     });
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right');
     map.on('error', (event) => {

@@ -61,6 +61,7 @@ for (const blocked of [false, true]) {
     }
     const locate = page.getByRole('button', { name: 'Locate selected county' });
     await expect(locate).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('00-county.png') });
     const closeView = page.waitForResponse(response => response.url().includes('/parcels/map?') && Number(new URL(response.url()).searchParams.get('zoom')) >= 13);
     for (let i = 0; i < 5; i++) await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
     await closeView;
@@ -81,8 +82,8 @@ for (const blocked of [false, true]) {
     await page.screenshot({ path: info.outputPath('02-filtered.png') });
     await result.click();
     await expect(page.getByRole('heading', { name: 'Parcel evidence', exact: true })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Parcel identity' })).toContainText('P-1 · Fixture Road');
-    await expect(page.getByRole('heading', { name: 'Mapped acreage', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Parcel identity' })).toContainText('P-1 · Site address: Fixture Road');
+    await expect(page.getByText('Mapped acreage', { exact: true })).toBeVisible();
     await expect(locate).toBeEnabled();
     await expect(page.getByText('Map unavailable.', { exact: false })).toHaveCount(0);
     expect(metadataRequests).toBe(1);

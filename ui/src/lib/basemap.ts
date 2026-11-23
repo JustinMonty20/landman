@@ -1,4 +1,16 @@
+import type { Feature, MultiPolygon } from 'geojson';
 import type { LayerSpecification, Map } from 'maplibre-gl';
+import polygonClipping, { type Polygon } from 'polygon-clipping';
+import { countyGeometry } from './counties';
+
+export const mapBackground = '#24272b';
+
+export function basemapMask(): Feature<MultiPolygon> {
+  const world: Polygon = [[[-180, -90], [180, -90], [180, 90], [-180, 90], [-180, -90]]];
+  const counties = countyGeometry.features.map(({ geometry }) =>
+    geometry.coordinates.map(ring => ring.map(([lon, lat]): [number, number] => [lon, lat])));
+  return { type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: polygonClipping.difference(world, ...counties) } };
+}
 
 const host = 'https://tiles.openfreemap.org';
 export const basemapSource = 'openfreemap';
@@ -30,6 +42,9 @@ const layers: LayerSpecification[] = [
 
 export function addBasemap(map: Map, before: string): void {
   map.setGlyphs(`${host}/fonts/{fontstack}/{range}.pbf`);
+  map.addSource('context-mask', { type: 'geojson', data: basemapMask(), tolerance: 0 });
+  map.addLayer({ id: 'context-mask', type: 'fill', source: 'context-mask', minzoom: 9,
+    paint: { 'fill-color': mapBackground, 'fill-antialias': false } }, before);
   map.addSource(source, { type: 'vector', url: `${host}/planet` });
-  for (const layer of layers) map.addLayer(layer, before);
+  for (const layer of layers) map.addLayer(layer, 'context-mask');
 }
