@@ -6,7 +6,7 @@ Architecture only. This PR does not implement storage, routes, UI, or reminder d
 
 The operator approved one favorites list and one private Kanban board per user. A Kanban board groups parcel cards into columns that represent lead states. Users define their own states. There are no separate named lists, multiple boards, or list memberships.
 
-This plan defines the private workflow required by [V1](v1.md) and [the browser application](browser-parcel-ui.md). For this workflow, their references to saved lists mean this single favorites collection. Preserve their other commitments, including saved-parcel tax requests and personal email/SMS reminder delivery. This plan does not implement those requests or remove their release gates.
+This plan defines the private workflow required by [V1](v1.md) and [the browser application](browser-parcel-ui.md). For this workflow, their references to saved lists mean this single favorites collection. Preserve their other commitments, including saved-parcel tax requests and personal SMS reminder delivery. This plan does not implement those requests or remove their release gates.
 
 ## Existing code and proposed seam
 
@@ -98,7 +98,7 @@ Exact method and payload specifications belong to implementation review. Every m
 - Limit the body to one SMS segment using the encoding of the complete message. GSM-7 supports up to 160 septets; extension characters consume two septets. Unicode SMS generally supports 70 UTF-16 code units; supplementary characters consume two units. Verify the selected AWS product's encoding behavior before implementation acceptance. Do not use a universal character-count limit, truncate text, or silently send multiple segments. Show remaining capacity in the editor and apply the same validation on the server.
 - Target submission to AWS within 60 seconds of the due instant under normal operation. Measure due-to-provider-acceptance time. This is not a guarantee of carrier delivery time. After an outage, submit eligible unsent reminders no more than one hour after their due instant. After that window, mark delivery missed, show it to the user, and allow explicit rescheduling. Keep the task open. This recovery rule does not permit automatic repeats of accepted messages.
 
-SMS is the selected first delivery channel. Email remains a separate V1 delivery/preference commitment in the application plan; this decision does not silently remove it. Confirm its release scope separately.
+The operator selected SMS-only reminders for V1. Email reminder delivery and email reminder preferences are deferred. The in-app task queue remains required. This explicitly replaces the earlier V1 email/SMS scope.
 
 Store due times as UTC instants and retain an IANA timezone identifier for local display. Require explicit offset selection for ambiguous daylight-saving times; reject nonexistent local times. Initial reminders are one-time tasks. Recurrence is outside scope.
 
@@ -106,7 +106,7 @@ Task completion and delivery success are different states. A delivered notificat
 
 Use durable delivery records and bounded retries. Do not automatically retry a submission when provider acceptance is uncertain. Mark its delivery state as uncertain and let the user explicitly authorize another send after a duplicate warning. Keep this separate from retrying a definite rejection or recovering work that was never submitted. Any new send must still pass current task, destination, and scheduling checks. Claim work transactionally. Recover expired claims after interruption. Use provider idempotency where supported; do not promise exactly-once external delivery when provider acceptance is uncertain. Keep failures visible. Notifications go only to the buyer's verified destination, never an owner.
 
-Before delivery implementation, select the exact AWS runtime and SMS product, sender registration, verified destination process, consent and opt-out behavior, retry limits, and treatment of uncertain provider acceptance. AWS hosting, US-only SMS, single-segment user text, a 60-second normal submission target, and a one-hour outage recovery window are approved. Do not infer deployment from local tools. Do not add deployment artifacts until those decisions are made. An in-app queue can be delivered first, but it does not satisfy V1 email/SMS delivery commitments.
+Before delivery implementation, select the exact AWS runtime and SMS product, sender registration, verified destination process, consent and opt-out behavior, retry limits, and treatment of uncertain provider acceptance. AWS hosting, US-only SMS, single-segment user text, a 60-second normal submission target, and a one-hour outage recovery window are approved. Do not infer deployment from local tools. Do not add deployment artifacts until those decisions are made. An in-app queue can be delivered first, but it does not satisfy V1 SMS delivery commitments.
 
 Saved-parcel tax observation retention and integration remain governed by [the tax plan](tax-data-ingest.md). Before permanent deletion ships, define how it removes the user's private tax observations. Do not leave private child data orphaned or claim that this plan delivers the tax action.
 
