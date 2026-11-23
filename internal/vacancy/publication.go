@@ -72,9 +72,10 @@ func Publish(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 const publicationSQL = `WITH source_state AS MATERIALIZED (
- SELECT EXISTS(SELECT 1 FROM vacancy_live_shapes WHERE generation_id=$1::uuid AND shape IS NULL) AS source_shape_incomplete
+ SELECT EXISTS(SELECT 1 FROM vacancy_live_shapes WHERE generation_id=$1::uuid AND shape IS NULL) AS source_shape_incomplete,
+ (SELECT revision FROM vacancy_parcel_topology WHERE county_id='union') AS topology_revision
 ), evidence AS (
- SELECT p.id,x.source_shape_incomplete,p.source_parcel_id,p.shape,p.year_built,p.sqft,p.structure,p.structure_style,
+ SELECT p.id,x.source_shape_incomplete,x.topology_revision,p.source_parcel_id,p.shape,p.year_built,p.sqft,p.structure,p.structure_style,
  CASE WHEN c.parcel_row_version=p.xmin::text THEN
  c.observation_id::text || ':' || c.normalized_hash || ':' || c.geometry_hash || ':' || p.xmin::text END AS parcel_generation,
  EXISTS (SELECT 1 FROM parcels other WHERE other.id<>p.id AND other.county_id=p.county_id
@@ -121,8 +122,8 @@ const publicationSQL = `WITH source_state AS MATERIALIZED (
  WHEN NOT footprint THEN 'strong_candidate'
  ELSE 'review' END AS tier FROM selected
 )
- INSERT INTO vacancy_assessments AS current(parcel_id,tier,rule_version,parcel_generation,structure_generation,assessment_generation,facts,reason,assessed_at)
- SELECT id,tier,$4,coalesce(parcel_generation,'missing'),$1::uuid,$2::uuid,
+ INSERT INTO vacancy_assessments AS current(parcel_id,tier,rule_version,parcel_generation,structure_generation,assessment_generation,topology_revision,facts,reason,assessed_at)
+ SELECT id,tier,$4,coalesce(parcel_generation,'missing'),$1::uuid,$2::uuid,topology_revision,
  jsonb_build_object('year_built',year_built,'sqft',sqft,'building_value',building_value,'effective_av_year',$3,
  'overlapping_footprint',footprint,'uncertain_footprint',uncertain_footprint,'source_shape_incomplete',source_shape_incomplete,'parcel_reports_structure',parcel_reports_structure),
  CASE tier WHEN 'unknown' THEN 'necessary_evidence_missing_or_identity_ambiguous'
@@ -132,6 +133,6 @@ const publicationSQL = `WITH source_state AS MATERIALIZED (
  FROM classified
  ON CONFLICT(parcel_id) DO UPDATE SET tier=EXCLUDED.tier,rule_version=EXCLUDED.rule_version,
  parcel_generation=EXCLUDED.parcel_generation,structure_generation=EXCLUDED.structure_generation,
- assessment_generation=EXCLUDED.assessment_generation,facts=EXCLUDED.facts,reason=EXCLUDED.reason,assessed_at=EXCLUDED.assessed_at
- WHERE (current.tier,current.rule_version,current.parcel_generation,current.structure_generation,current.assessment_generation,current.facts,current.reason)
- IS DISTINCT FROM (EXCLUDED.tier,EXCLUDED.rule_version,EXCLUDED.parcel_generation,EXCLUDED.structure_generation,EXCLUDED.assessment_generation,EXCLUDED.facts,EXCLUDED.reason)`
+ assessment_generation=EXCLUDED.assessment_generation,topology_revision=EXCLUDED.topology_revision,facts=EXCLUDED.facts,reason=EXCLUDED.reason,assessed_at=EXCLUDED.assessed_at
+ WHERE (current.tier,current.rule_version,current.parcel_generation,current.structure_generation,current.assessment_generation,current.topology_revision,current.facts,current.reason)
+ IS DISTINCT FROM (EXCLUDED.tier,EXCLUDED.rule_version,EXCLUDED.parcel_generation,EXCLUDED.structure_generation,EXCLUDED.assessment_generation,EXCLUDED.topology_revision,EXCLUDED.facts,EXCLUDED.reason)`
