@@ -24,7 +24,7 @@ main { flex: 1; min-height: 0; position: relative; }
 .search span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .search-suggestions { position: absolute; z-index: 4; top: calc(100% + 4px); left: 0; right: 0; display: grid; max-height: 280px; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 18px #0008; }
 .search-suggestions button { min-height: 40px; padding: 8px 12px; color: inherit; text-align: left; background: transparent; border: none; border-bottom: 1px solid var(--border); cursor: pointer; }
-.search-suggestions button:hover, .search-suggestions button:focus-visible { background: #293546; }
+.search-suggestions button:hover, .search-suggestions button:focus-visible, .search-suggestions button[aria-selected='true'] { background: #293546; }
 .search-suggestions button:last-child { border-bottom: none; }
 .acreage { display: flex; gap: 8px; }
 .acreage label { font-size: 11px; font-weight: 600; display: grid; gap: 5px; }

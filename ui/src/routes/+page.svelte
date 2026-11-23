@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onMount } from 'svelte';
+import { onMount, tick } from 'svelte';
 import { Tabs } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import { detailGroups, detailFields, defaultDetailFields, parseDetailFields, type DetailField } from '../lib/detailGroups';
@@ -90,8 +90,11 @@ function finderKeydown(event: KeyboardEvent) {
   if (!suggestions.length) return;
   if (!finderOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) finderOpen = true;
   if (!finderOpen) return;
-  if (event.key === 'ArrowDown') { event.preventDefault(); activeSuggestion = (activeSuggestion + 1) % suggestions.length; }
-  if (event.key === 'ArrowUp') { event.preventDefault(); activeSuggestion = (activeSuggestion + suggestions.length - 1) % suggestions.length; }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    activeSuggestion = (activeSuggestion + (event.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length;
+    void tick().then(() => document.getElementById(`parcel-suggestion-${activeSuggestion}`)?.scrollIntoView({ block: 'nearest' }));
+  }
   if (event.key === 'Enter') { event.preventDefault(); chooseSuggestion(suggestions[activeSuggestion]); }
 }
 let floodOn = $state(false);
