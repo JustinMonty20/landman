@@ -88,15 +88,33 @@ Exact method and payload specifications belong to implementation review. Every m
 
 ## Reminder delivery and open decisions
 
+### Approved SMS requirements
+
+- Run production on AWS. The exact AWS runtime is not yet selected.
+- Use AWS SMS delivery to the user's own verified US phone number. Do not support other destination countries in the first release. A `+1` prefix alone does not establish a US destination.
+- Let the user enter reminder text and select a date and time for a favorite parcel.
+- Send once per scheduled reminder. Successful delivery does not complete the task. Do not repeat automatically until completion. Explicit snooze or reschedule creates a new scheduled version.
+- Send only the user's text. Do not append a parcel identifier, link, application name, or other text to the reminder body. Carrier-required sender and opt-out behavior must be checked before release; do not silently change this content contract.
+- Limit the body to one SMS segment using the encoding of the complete message. GSM-7 supports up to 160 septets; extension characters consume two septets. Unicode SMS generally supports 70 UTF-16 code units; supplementary characters consume two units. Verify the selected AWS product's encoding behavior before implementation acceptance. Do not use a universal character-count limit, truncate text, or silently send multiple segments. Show remaining capacity in the editor and apply the same validation on the server.
+- Target submission to AWS within 60 seconds of the due instant under normal operation. Measure due-to-provider-acceptance time. This is not a guarantee of carrier delivery time. After an outage, submit eligible unsent reminders no more than one hour after their due instant. After that window, mark delivery missed, show it to the user, and allow explicit rescheduling. Keep the task open. This recovery rule does not permit automatic repeats of accepted messages.
+
+SMS is the selected first delivery channel. Email remains a separate V1 delivery/preference commitment in the application plan; this decision does not silently remove it. Confirm its release scope separately.
+
 Store due times as UTC instants and retain an IANA timezone identifier for local display. Require explicit offset selection for ambiguous daylight-saving times; reject nonexistent local times. Initial reminders are one-time tasks. Recurrence is outside scope.
 
 Task completion and delivery success are different states. A delivered notification does not complete a task. Snooze and reschedule replace the due instant and invalidate older pending delivery versions. Cancellation, removal from favorites, and permanent deletion prevent new delivery claims. Recheck status and version before provider submission. Explain that an already accepted provider request cannot be recalled.
 
 Use durable delivery records and bounded retries. Claim work transactionally. Recover expired claims after interruption. Use provider idempotency where supported; do not promise exactly-once external delivery when provider acceptance is uncertain. Keep failures visible. Notifications go only to the buyer's verified destination, never an owner.
 
-Before delivery implementation, the operator must select the deployment platform/runtime, delivery provider, enabled channels, verified destination process, and delivery/retry timing policy. Do not infer deployment from local tools. Do not add deployment artifacts until those decisions are made. An in-app queue can be delivered first, but it does not satisfy V1 email/SMS delivery commitments.
+Before delivery implementation, select the exact AWS runtime and SMS product, sender registration, verified destination process, consent and opt-out behavior, retry limits, and treatment of uncertain provider acceptance. AWS hosting, US-only SMS, single-segment user text, a 60-second normal submission target, and a one-hour outage recovery window are approved. Do not infer deployment from local tools. Do not add deployment artifacts until those decisions are made. An in-app queue can be delivered first, but it does not satisfy V1 email/SMS delivery commitments.
 
 Saved-parcel tax observation retention and integration remain governed by [the tax plan](tax-data-ingest.md). Before permanent deletion ships, define how it removes the user's private tax observations. Do not leave private child data orphaned or claim that this plan delivers the tax action.
+
+### SMS acceptance checks
+
+- [ ] Verify US destination checks, account ownership, consent, phone verification, opt-out handling, and sender registration with the selected AWS product.
+- [ ] Test one-segment validation at encoding limits, GSM-7 extension characters, Unicode, and supplementary characters. Verify exact user text and no automatic additions.
+- [ ] Use a controlled clock and a local delivery test double to verify the 60-second submission target, one-hour recovery cutoff, missed delivery status, and no automatic repeat after provider acceptance. Live AWS acceptance is a separate opt-in check.
 
 ## UI contract
 
