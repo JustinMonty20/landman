@@ -51,6 +51,6 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
   await page.getByRole('tab', { name: 'Layers', exact: true }).click();
   await legendFilter.press('Space');
   await expect(legendFilter).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('Parcel results unavailable');
+  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('1 match');
   await expect(page.getByRole('button', { name: 'FLOOD-TEST' })).toBeVisible();
 });

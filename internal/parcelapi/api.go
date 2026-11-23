@@ -45,6 +45,11 @@ type Filters struct {
 	FloodContact           string
 	PageSize               int
 	After                  string
+	Browse                 bool
+	Foreclosure            *bool
+	SoilType               *string
+	SoilUse                *string
+	SoilRating             *string
 }
 type cursor struct {
 	After  string `json:"after"`
@@ -116,12 +121,48 @@ func parseFilters(q url.Values) (Filters, error) {
 
 func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	f := Filters{PageSize: 50}
-	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor", "flood_category", "flood_contact", "jurisdiction"}
+	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
 	if mapQuery {
-		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom", "flood_category", "flood_contact", "jurisdiction"}
+		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
 	}
 	if err := parse(q, allowed...); err != nil {
 		return f, err
+	}
+	if raw, ok := q["discovery"]; ok {
+		if raw[0] != "browse" {
+			return f, errors.New("invalid discovery mode")
+		}
+		f.Browse = true
+	}
+	if raw, ok := q["foreclosure"]; ok {
+		if raw[0] != "true" && raw[0] != "false" {
+			return f, errors.New("invalid foreclosure filter")
+		}
+		value := raw[0] == "true"
+		f.Foreclosure = &value
+	}
+	if raw, ok := q["soil_type"]; ok {
+		if len(raw[0]) < 1 || len(raw[0]) > 120 {
+			return f, errors.New("invalid soil type")
+		}
+		f.SoilType = &raw[0]
+	}
+	if raw, ok := q["soil_use"]; ok {
+		switch raw[0] {
+		case "conventional-septic", "dwelling-without-basement", "dwelling-with-basement":
+		default:
+			return f, errors.New("invalid soil use")
+		}
+		key := map[string]string{"conventional-septic": "208", "dwelling-without-basement": "340", "dwelling-with-basement": "393"}[raw[0]]
+		f.SoilUse = &key
+	}
+	if raw, ok := q["soil_rating"]; ok {
+		if f.SoilUse == nil || (raw[0] != "Not limited" && raw[0] != "Somewhat limited" && raw[0] != "Very limited") {
+			return f, errors.New("invalid soil rating")
+		}
+		f.SoilRating = &raw[0]
+	} else if f.SoilUse != nil {
+		return f, errors.New("soil use requires rating")
 	}
 	for _, item := range []struct {
 		key    string
@@ -219,7 +260,7 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	return f, nil
 }
 func (f Filters) active() bool {
-	return f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil || f.spatialFilter()
+	return f.Browse || f.Foreclosure != nil || f.SoilType != nil || f.SoilRating != nil || f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil || f.spatialFilter()
 }
 
 func (f Filters) spatialFilter() bool { return f.FloodCategory != nil || f.Jurisdiction != nil }
@@ -269,7 +310,7 @@ func (f Filters) args() []any {
 		a[8] = f.Bounds.East
 		a[9] = f.Bounds.North
 	}
-	a = append(a, optString(f.OutOfStateMailing), optString(f.EntityNameIndicator), optString(f.CorporateNameIndicator), optString(f.FloodCategory), f.FloodContact, optString(f.Jurisdiction))
+	a = append(a, optString(f.OutOfStateMailing), optString(f.EntityNameIndicator), optString(f.CorporateNameIndicator), optString(f.FloodCategory), f.FloodContact, optString(f.Jurisdiction), optBool(f.Foreclosure), optString(f.SoilType), optString(f.SoilUse), optString(f.SoilRating))
 	return a
 }
 
@@ -281,7 +322,28 @@ const filterPredicate = `($3::float8 IS NULL OR p.mapped_acres >= $3)
 AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.entity_name_indicator=$12))
 AND ($13::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.corporate_name_indicator=$13))
 AND ($14::text IS NULL OR p.id IN (SELECT id FROM flood_matches))
-AND ($16::text IS NULL OR p.id IN (SELECT id FROM jurisdiction_matches))`
+AND ($16::text IS NULL OR p.id IN (SELECT id FROM jurisdiction_matches))
+AND ($17::boolean IS NULL OR (EXISTS (
+ SELECT 1 FROM tax_foreclosure_pipeline t JOIN tax_file_imports i ON i.active AND i.county_id=t.county_id AND i.source_name=t.source_name
+ WHERE t.parcel_id=p.id
+ UNION ALL
+ SELECT 1 FROM tax_foreclosure_parcels fp JOIN tax_foreclosure_cases t ON t.id=fp.case_id
+ JOIN tax_file_imports i ON i.active AND i.county_id=t.county_id AND i.source_name=t.source_name
+ WHERE fp.parcel_id=p.id AND t.active
+))=$17)
+AND ($18::text IS NULL OR EXISTS (SELECT 1 FROM soil_polygon_set_heads h
+ JOIN soil_polygon_set_members m ON m.set_id=h.set_id AND m.map_unit_key=$18
+ JOIN soil_map_units u ON u.map_unit_key=m.map_unit_key AND NULLIF(u.map_unit_name,'') IS NOT NULL
+ WHERE h.county_id=p.county_id AND h.source_name=p.source_name AND m.shape && p.shape
+ AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Relate(m.shape,p.shape,'2********') ELSE false END))
+AND ($20::text IS NULL OR EXISTS (SELECT 1 FROM soil_screening_heads h
+ JOIN soil_screening_runs r ON r.id=h.run_id AND r.assessment_method='` + soil.AssessmentMethod + `' AND r.fresh_until>now()
+ JOIN soil_polygon_set_heads sh ON sh.county_id=h.county_id AND sh.source_name=h.source_name AND sh.set_id=r.soil_set_id
+ JOIN soil_parcel_assessments a ON a.run_id=r.id AND a.parcel_id=p.id AND a.geometry_fingerprint=COALESCE(md5(ST_AsEWKB(p.shape)),'missing') AND a.total_acres>0
+ JOIN soil_assessment_map_units m ON m.run_id=a.run_id AND m.parcel_id=a.parcel_id AND m.exclusive_acres>0
+ JOIN soil_screening_ratings sr ON sr.run_id=m.run_id AND sr.map_unit_key=m.map_unit_key AND sr.rule_key=$19 AND sr.availability='rated' AND sr.rating=$20
+ LEFT JOIN soil_screening_refresh_status fs ON fs.county_id=h.county_id AND fs.source_name=h.source_name
+ WHERE h.county_id=p.county_id AND h.source_name=p.source_name AND fs.failed_at IS NULL AND h.refresh_failed_at IS NULL AND parcel_boundary_usable(p.shape)))`
 
 const parcelScope = `p.county_id=$1 AND p.source_name=$2`
 const viewport = `p.shape && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857) AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3857)) END`
@@ -349,6 +411,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	r = r.WithContext(ctx)
 	switch {
+	case r.URL.Path == "/api/v1/parcels/soil-types":
+		h.soilTypes(w, r)
 	case r.URL.Path == "/api/v1/parcels/lookup":
 		h.lookup(w, r)
 	case r.URL.Path == "/api/v1/parcels":
@@ -407,7 +471,7 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 		return "", err
 	}
 	var soilHeads string
-	err = tx.QueryRow(ctx, `SELECT concat_ws(':',h.run_id::text,rs.failed_at::text,s.set_id::text,r.fresh_until::text) FROM soil_screening_heads h LEFT JOIN soil_polygon_set_heads s ON s.county_id=h.county_id AND s.source_name=h.source_name LEFT JOIN soil_screening_runs r ON r.id=h.run_id LEFT JOIN soil_screening_refresh_status rs ON rs.county_id=h.county_id AND rs.source_name=h.source_name WHERE h.county_id=$1 AND h.source_name=$2`, countyID, parcelSource).Scan(&soilHeads)
+	err = tx.QueryRow(ctx, `SELECT concat_ws(':',h.run_id::text,rs.failed_at::text,s.set_id::text,r.fresh_until::text,(r.fresh_until>now())::text,h.refresh_failed_at::text) FROM (SELECT $1::text AS county_id,$2::text AS source_name) scope LEFT JOIN soil_screening_heads h USING (county_id,source_name) LEFT JOIN soil_polygon_set_heads s USING (county_id,source_name) LEFT JOIN soil_screening_refresh_status rs USING (county_id,source_name) LEFT JOIN soil_screening_runs r ON r.id=h.run_id`, countyID, parcelSource).Scan(&soilHeads)
 	if errors.Is(err, pgx.ErrNoRows) {
 		soilHeads = ""
 	} else if err != nil {
@@ -484,7 +548,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a := append(f.args(), after, f.PageSize+1)
-		rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$17::uuid ORDER BY p.id LIMIT $18`, a...)
+		rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$21::uuid ORDER BY p.id LIMIT $22`, a...)
 		if err != nil {
 			unavailable(w)
 			return
@@ -587,7 +651,7 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "flood_category", "flood_contact", "jurisdiction"); e != nil {
+	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"); e != nil {
 		bad(w, e)
 		return
 	}
@@ -629,7 +693,16 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		match = `false AND (` + match + `)`
 	}
 	var total, matches int64
-	if z < 13 {
+	outlineZoom, outlineLimit := 13, 200
+	if f.Browse {
+		outlineLimit = 4000
+		filters := f
+		filters.Browse = false
+		if filters.active() {
+			outlineZoom = 12
+		}
+	}
+	if z < outlineZoom {
 		type cell struct {
 			X       int   `json:"x"`
 			Y       int   `json:"y"`
@@ -677,16 +750,16 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	args := append(f.args(), z)
+	args := append(f.args(), z, outlineLimit+1)
 	where := mapWhere
-	if f.spatialFilter() {
+	if f.active() && (f.spatialFilter() || f.Foreclosure != nil || f.SoilType != nil || f.SoilRating != nil || f.Browse) {
 		where += ` AND (` + match + `)`
 		match = `true`
 	} else if total > 200 {
 		http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 		return
 	}
-	rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$17::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT 201`, args...)
+	rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+`,ST_AsGeoJSON(ST_Transform(ST_SimplifyPreserveTopology(p.shape, greatest(0.1, 50.0 / power(2.0,$21::float8-13))),4326))::jsonb, (`+match+`) FROM parcels p WHERE `+where+` ORDER BY p.id LIMIT $22`, args...)
 	if err != nil {
 		unavailable(w)
 		return
@@ -704,7 +777,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 		if item.Match {
 			matches++
 		}
-		if len(features) == 200 {
+		if len(features) == outlineLimit {
 			rows.Close()
 			http.Error(w, "Too many features; narrow bounds or lower zoom", http.StatusRequestEntityTooLarge)
 			return
@@ -719,6 +792,19 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	}
 	if e = tx.Commit(r.Context()); e != nil {
 		unavailable(w)
+		return
+	}
+	if f.Browse {
+		type outline struct {
+			ID       string          `json:"id"`
+			Geometry json.RawMessage `json:"geometry"`
+			Match    bool            `json:"match"`
+		}
+		outlines := make([]outline, len(features))
+		for i, feature := range features {
+			outlines[i] = outline{feature.ID, feature.Geometry, feature.Match}
+		}
+		respond(w, map[string]any{"mode": "features", "features": outlines, "context_count": total, "match_count": matches, "source_stamp": s})
 		return
 	}
 	respond(w, map[string]any{"mode": "features", "features": features, "context_count": total, "match_count": matches, "source_stamp": s})
@@ -960,4 +1046,56 @@ func (h *Handler) qualificationDetail(w http.ResponseWriter, r *http.Request, id
 		result.Freshness.RefreshError = nil
 		respond(w, result)
 	}
+}
+
+// soilTypes exposes only named units in the currently published soil geometry set.
+func (h *Handler) soilTypes(w http.ResponseWriter, r *http.Request) {
+	if err := parse(r.URL.Query()); err != nil {
+		bad(w, err)
+		return
+	}
+	tx, err := h.tx(r.Context())
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	defer tx.Rollback(context.Background())
+	rows, err := tx.Query(r.Context(), `SELECT DISTINCT m.map_unit_key,u.map_unit_name FROM soil_polygon_set_heads h
+ JOIN soil_polygon_set_members m ON m.set_id=h.set_id
+ JOIN soil_map_units u ON u.map_unit_key=m.map_unit_key
+ WHERE h.county_id=$1 AND h.source_name=$2 AND NULLIF(u.map_unit_name,'') IS NOT NULL
+ ORDER BY u.map_unit_name,m.map_unit_key LIMIT 501`, countyID, parcelSource)
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	type option struct {
+		Key  string `json:"key"`
+		Name string `json:"name"`
+	}
+	items := []option{}
+	for rows.Next() {
+		var item option
+		if err := rows.Scan(&item.Key, &item.Name); err != nil {
+			rows.Close()
+			unavailable(w)
+			return
+		}
+		items = append(items, item)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	if len(items) > 500 {
+		http.Error(w, "Soil choices exceed limit", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		unavailable(w)
+		return
+	}
+	respond(w, map[string]any{"items": items})
 }

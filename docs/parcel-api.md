@@ -5,7 +5,7 @@ The Go API serves stored Union County evidence under `/api/v1`. Send a valid sam
 | Route | Response |
 | --- | --- |
 | `/api/v1/parcels/lookup?q=prefix` | Up to 20 parcel-number or address-prefix suggestions, independent of discovery. |
-| `/api/v1/parcels?likely_vacant=true` | Parcel summaries, matching count, optional `next_cursor`, and source stamp. Without discovery filters, `items` is empty and `count` is zero. |
+| `/api/v1/parcels?likely_vacant=true` | Parcel summaries, matching count, optional `next_cursor`, and source stamp. With `discovery=browse`, an unfiltered request returns all parcels in pages. Without this mode or an active filter, `items` is empty and `count` is zero. |
 | `/api/v1/parcels/map?bbox=west,south,east,north&zoom=12&likely_vacant=true` | Neutral context and filtered match counts. Zoom below 13 returns 16 by 16 grid cells. Closer zoom returns up to 200 simplified geometries, or 413 instead of incomplete features. |
 | `/api/v1/parcels/{id}` | Parcel summary, source identity, sale evidence, and location point. |
 | `/api/v1/parcels/{id}/tax` | Active-file bill amounts, reported delinquent balances by year, pipeline entries, and foreclosure cases. Money is a decimal string. `reported_delinquent_total` is null without active balance evidence, not zero due or a payoff quote. |
@@ -23,6 +23,16 @@ The `published_soil.soil_set_id` belongs to the returned screening run. The sepa
 Tax `fetched_at` values retain the stored file-observation time. The tax job reads operator-supplied files. These timestamps do not establish that the application downloaded a county file or that its balances remain current.
 
 See [the measurement procedure](parcel-api-benchmark.md) and [the measured results](parcel-api-performance.md).
+
+## Browse and filter parcels
+
+Send `discovery=browse` to the list and map routes to include unfiltered parcels. With an active filter in browse mode, the close-zoom map returns only matching outlines. The list pages county matches unless you also send `bbox`. The map always requires `bbox` and `zoom`. In browse mode, unfiltered outlines start at zoom 13. Filtered outlines can start at zoom 12. Browse outlines contain `id`, `geometry`, and `match` only. The API returns 413 if the view exceeds 4,000 outlines or 1 MiB. Request zoom 11 with the same bounds and filters for a count grid.
+
+Use `foreclosure=true` to match a record in either published foreclosure feed. The result does not establish an open case or an upcoming sale. Use `soil_type` with a map-unit key from `GET /api/v1/parcels/soil-types`. That route returns up to 500 named units from the active soil set. Soil type matches positive-area overlap. Edge or point contact does not count.
+
+Send both `soil_use` and `soil_rating` to filter by mapped ratings. The uses are `conventional-septic`, `dwelling-without-basement`, and `dwelling-with-basement`. The ratings are `Not limited`, `Somewhat limited`, and `Very limited`. A match requires positive exclusive acreage in a current published assessment. Missing, stale, unrated, and ambiguous areas do not count. A rating does not establish site suitability.
+
+The routes combine filters with logical AND. Keep the same filters when you send a list cursor. If the source stamp changes, start again without the cursor.
 
 ## Union County map overlays
 

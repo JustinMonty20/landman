@@ -3,7 +3,7 @@ import { tick } from 'svelte';
 import { Accordion } from '@skeletonlabs/skeleton-svelte';
 import { emptyFilterDraft, filterSelections, removeDraftFilter, type FilterDraft, type FilterGroup } from './filterDraft';
 
-let { county, filters = $bindable() }: { county: string; filters: FilterDraft } = $props();
+let { county, filters = $bindable(), soilChoices = [] }: { county: string; filters: FilterDraft; soilChoices?: {key: string; name: string}[] } = $props();
 const selections = $derived(filterSelections(filters));
 const count = (group: FilterGroup) => selections.filter((selection) => selection.group === group).length;
 const acreageError = $derived(
@@ -24,7 +24,7 @@ async function remove(key: keyof FilterDraft) {
 <aside class="grouped-filters" aria-label="Parcel filters">
   <div class="panel-heading">
     <h2>Filter {county} parcels</h2>
-    <p>Parcel data is not connected yet. Selections do not run a search.</p>
+    <p>Choose filters to narrow county parcels.</p>
   </div>
   <div class="filter-scroll" role="region" aria-label="Filter sections">
     <Accordion class="filter-accordion" multiple collapsible defaultValue={['owner', 'tax']}>
@@ -32,19 +32,21 @@ async function remove(key: keyof FilterDraft) {
         <h3><Accordion.ItemTrigger class="section-trigger" aria-label="Owner filters"><span>Owner</span>{#if count('Owner')}<span class="section-count">{count('Owner')}</span>{/if}<span class="chevron" aria-hidden="true">⌄</span></Accordion.ItemTrigger></h3>
         <Accordion.ItemContent>
           <div class="section-fields">
-            <label class="check"><input class="checkbox" type="checkbox" bind:checked={filters.businessName} />Business-name match</label>
+            <label class="check"><input class="checkbox" type="checkbox" bind:checked={filters.businessName} />Entity-name signal</label>
             <p class="field-help">Business terms in the owner name, including LLCs. Not verified registration.</p>
-            <label class="check"><input class="checkbox" type="checkbox" bind:checked={filters.outOfState} />Out-of-state owner</label>
+            <label class="check"><input class="checkbox" type="checkbox" bind:checked={filters.outOfState} />Out-of-state mailing</label>
             <p class="field-help">Owner mailing address is outside North Carolina.</p>
           </div>
         </Accordion.ItemContent>
       </Accordion.Item>
       <Accordion.Item value="soil">
-        <h3><Accordion.ItemTrigger class="section-trigger" aria-label="Soil filters"><span>Soil</span><span class="section-hint">Not connected</span><span class="chevron" aria-hidden="true">⌄</span></Accordion.ItemTrigger></h3>
+        <h3><Accordion.ItemTrigger class="section-trigger" aria-label="Soil filters"><span>Soil</span><span class="chevron" aria-hidden="true">⌄</span></Accordion.ItemTrigger></h3>
         <Accordion.ItemContent>
           <div class="section-fields">
-            <label class="soil-type">Soil type<select class="select" disabled aria-describedby="soil-options-note"><option>No soil types loaded</option></select></label>
+            <label class="soil-type">Soil type<select class="select" bind:value={filters.soilType} aria-describedby="soil-options-note"><option value="">Any soil unit</option>{#each soilChoices as choice}<option value={choice.key}>{choice.name}</option>{/each}</select></label>
             <p class="field-help" id="soil-options-note">Choices will come from the county soil data. No text search or sample soil types.</p>
+          <label class="soil-type">Intended use<select class="select" bind:value={filters.soilUse} onchange={() => filters.soilRating = ''}><option value="">Any use</option><option value="conventional-septic">Conventional septic</option><option value="dwelling-without-basement">Dwelling without basement</option><option value="dwelling-with-basement">Dwelling with basement</option></select></label>
+            <label class="soil-type">Published rating<select class="select" disabled={!filters.soilUse} bind:value={filters.soilRating}><option value="">Any rating</option><option value="Not limited">Not limited</option><option value="Somewhat limited">Somewhat limited</option><option value="Very limited">Very limited</option></select></label>
           </div>
         </Accordion.ItemContent>
       </Accordion.Item>
@@ -98,7 +100,6 @@ h2 { font-size: 15px; }
 :global(.filter-accordion .section-trigger:hover) { background: var(--color-surface-800); }
 :global(.filter-accordion .section-trigger:focus-visible) { outline-offset: -3px; }
 .section-count { background: #1e2f47; color: #bfdbfe; font-size: 10px; min-width: 20px; text-align: center; border-radius: 10px; padding: 2px 5px; }
-.section-hint { font-size: 10px; font-weight: 400; color: var(--muted); }
 .chevron { margin-left: auto; font-size: 17px; }
 :global(.section-trigger[data-state='open']) .chevron { transform: rotate(180deg); }
 .section-fields { padding: 0 16px 16px; }

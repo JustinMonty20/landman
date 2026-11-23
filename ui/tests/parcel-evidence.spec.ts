@@ -22,7 +22,7 @@ test('selected result keeps core and soil while optional layers follow switches'
   if (url.pathname.endsWith('/zoning')) return route.fulfill({ json: { available: false, freshness: { stale: true, reasons: ['source_unavailable'], source_fetched_at: null, refresh_failed_at: null } } });
   if (url.pathname.endsWith('/roads')) return route.fulfill({ status: 503, body: 'Unavailable' });
   if (url.pathname.endsWith('/flood')) return route.fulfill({ json: { status: 'no_release', release: null, parcel_number: 'FIRST' } });
-  if (url.pathname.match(/\/parcels\/[a-f0-9-]+$/)) return route.fulfill({ json: { parcel: { parcel_number: url.pathname.endsWith(first) ? 'FIRST' : 'SECOND', address: 'Fixture Way', mapped_acres: '2.50', likely_vacant: true, updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture-id', owner_labels: null, sales: [] } });
+  if (url.pathname.match(/\/parcels\/[a-f0-9-]+$/)) return route.fulfill({ json: { location: url.pathname.endsWith(first) ? { type: 'Point', coordinates: [-80.7, 34.89] } : null, parcel: { parcel_number: url.pathname.endsWith(first) ? 'FIRST' : 'SECOND', address: 'Fixture Way', mapped_acres: '2.50', likely_vacant: true, updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture-id', owner_labels: null, sales: [] } });
   if (url.pathname === '/api/v1/qualification/map') return route.fulfill({ json: { type: 'FeatureCollection', features: [], generation: null } });
   if (url.pathname === '/api/v1/flood/map') return route.fulfill({ json: { type: 'FeatureCollection', features: [], release: null } });
   return route.abort();
@@ -33,7 +33,14 @@ test('selected result keeps core and soil while optional layers follow switches'
  await page.getByRole('combobox', { name: 'Flood category' }).selectOption('sfha');
  await page.getByRole('tab', { name: 'Layers', exact: true }).click();
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).uncheck();
+ const moved = page.waitForRequest(request => {
+  const url = new URL(request.url());
+  if (url.pathname !== '/api/v1/parcels/map' || Number(url.searchParams.get('zoom')) < 16) return false;
+  const [west, south, east, north] = (url.searchParams.get('bbox') ?? '').split(',').map(Number);
+  return west < -80.7 && east > -80.7 && south < 34.89 && north > 34.89 && url.searchParams.get('flood_category') === 'sfha';
+ });
  await page.getByRole('button', { name: /FIRST · Fixture Way/ }).click();
+ await moved;
  const panel = page.getByRole('region', { name: 'Parcel evidence' });
  await expect(panel).toContainText('Parcel FIRST');
  await expect(panel).toContainText('No published soil assessment');
@@ -57,4 +64,5 @@ test('selected result keeps core and soil while optional layers follow switches'
  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('FIRST');
  await page.getByRole('button', { name: /SECOND/ }).click();
  await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('Parcel SECOND');
+ await expect(panel.getByRole('status')).toHaveText('Parcel location is unavailable.');
 });

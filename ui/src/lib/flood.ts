@@ -13,7 +13,7 @@ export type Viewport = { bbox: string; zoom: number };
 export function viewportQuery(view: Viewport): URLSearchParams {
   return new URLSearchParams({ bbox: view.bbox, zoom: String(view.zoom) });
 }
-export type ParcelShape = { id: string; parcel_number: string | null; address: string | null; geometry: Geometry };
+export type ParcelShape = { id: string; parcel_number: string | null; address: string | null; geometry: Geometry; match?: boolean };
 export type FloodRelease = { id: string; issued_at: string; observed_at: string };
 export type FloodMap = FeatureCollection & { release: FloodRelease | null; overview: boolean };
 export type FloodDetail = { parcel_number: string; release: FloodRelease | null } & (
@@ -48,7 +48,7 @@ export async function readMapLayer<T>(path: string, signal: AbortSignal): Promis
 }
 
 export function parcelShapes(items: ParcelShape[]): FeatureCollection {
-  return { type: 'FeatureCollection', features: items.map(({ id, geometry }) => ({ type: 'Feature', geometry, properties: { id } })) };
+  return { type: 'FeatureCollection', features: items.map(({ id, geometry, match }) => ({ type: 'Feature', geometry, properties: { id, match: !!match } })) };
 }
 
 export const emptyShapes: FeatureCollection = { type: 'FeatureCollection', features: [] };

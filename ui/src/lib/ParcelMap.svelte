@@ -12,9 +12,10 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { counties, countyBounds, countyGeometry, mapDetail, type CountyId, type MapDetail } from './counties';
 
-let { selected, focusRequest, onselect, ondetail, onviewport, onparcel, onzoning, parcels, flood, zoning, roads, parcelID }: {
+let { selected, focusRequest, parcelFocus, onselect, ondetail, onviewport, onparcel, onzoning, parcels, flood, zoning, roads, parcelID }: {
   selected: CountyId;
   focusRequest: number;
+  parcelFocus?: { point: [number, number] };
   onselect: (id: CountyId) => void;
   ondetail: (detail: MapDetail) => void;
   onviewport: (viewport: Viewport) => void;
@@ -108,7 +109,7 @@ onMount(() => {
       map.addLayer({ id: 'roads', type: 'line', source: 'roads', paint: { 'line-color': '#ff996b', 'line-width': 2 } });
       map.addSource('parcels', { type: 'geojson', data: emptyShapes });
       map.addLayer({ id: 'parcel-hit', type: 'fill', source: 'parcels', paint: { 'fill-opacity': 0 } });
-      map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcels', paint: { 'line-color': '#c4cbd2', 'line-width': 1 } });
+      map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcels', paint: { 'line-color': ['case', ['get', 'match'], '#72b8ff', '#c4cbd2'], 'line-width': ['case', ['get', 'match'], 2, 1] } });
       map.addLayer({ id: 'parcel-selected', type: 'line', source: 'parcels', filter: ['==', ['get', 'id'], ''], paint: { 'line-color': '#edba71', 'line-width': 3 } });
       map.on('click', (event) => {
         if (!map) return;
@@ -166,6 +167,10 @@ $effect(() => {
   if (!ready || focusRequest === lastFocusRequest) return;
   lastFocusRequest = focusRequest;
   locateCounty();
+});
+$effect(() => {
+  if (!ready || !map || !parcelFocus) return;
+  map.jumpTo({ center: parcelFocus.point, zoom: Math.max(16, map.getZoom()) });
 });
 </script>
 <div class="map-frame">

@@ -10,7 +10,7 @@
 
 - Make active-filter labels removal buttons. They must clear only their own filter, update the map and list, and preserve the filter panel's open state. Clear the corresponding numeric field when removing an acreage bound. Keep keyboard focus on another active filter or the filter arrow after removal.
 
-- Keep all visible parcel boundaries on the map as neutral context. Require at least one active filter before showing match results or blue match highlights. With no active filters, show zero matches. Search and map selection may inspect a nonmatching parcel without adding it to the filter results. Selecting a finder suggestion opens details directly; do not add a separate Go button.
+- Show all parcels in the selected county by default. Page the list. Show counts at county zoom and bounded parcel outlines at close zoom. Apply the same filters to the list, counts, and outlines. Hide nonmatching parcels when a filter is active. Search can still open a parcel without adding it to the results. Open details when the user selects a finder suggestion.
 
 - Use Skeleton for standard controls, form styles, and shared component behavior. Check its current API before creating a custom standard widget. Keep custom code for parcel/map behavior and the approved sliding-panel layout. Set approved colors through Skeleton theme properties in `src/theme.css`. Keep Google's pre-approved button artwork unchanged.
 

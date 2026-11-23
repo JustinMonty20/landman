@@ -80,7 +80,7 @@ test('Filters and Layers tabs retain independent selections across tabs and zoom
   await page.getByRole('button', { name: 'Inspect Union, NC', exact: true }).click();
   const filtersTab = page.getByRole('tab', { name: 'Filters', exact: true });
   const layersTab = page.getByRole('tab', { name: 'Layers', exact: true });
-  const businessName = page.getByRole('checkbox', { name: 'Business-name match' });
+  const businessName = page.getByRole('checkbox', { name: 'Entity-name signal' });
   await expect(filtersTab).toHaveAttribute('aria-selected', 'true');
   await expect(layersTab).toBeVisible();
   await expect(layers).toBeHidden();
