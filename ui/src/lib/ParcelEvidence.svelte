@@ -1,7 +1,7 @@
 <script lang="ts">
 import { readMapData, type FloodDetail } from './flood';
 import type { DetailField } from './detailGroups';
-let { id, fields, releaseId, onlocation }: { id: string; fields: DetailField[]; releaseId?: string; onlocation: (id: string, point: [number, number] | null) => void } = $props();
+let { id, fields, releaseId, onlocation, onresearch }: { id: string; fields: DetailField[]; releaseId?: string; onlocation: (id: string, point: [number, number] | null) => void; onresearch: (id: string, parcelNumber: string | null, coordinates: [number, number] | null) => void } = $props();
 type Section<T> = { status: 'loading' } | { status: 'unavailable' } | { status: 'ready'; data: T };
 type Facts = { location?: { coordinates: [number, number] } | null; parcel: { parcel_number: string | null; address: string | null; mapped_acres: string | null; updated_at: string }; source: string; owner_labels: null | { entity_name_indicator: string | null }; valuation?: { land: string | null; improvement: string | null; total: string | null; assessed: string | null }; sales: { date: string | null; amount: string | null; deed_book: string | null; deed_page: string | null }[] };
 type Tax = { bills: { year: number; total_taxes: string; fetched_at: string }[]; foreclosure_cases: { case_number: string | null; status: string | null; sale_on: string | null; fetched_at: string | null }[]; pipeline?: { case_number: string | null; status: string | null; sale_on: string | null; fetched_at: string | null }[]; delinquent_balances?: { year: number; balance_due: string; fetched_at: string }[]; reported_delinquent_total: string | null; note: string };
@@ -29,8 +29,8 @@ function load<T>(id: string, path: string, assign: (state: Section<T>) => void) 
 }
 $effect(() => { if (!id) return; const selected = id; return load<Facts>(id, `/api/v1/parcels/${encodeURIComponent(id)}`, state => {
  facts = state;
- if (state.status === 'ready') onlocation(selected, state.data.location?.coordinates ?? null);
- if (state.status === 'unavailable') onlocation(selected, null);
+ if (state.status === 'ready') { onlocation(selected, state.data.location?.coordinates ?? null); onresearch(selected, state.data.parcel.parcel_number, state.data.location?.coordinates ?? null); }
+ if (state.status === 'unavailable') { onlocation(selected, null); onresearch(selected, null, null); }
 }); });
 $effect(() => { if (id && (has('owner_name') || has('owner_mailing'))) return load<Owner>(id, `/api/me/parcel-owner/${encodeURIComponent(id)}`, state => owner = state); });
 $effect(() => { if (id && (has('delinquent_total') || has('tax_bill_count') || has('foreclosure_count'))) return load<Tax>(id, `/api/v1/parcels/${encodeURIComponent(id)}/tax`, state => tax = state); });
@@ -56,10 +56,7 @@ const soilUse = (field: DetailField) => ({ soil_septic: 'conventional-septic', s
   {@render status(facts)}
   {#if facts.status === 'ready'}
     <p>{text(facts.data.parcel.parcel_number)} · Site address: {text(facts.data.parcel.address)}</p>
-    {#if facts.data.location?.coordinates && facts.data.location.coordinates.every(Number.isFinite)}
-      <a href={'https://www.google.com/maps/@?api=1&map_action=map&center=' + facts.data.location.coordinates[1] + '%2C' + facts.data.location.coordinates[0] + '&zoom=18&basemap=satellite'} target="_blank" rel="noopener noreferrer">Open satellite view</a>
-      <small> · Point inside stored parcel; imagery does not show boundaries or guarantee currency.</small>
-    {/if}
+
   {/if}
 </section>
 {#if has('mapped_acres') || has('valuation_land') || has('valuation_improvement') || has('valuation_total') || has('valuation_assessed')}

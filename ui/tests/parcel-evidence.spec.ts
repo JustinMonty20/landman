@@ -13,9 +13,11 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.route('**/api/me', route => route.fulfill({ json: { id: first, email: 'fixture@example.test', name: 'Fixture' } }));
  await page.route('**/api/me/parcel-detail-fields', route => route.fulfill({ json: { fields: ['mapped_acres', 'soil_septic', 'delinquent_total', 'zoning_district', 'road_distance', 'flood_unknown'] } }));
  const requested: string[] = [];
+ const externalRequests: string[] = [];
+ page.on('request', request => { if (['property.spatialest.com', 'unionnc.devnetwedge.com', 'www.google.com'].includes(new URL(request.url()).hostname)) externalRequests.push(request.url()); });
  await page.route('**/api/v1/**', route => {
   const url = new URL(route.request().url()); requested.push(url.pathname);
-  if (url.pathname === '/api/v1/parcels') return route.fulfill({ json: { items: [{ id: first, parcel_number: 'FIRST', address: 'Fixture Way' }, { id: second, parcel_number: 'SECOND', address: null }], count: 2, source_stamp: 'fixture' } });
+  if (url.pathname === '/api/v1/parcels') return route.fulfill({ json: { items: [{ id: first, parcel_number: '00123450', address: 'Fixture Way' }, { id: second, parcel_number: 'SECOND', address: null }], count: 2, source_stamp: 'fixture' } });
   if (url.pathname === '/api/v1/parcels/map') return route.fulfill({ json: { features: [], match_count: 2, source_stamp: 'fixture' } });
   if (url.pathname.endsWith('/soil')) return route.fulfill({ json: { available: false, reason: 'no published assessment' } });
   if (url.pathname.endsWith('/tax')) return route.fulfill({ json: { bills: [], delinquent_balances: [], reported_delinquent_total: null, pipeline: [], foreclosure_cases: [], note: 'Missing evidence is not a verified zero or a payoff quote' } });
@@ -23,7 +25,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
   if (url.pathname.endsWith('/zoning')) return route.fulfill({ json: { available: false, freshness: { stale: true, reasons: ['source_unavailable'], source_fetched_at: null, refresh_failed_at: null } } });
   if (url.pathname.endsWith('/roads')) return route.fulfill({ status: 503, body: 'Unavailable' });
   if (url.pathname.endsWith('/flood')) return route.fulfill({ json: { status: 'no_release', release: null, parcel_number: 'FIRST' } });
-  if (url.pathname.match(/\/parcels\/[a-f0-9-]+$/)) return route.fulfill({ json: { location: url.pathname.endsWith(first) ? { type: 'Point', coordinates: [-80.7, 34.89] } : null, parcel: { parcel_number: url.pathname.endsWith(first) ? 'FIRST' : 'SECOND', address: 'Fixture Way', mapped_acres: '2.50', likely_vacant: true, updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture-id', owner_labels: null, sales: [] } });
+  if (url.pathname.match(/\/parcels\/[a-f0-9-]+$/)) return route.fulfill({ json: { location: url.pathname.endsWith(first) ? { type: 'Point', coordinates: [-80.7, 34.89] } : null, parcel: { parcel_number: url.pathname.endsWith(first) ? '00123450' : null, address: 'Fixture Way', mapped_acres: '2.50', likely_vacant: true, updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture-id', owner_labels: null, sales: [] } });
   if (url.pathname === '/api/v1/qualification/map') return route.fulfill({ json: { type: 'FeatureCollection', features: [], generation: null } });
   if (url.pathname === '/api/v1/flood/map') return route.fulfill({ json: { type: 'FeatureCollection', features: [], release: null } });
   return route.abort();
@@ -40,10 +42,29 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
   const [west, south, east, north] = (url.searchParams.get('bbox') ?? '').split(',').map(Number);
   return west < -80.7 && east > -80.7 && south < 34.89 && north > 34.89 && url.searchParams.get('flood_category') === 'sfha';
  });
- await page.getByRole('button', { name: /FIRST · Fixture Way/ }).click();
+ await page.getByRole('button', { name: /00123450 · Fixture Way/ }).click();
  await moved;
  const panel = page.getByRole('region', { name: 'Parcel evidence' });
- await expect(panel).toContainText('FIRST · Site address: Fixture Way');
+ await expect(panel).toContainText('00123450 · Site address: Fixture Way');
+ await expect(panel.getByRole('link', { name: 'Open satellite view' })).toHaveCount(0);
+ const evidenceRequests = requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first)).length;
+ await panel.getByRole('tab', { name: 'Research links' }).focus();
+ await page.keyboard.press('Enter');
+ const sites = panel.getByRole('list', { name: 'External research sites' });
+ await expect(sites.getByRole('listitem')).toHaveCount(3);
+ await expect(panel).toContainText('County parcel number: 00123450');
+ for (const [name, url] of [['Union County property records', 'https://property.spatialest.com/nc/union'], ['Union County tax records', 'https://unionnc.devnetwedge.com/']] as const) {
+  const link = sites.getByRole('link', { name });
+  await expect(link).toHaveAttribute('href', url);
+  await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+ }
+ await expect(sites.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', /center=34\.89%2C-80\.7.*basemap=satellite/);
+ expect(requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first))).toHaveLength(evidenceRequests);
+ expect(externalRequests).toEqual([]);
+ await page.screenshot({ path: testInfo.outputPath('research-links.png'), fullPage: true });
+ await panel.getByRole('tab', { name: 'Evidence', exact: true }).click();
+ await expect(panel.getByRole('link', { name: 'Open satellite view' })).toHaveCount(0);
  await expect(panel).toContainText('No published soil assessment');
  await expect(panel).toContainText('Not recorded');
  await expect(panel).toContainText('No FEMA release stored');
@@ -63,8 +84,14 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).uncheck();
  await expect(panel.getByRole('region', { name: 'FEMA flood mapping' })).toBeVisible();
  await page.getByRole('button', { name: 'Close parcel details' }).click();
- await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('FIRST');
+ await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('00123450');
  await page.getByRole('button', { name: /SECOND/ }).click();
- await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('SECOND · Site address: Fixture Way');
+ await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('Parcel');
+ await panel.getByRole('tab', { name: 'Research links' }).click();
+ await expect(panel).toContainText('County parcel number: Not recorded');
+ await expect(panel.getByRole('link', { name: 'Open satellite view' })).toHaveCount(0);
+ await expect(panel).not.toContainText('00123450');
+ await page.screenshot({ path: testInfo.outputPath('research-missing.png'), fullPage: true });
+ await panel.getByRole('tab', { name: 'Evidence', exact: true }).click();
  await expect(panel.getByRole('status').filter({ hasText: 'Parcel location is unavailable.' })).toBeVisible();
 });
