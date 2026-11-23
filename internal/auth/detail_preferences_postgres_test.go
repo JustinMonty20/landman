@@ -5,9 +5,9 @@ package auth
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
