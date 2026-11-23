@@ -65,7 +65,7 @@ test('finder narrows immediately and only selection locates the parcel', async (
   await page.screenshot({ path: testInfo.outputPath('02-keyboard-active.png'), fullPage: true });
   expect(requests.some(path => path.includes(`/parcels/${parcels[8].id}`))).toBe(false);
   await finder.press('Enter');
-  await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('PIN-009 · Oak Road 9');
+  await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('PIN-009 · Site address: Oak Road 9');
   expect(requests.some(path => path.includes(`/parcels/${parcels[8].id}`))).toBe(true);
   await expect.poll(() => requests.some(path => path.startsWith('/api/v1/parcels/map?') && Number(new URLSearchParams(path.split('?')[1]).get('zoom')) >= 16)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('03-selected.png'), fullPage: true });
