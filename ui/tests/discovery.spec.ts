@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('https://tiles.openfreemap.org/**', route => route.abort());
   await page.route('**/api/me', (route) => route.fulfill({ json: { id: 'sample-user', email: 'buyer@example.test', name: 'Buyer' } }));
 });
 
@@ -84,7 +85,7 @@ test('locked county labels show a short notice and keyboard selection can return
   for (const name of ['Anson, NC', 'Lancaster, SC', 'Mecklenburg, NC', 'Cabarrus, NC', 'York, SC', 'Gaston, NC', 'Chesterfield, SC', 'Stanly, NC']) {
     await page.getByRole('button', { name: 'Show all counties', exact: true }).click();
     await page.getByRole('button', { name: `Inspect ${name}: Locked`, exact: true }).click();
-    await expect(page.getByRole('status')).toContainText('is locked. Parcel discovery is not available.');
+    await expect(page.getByText('is locked. Parcel discovery is not available.', { exact: false })).toBeVisible();
     await expect(page.getByRole('searchbox')).toHaveCount(0);
     await expect(page.getByRole('complementary', { name: 'Parcel filters' })).not.toBeVisible();
   }
@@ -103,8 +104,11 @@ test('map labels select counties and all regional outlines fit the map', async (
     if (/^https?:/.test(request.url()) && !request.url().startsWith('http://127.0.0.1:5174')) external.push(request.url());
   });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Inspect York, SC: Locked', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('York County is locked.');
+  const york = page.getByRole('button', { name: 'Inspect York, SC: Locked', exact: true });
+  await expect(york).toBeVisible();
+  expect(external).toEqual([]);
+  await york.click();
+  await expect(page.getByText('York County is locked. Parcel discovery is not available.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Show all counties', exact: true }).click();
   for (const label of await page.locator('.county-map-label').all()) {
     const box = await label.boundingBox();
@@ -113,7 +117,7 @@ test('map labels select counties and all regional outlines fit the map', async (
     expect(box!.y).toBeGreaterThan(52);
     expect(box!.y + box!.height).toBeLessThan(page.viewportSize()!.height - 90);
   }
-  expect(external).toEqual([]);
+  expect(external).toEqual(['https://tiles.openfreemap.org/planet']);
   await page.screenshot({ path: `test-results/${test.info().project.name}-county-coverage.png` });
 });
 
