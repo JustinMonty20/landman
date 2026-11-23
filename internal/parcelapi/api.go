@@ -853,8 +853,9 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request, id string) {
 	defer tx.Rollback(context.Background())
 	var p Parcel
 	var sourceID string
+	var valuationLand, valuationImprovement, valuationTotal, valuationAssessed *string
 	var location []byte
-	e = tx.QueryRow(r.Context(), `SELECT `+parcelColumns+`,p.source_parcel_id,CASE WHEN parcel_boundary_usable(p.shape) THEN ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(p.shape),4326))::jsonb END FROM parcels p WHERE p.id=$1 AND p.county_id=$2 AND p.source_name=$3`, id, countyID, parcelSource).Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt, &sourceID, &location)
+	e = tx.QueryRow(r.Context(), `SELECT `+parcelColumns+`,p.source_parcel_id,p.valuation_land::text,p.valuation_improvement::text,p.valuation_total::text,p.valuation_assessed::text,CASE WHEN parcel_boundary_usable(p.shape) THEN ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(p.shape),4326))::jsonb END FROM parcels p WHERE p.id=$1 AND p.county_id=$2 AND p.source_name=$3`, id, countyID, parcelSource).Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt, &sourceID, &valuationLand, &valuationImprovement, &valuationTotal, &valuationAssessed, &location)
 	if errors.Is(e, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -886,7 +887,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request, id string) {
 		unavailable(w)
 		return
 	}
-	respond(w, map[string]any{"parcel": p, "county": countyID, "source": parcelSource, "source_parcel_id": sourceID, "geometry_available": location != nil, "location": json.RawMessage(location), "sales": json.RawMessage(sales), "owner_labels": json.RawMessage(labels), "source_stamp": s})
+	respond(w, map[string]any{"parcel": p, "county": countyID, "source": parcelSource, "source_parcel_id": sourceID, "valuation": map[string]any{"land": valuationLand, "improvement": valuationImprovement, "total": valuationTotal, "assessed": valuationAssessed}, "geometry_available": location != nil, "location": json.RawMessage(location), "sales": json.RawMessage(sales), "owner_labels": json.RawMessage(labels), "source_stamp": s})
 }
 func (h *Handler) soil(w http.ResponseWriter, r *http.Request, id string) {
 	// CurrentAssessment owns its own read-only snapshot and freshness logic.

@@ -43,7 +43,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.getByRole('button', { name: /FIRST · Fixture Way/ }).click();
  await moved;
  const panel = page.getByRole('region', { name: 'Parcel evidence' });
- await expect(panel).toContainText('FIRST · Fixture Way');
+ await expect(panel).toContainText('FIRST · Site address: Fixture Way');
  await expect(panel).toContainText('No published soil assessment');
  await expect(panel).toContainText('Not recorded');
  await expect(panel).toContainText('No FEMA release stored');
@@ -57,14 +57,14 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await expect(panel).toContainText('Evidence temporarily unavailable');
  await expect(panel).toContainText('No FEMA release stored');
  await page.screenshot({ path: testInfo.outputPath('parcel-layers.png'), fullPage: true });
- await panel.getByRole('region', { name: 'Mapped road distance' }).scrollIntoViewIfNeeded();
- await expect(panel.getByRole('region', { name: 'Mapped road distance' })).toBeVisible();
+ await panel.getByRole('region', { name: 'Mapped roads' }).scrollIntoViewIfNeeded();
+ await expect(panel.getByRole('region', { name: 'Mapped roads' })).toBeVisible();
  await page.screenshot({ path: testInfo.outputPath('parcel-layers-bottom.png'), fullPage: true });
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).uncheck();
- await expect(panel.getByRole('region', { name: 'Unknown coverage acreage' })).toBeVisible();
+ await expect(panel.getByRole('region', { name: 'FEMA flood mapping' })).toBeVisible();
  await page.getByRole('button', { name: 'Close parcel details' }).click();
  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('FIRST');
  await page.getByRole('button', { name: /SECOND/ }).click();
- await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('SECOND · Fixture Way');
+ await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('SECOND · Site address: Fixture Way');
  await expect(panel.getByRole('status').filter({ hasText: 'Parcel location is unavailable.' })).toBeVisible();
 });

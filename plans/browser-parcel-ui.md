@@ -34,7 +34,15 @@ In the panel, let the buyer save the parcel to a private list, add a scratchpad 
 
 For a saved parcel, show a **Request tax info** action. Each explicit action makes one bounded DevNet parcel-page request; saving, viewing, filtering, or moving the map does not make that request. Store each successful displayed observation for that buyer and parcel with its source URL and observation time. Show the observation as dated evidence, not a current payoff quote. Show denied, unclear, or failed results as errors, not zero balances. Apply the request and access limits in [tax-data-ingest.md](tax-data-ingest.md#saved-parcel-request-tax-info-action). Define retention for repeated explicit requests and removal of a saved parcel during implementation. Do not put private observations or personal lead data in shared map data.
 
-Add **Open in Google Maps (satellite)** to parcel detail for every parcel with valid geometry, regardless of vacancy tier or street address. Center the link on a point inside the stored parcel geometry. Do not embed imagery or send private lead data to Google. The external view does not show the application boundary or guarantee current imagery. Use the link for manual review only. It does not change vacancy tiers.
+### External parcel research links
+
+Deliver these three browser links together in the parcel detail panel. Make them available without saving the parcel. Open each external page only when the buyer selects its link.
+
+- **Open in Google Maps (satellite).** Show the link for every parcel with valid geometry, regardless of vacancy tier or site address. Center the view on a point inside the stored parcel boundary. Do not embed imagery. The external view does not show the Landman boundary or guarantee current imagery.
+- **Open Union County property record.** Use `https://property.spatialest.com/nc/union#/property/{parcel_id}`. Verify the link with a real county parcel before release.
+- **Open Union County tax record.** Use the DevNet parcel page, for example `https://unionnc.devnetwedge.com/parcel/view/09336350/2026`. Use a verified tax year for the record. Do not hard-code the example year or assume the current calendar year is available.
+
+Use the county parcel identifier for the property and tax links. Preserve leading zeros. Do not use the Landman UUID or an unverified fallback identifier. Omit a link if its required data is missing. Do not send owner data or private lead data. These links do not authorize scraping, prefetch, or server-side requests. The DevNet link is separate from the saved-parcel **Request tax info** action. Defer that action and its database storage to a later delivery. Opening a link does not change vacancy tiers or save an observation.
 
 ## Map and performance contract
 
@@ -52,5 +60,6 @@ Before UI acceptance, agree target budgets and measure request count, response s
 - [ ] Keyboard or click selection in the list selects and locates the parcel on the map. Map selection selects the same list item. The buyer can inspect a result without using map controls.
 - [ ] A selected parcel opens details, a private scratchpad, lead actions, and personal reminder controls. Source dates, unknown states, and stale evidence are visible. A source refresh does not change private buyer records.
 - [ ] Request tax info is available for a saved parcel only. Each explicit action makes one request. Save, view, filter, and map movement make no DevNet request. Stored observations are dated, private, and separate from county tax files; a failure is not a zero balance.
+- [ ] Verify all three external research links in the same delivery. Test an unsaved parcel, valid and missing link inputs, a county parcel number with leading zeros, and a supported DevNet tax year. Verify that opening the parcel panel does not contact these sites.
 - [ ] Full-resolution stored data determines filters and spatial evidence. Visible geometry is bounded and simplified for display. Repeated map work makes no live county or FEMA request.
 - [ ] Measure and record the agreed interactive budgets with representative county data. Add vector tiles only when measured results justify them. Verify user isolation, keyboard use, and the end-to-end map-to-follow-up workflow.

@@ -83,7 +83,7 @@ func TestCurrentParcelOwnerRead(t *testing.T) {
 		t.Fatalf("missing parcel: %d", r.Code)
 	}
 	r := f.request("GET", endpoint, cookie)
-	if r.Code != 200 || !strings.Contains(r.Body.String(), `"current_name_1":"County One"`) || !strings.Contains(r.Body.String(), `"current_name_2":"County Two"`) || strings.Contains(r.Body.String(), "Private mailing line") {
+	if r.Code != 200 || !strings.Contains(r.Body.String(), `"current_name_1":"County One"`) || !strings.Contains(r.Body.String(), `"current_name_2":"County Two"`) || !strings.Contains(r.Body.String(), "Private mailing line") {
 		t.Fatalf("owner response %d %s", r.Code, r.Body.String())
 	}
 }

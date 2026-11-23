@@ -305,7 +305,7 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 }
 
 // The account's detail selection is independent of map layers and parcel reads.
-var detailFieldOrder = []string{"mapped_acres", "owner_name", "entity_indicator", "sale_count", "delinquent_total", "tax_bill_count", "foreclosure_count", "vacancy_tier", "vacancy_reason", "soil_acres", "soil_septic", "soil_dwelling_without", "soil_dwelling_with", "zoning_district", "zoning_jurisdiction", "zoning_unmapped", "road_distance", "road_name", "road_status", "flood_unknown", "floodway_acres", "flood_zones"}
+var detailFieldOrder = []string{"mapped_acres", "valuation_land", "valuation_improvement", "valuation_total", "valuation_assessed", "owner_name", "owner_mailing", "entity_indicator", "sale_count", "delinquent_total", "tax_bill_count", "foreclosure_count", "vacancy_tier", "vacancy_reason", "soil_acres", "soil_septic", "soil_dwelling_without", "soil_dwelling_with", "zoning_district", "zoning_jurisdiction", "zoning_unmapped", "road_distance", "road_name", "road_status", "flood_unknown", "floodway_acres", "flood_zones"}
 
 type detailFieldsResponse struct {
 	Fields []string `json:"fields"`
@@ -395,7 +395,7 @@ func (s *server) putParcelDetailFields(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(detailFieldsResponse{Fields: groups})
 }
 
-// Owner names are sourced only from current county parcel names. No mailing or contact fields.
+// Owner and mailing data are private county parcel fields available only to signed-in buyers.
 func (s *server) getParcelOwner(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.detailUser(w, r); !ok {
 		return
@@ -405,8 +405,8 @@ func (s *server) getParcelOwner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid parcel ID", http.StatusBadRequest)
 		return
 	}
-	var first, second *string
-	err := s.pool.QueryRow(r.Context(), `SELECT NULLIF(current_name_1,''),NULLIF(current_name_2,'') FROM parcels WHERE id=$1::uuid AND county_id='union' AND source_name='union_county_gis'`, id).Scan(&first, &second)
+	var first, second, line1, line2, city, state, postal *string
+	err := s.pool.QueryRow(r.Context(), `SELECT NULLIF(current_name_1,''),NULLIF(current_name_2,''),NULLIF(mailing_line_1,''),NULLIF(mailing_line_2,''),NULLIF(mailing_city,''),NULLIF(mailing_state,''),NULLIF(mailing_postal_code,'') FROM parcels WHERE id=$1::uuid AND county_id='union' AND source_name='union_county_gis'`, id).Scan(&first, &second, &line1, &line2, &city, &state, &postal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -416,7 +416,7 @@ func (s *server) getParcelOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"current_name_1": first, "current_name_2": second})
+	json.NewEncoder(w).Encode(map[string]any{"current_name_1": first, "current_name_2": second, "mailing_line_1": line1, "mailing_line_2": line2, "mailing_city": city, "mailing_state": state, "mailing_postal_code": postal})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {

@@ -1,8 +1,8 @@
 // Group labels organize the picker only. IDs are individual display fields, not database projections.
 export const detailGroups = [
- { label: 'Acreage', fields: [{ id: 'mapped_acres', label: 'Mapped acreage' }] },
- { label: 'Ownership', fields: [{ id: 'owner_name', label: 'Owner name' }, { id: 'entity_indicator', label: 'Entity indicator' }, { id: 'sale_count', label: 'Stored sale count' }] },
- { label: 'Tax', fields: [{ id: 'delinquent_total', label: 'Reported delinquent total' }, { id: 'tax_bill_count', label: 'Stored tax bill count' }, { id: 'foreclosure_count', label: 'Foreclosure case count' }] },
+ { label: 'Parcel and value', fields: [{ id: 'mapped_acres', label: 'Mapped acreage' }, { id: 'valuation_land', label: 'Parcel land value' }, { id: 'valuation_improvement', label: 'Parcel improvement value' }, { id: 'valuation_total', label: 'Parcel total value' }, { id: 'valuation_assessed', label: 'Parcel assessed value' }] },
+ { label: 'Ownership', fields: [{ id: 'owner_name', label: 'Owner name' }, { id: 'owner_mailing', label: 'Owner mailing address' }, { id: 'entity_indicator', label: 'Entity indicator' }, { id: 'sale_count', label: 'Sales history' }] },
+ { label: 'Tax', fields: [{ id: 'delinquent_total', label: 'Reported delinquent total' }, { id: 'tax_bill_count', label: 'Tax bills' }, { id: 'foreclosure_count', label: 'Foreclosure records' }] },
  { label: 'Vacancy', fields: [{ id: 'vacancy_tier', label: 'Vacancy tier' }, { id: 'vacancy_reason', label: 'Vacancy reason' }] },
  { label: 'Soil', fields: [{ id: 'soil_acres', label: 'Assessed soil acreage' }, { id: 'soil_septic', label: 'Septic field rating' }, { id: 'soil_dwelling_without', label: 'Dwelling without basement rating' }, { id: 'soil_dwelling_with', label: 'Dwelling with basement rating' }] },
  { label: 'Zoning', fields: [{ id: 'zoning_district', label: 'Zoning district' }, { id: 'zoning_jurisdiction', label: 'Jurisdiction' }, { id: 'zoning_unmapped', label: 'Unmapped acreage' }] },
