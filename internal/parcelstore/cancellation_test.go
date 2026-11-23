@@ -40,7 +40,7 @@ func TestShapeWriterCancellationKeepsPublishedSnapshot(t *testing.T) {
 	changedAmount := 200.0
 	parcel.Sales = []models.ParcelSale{{Sequence: 3, Amount: &changedAmount}}
 	for i := 0; i < 2000; i++ {
-		if err := writer.SavePart(ctx, parcel, false); err != nil {
+		if err := writer.SavePart(ctx, parcel); err != nil {
 			t.Fatal(err)
 		}
 	}

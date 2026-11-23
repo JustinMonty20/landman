@@ -55,17 +55,17 @@ func TestSaveForeclosure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	for i, pin := range sales[0].PINs {
+	for _, pin := range sales[0].PINs {
 		var id string
-		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant)
-VALUES ('union','179','union_county_gis',$1,$2) RETURNING id::text`, pin.ParcelKey, i != 1).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id)
+VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, pin.ParcelKey).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, id)
 	}
 	var secondID string
-	if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant)
-VALUES ('union','179','union_county_gis',$1,false) RETURNING id::text`, sales[2].PINs[0].ParcelKey).Scan(&secondID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id)
+VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, sales[2].PINs[0].ParcelKey).Scan(&secondID); err != nil {
 		t.Fatal(err)
 	}
 	ids = append(ids, secondID)
@@ -246,8 +246,8 @@ func TestSaveForeclosureReplacesNumberedCasePINs(t *testing.T) {
 	}
 	defer tx.Rollback(ctx)
 	for _, key := range []string{"07129160", "07129161", "07129162", "07129163"} {
-		if _, err := tx.Exec(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant)
-VALUES ('union','179','union_county_gis',$1,true)`, key); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id)
+VALUES ('union','179','union_county_gis',$1)`, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -393,7 +393,7 @@ func TestForeclosuresCurrentReconcilesUnchangedFile(t *testing.T) {
 	seed := func(key string) {
 		t.Helper()
 		var id string
-		if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis',$1,true) RETURNING id::text`, key).Scan(&id); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id) VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, key).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		parcelIDs = append(parcelIDs, id)

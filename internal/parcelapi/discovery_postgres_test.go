@@ -45,7 +45,7 @@ func TestDiscoveryPublishedFiltersPostGIS(t *testing.T) {
 	ids := make([]string, 8)
 	for i := range ids {
 		x := -79.3 + float64(i)*.003
-		if err := db.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number,mapped_acres,likely_vacant,shape) VALUES('union','union','union_county_gis',$1,$1,2,true,ST_Transform(ST_MakeEnvelope($2,34.3,$3,34.301,4326),3857)) RETURNING id::text`, fmt.Sprintf("%s-%d", stamp, i), x, x+.001).Scan(&ids[i]); err != nil {
+		if err := db.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number,mapped_acres,shape) VALUES('union','union','union_county_gis',$1,$1,2,ST_Transform(ST_MakeEnvelope($2,34.3,$3,34.301,4326),3857)) RETURNING id::text`, fmt.Sprintf("%s-%d", stamp, i), x, x+.001).Scan(&ids[i]); err != nil {
 			t.Fatal(err)
 		}
 	}

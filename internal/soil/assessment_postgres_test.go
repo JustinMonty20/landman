@@ -184,7 +184,7 @@ func (f *assessmentFixture) parcel(key string, shape *geom.T, vacant bool) strin
 		year := int64(1998)
 		record.Building.YearBuilt = &year
 	}
-	if _, err = parcelstore.SaveParcel(f.ctx, tx, record, vacant); err != nil {
+	if _, err = parcelstore.SaveParcel(f.ctx, tx, record); err != nil {
 		f.t.Fatal(err)
 	}
 	if err = tx.Commit(f.ctx); err != nil {

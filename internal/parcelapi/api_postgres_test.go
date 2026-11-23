@@ -34,7 +34,7 @@ func TestHTTPPostGIS(t *testing.T) {
 	defer cancel()
 	ids := make([]string, 3)
 	for i := range ids {
-		err = pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number,situs_line_1,mapped_acres,likely_vacant,shape) VALUES('union','union','union_county_gis',$1,$2,'API TEST ROAD',$3,$4,ST_Transform(ST_MakeEnvelope($5,33.1,$6,33.101,4326),3857)) RETURNING id::text`, fmt.Sprintf("api-fixture-%d-%d", time.Now().UnixNano(), i), fmt.Sprintf("APITEST%d", i), 2.5+float64(i), float64(i) != 2, -79.9+float64(i)*.002, -79.899+float64(i)*.002).Scan(&ids[i])
+		err = pool.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number,situs_line_1,mapped_acres,shape) VALUES('union','union','union_county_gis',$1,$2,'API TEST ROAD',$3,ST_Transform(ST_MakeEnvelope($4,33.1,$5,33.101,4326),3857)) RETURNING id::text`, fmt.Sprintf("api-fixture-%d-%d", time.Now().UnixNano(), i), fmt.Sprintf("APITEST%d", i), 2.5+float64(i), -79.9+float64(i)*.002, -79.899+float64(i)*.002).Scan(&ids[i])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,9 +66,9 @@ func TestHTTPPostGIS(t *testing.T) {
 		t.Fatalf("unverified vacancy %d %v", code, body)
 	}
 	bbox := "-79.901,33.099,-79.894,33.102"
-	filter := "bbox=" + bbox + "&likely_vacant=true"
+	filter := "bbox=" + bbox + "&vacancy_tier=unknown"
 	code, list := request("/api/v1/parcels?" + filter + "&page_size=1")
-	if code != 200 || list["count"] != float64(2) || len(list["items"].([]any)) != 1 {
+	if code != 200 || list["count"] != float64(3) || len(list["items"].([]any)) != 1 {
 		t.Fatalf("first page %d %v", code, list)
 	}
 	cursor := list["next_cursor"].(string)
@@ -76,7 +76,7 @@ func TestHTTPPostGIS(t *testing.T) {
 		t.Fatal("missing next cursor")
 	}
 	code, later := request("/api/v1/parcels?" + filter + "&page_size=1&cursor=" + url.QueryEscape(cursor))
-	if code != 200 || later["count"] != float64(2) || later["items"].([]any)[0].(map[string]any)["id"] == list["items"].([]any)[0].(map[string]any)["id"] {
+	if code != 200 || later["count"] != float64(3) || later["items"].([]any)[0].(map[string]any)["id"] == list["items"].([]any)[0].(map[string]any)["id"] {
 		t.Fatalf("later page %d %v", code, later)
 	}
 	priorityFilter := "discovery=browse&bbox=" + bbox + "&viewport_bbox=-79.8985,33.099,-79.8965,33.102&page_size=1"
@@ -134,7 +134,7 @@ func TestHTTPPostGIS(t *testing.T) {
 	if code, _ := request("/api/v1/parcels?" + filter + "&page_size=1&cursor=" + url.QueryEscape(cursor)); code != 400 {
 		t.Fatalf("stale cursor returned %d", code)
 	}
-	for _, path := range []string{"/api/v1/parcels?bbox=" + bbox + "&likely_vacant=false&cursor=" + url.QueryEscape(cursor), "/api/v1/parcels?" + filter + "&cursor=bad", "/api/v1/parcels?zoom=14", "/api/v1/parcels/map?bbox=" + bbox + "&zoom=14&page_size=1", "/api/v1/parcels/map?bbox=" + bbox + "&zoom=23", "/api/v1/parcels/map?bbox=0,86,1,87&zoom=8"} {
+	for _, path := range []string{"/api/v1/parcels?bbox=" + bbox + "&vacancy_tier=review&cursor=" + url.QueryEscape(cursor), "/api/v1/parcels?" + filter + "&cursor=bad", "/api/v1/parcels?likely_vacant=true", "/api/v1/parcels?zoom=14", "/api/v1/parcels/map?bbox=" + bbox + "&zoom=14&page_size=1", "/api/v1/parcels/map?bbox=" + bbox + "&zoom=23", "/api/v1/parcels/map?bbox=0,86,1,87&zoom=8"} {
 		if code, _ := request(path); code != 400 {
 			t.Errorf("invalid %s returned %d", path, code)
 		}
@@ -146,8 +146,8 @@ func TestHTTPPostGIS(t *testing.T) {
 		t.Fatalf("lookup %d %v", code, body)
 	}
 	for _, zoom := range []int{8, 14} {
-		code, body := request(fmt.Sprintf("/api/v1/parcels/map?bbox=%s&zoom=%d&likely_vacant=true", bbox, zoom))
-		if code != 200 || body["context_count"] != float64(3) || body["match_count"] != float64(2) {
+		code, body := request(fmt.Sprintf("/api/v1/parcels/map?bbox=%s&zoom=%d&vacancy_tier=unknown", bbox, zoom))
+		if code != 200 || body["context_count"] != float64(3) || body["match_count"] != float64(3) {
 			t.Fatalf("map %d %d %v", zoom, code, body)
 		}
 		var contexts, matches float64
@@ -165,14 +165,14 @@ func TestHTTPPostGIS(t *testing.T) {
 				}
 			}
 		}
-		if contexts != 3 || matches != 2 {
+		if contexts != 3 || matches != 3 {
 			t.Fatalf("map %d aggregate %v %v", zoom, contexts, matches)
 		}
 	}
 	if _, err := pool.Exec(ctx, `UPDATE parcels SET shape=ST_Transform(ST_Collect(ST_MakeEnvelope(-79.9,33.1,-79.8997,33.1003,4326),ST_MakeEnvelope(-79.8996,33.1004,-79.8993,33.1007,4326)),3857) WHERE id=$1`, ids[0]); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := request("/api/v1/parcels/map?bbox=" + bbox + "&zoom=14&likely_vacant=true"); code != 200 {
+	if code, body := request("/api/v1/parcels/map?bbox=" + bbox + "&zoom=14&vacancy_tier=unknown"); code != 200 {
 		t.Fatalf("multipart map status=%d", code)
 	} else {
 		found := false
@@ -243,7 +243,7 @@ func TestHTTPPostGIS(t *testing.T) {
 	canceled, cancelRequest := context.WithCancel(context.Background())
 	cancelRequest()
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/parcels?likely_vacant=true", nil).WithContext(canceled))
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/parcels?vacancy_tier=unknown", nil).WithContext(canceled))
 	if w.Code == 200 {
 		t.Fatal("canceled request returned data")
 	}

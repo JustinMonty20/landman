@@ -1,5 +1,5 @@
-// Package vacancy evaluates offline Union building and assessment evidence without
-// changing the legacy parcel vacancy signal.
+// Package vacancy derives parcel-keyed building evidence assessments from
+// separately admitted live source generations.
 package vacancy
 
 import (

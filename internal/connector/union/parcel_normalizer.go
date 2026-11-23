@@ -53,14 +53,14 @@ type InvalidParcelRecord struct {
 
 func (e *InvalidParcelRecord) Error() string { return "union parcel: " + e.Reason }
 
-func NormalizeParcel(raw connector.RawRecord) (models.GISParcel, bool, error) {
+func NormalizeParcel(raw connector.RawRecord) (models.GISParcel, error) {
 	id, err := ParcelRecordIdentity(raw)
 	if err != nil {
-		return models.GISParcel{}, false, err
+		return models.GISParcel{}, err
 	}
 	raw.ParcelID = id.PID
-	invalid := func(reason string) (models.GISParcel, bool, error) {
-		return models.GISParcel{}, false, &InvalidParcelRecord{Identity: id, Reason: reason}
+	invalid := func(reason string) (models.GISParcel, error) {
+		return models.GISParcel{}, &InvalidParcelRecord{Identity: id, Reason: reason}
 	}
 	attrs := attributes(raw.RawData)
 	for _, field := range []struct {
@@ -92,7 +92,7 @@ func NormalizeParcel(raw connector.RawRecord) (models.GISParcel, bool, error) {
 	}
 	parcel, err := NewGISTranslator().Translate(raw)
 	if err != nil {
-		return models.GISParcel{}, false, err
+		return models.GISParcel{}, err
 	}
 	if parcel.Geometry.Shape == nil || *parcel.Geometry.Shape == nil || (*parcel.Geometry.Shape).Empty() {
 		return invalid(InvalidParcelGeometry)
@@ -102,6 +102,5 @@ func NormalizeParcel(raw connector.RawRecord) (models.GISParcel, bool, error) {
 			return invalid(InvalidParcelGeometry)
 		}
 	}
-	vacant := IsLikelyVacantGISRecord(raw) && str(attrs, "PID") != ""
-	return *parcel, vacant, nil
+	return *parcel, nil
 }

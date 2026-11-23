@@ -120,7 +120,18 @@ func TestParcelRealData(t *testing.T) {
 		label, path string
 		want        int64
 	}
-	routes := []route{{"sources", "/api/v1/sources", 4}, {"lookup", "/api/v1/parcels/lookup?q=" + lookup[:2], 1}, {"lookup-miss", "/api/v1/parcels/lookup?q=zzzzzzzzunlikely", 0}, {"no-filter", "/api/v1/parcels", 0}, {"list-first", "/api/v1/parcels?likely_vacant=true&page_size=20", -1}, {"list-combined-false", "/api/v1/parcels?likely_vacant=true&min_acres=1&delinquent=false&page_size=20", -1}, {"list-combined-true", "/api/v1/parcels?likely_vacant=true&min_acres=1&delinquent=true&page_size=20", -1}, {"grid", "/api/v1/parcels/map?bbox=" + broadBox + "&zoom=8&likely_vacant=true", -1}, {"grid-moving", "/api/v1/parcels/map?bbox=" + fmt.Sprintf("%.6f,%.6f,%.6f,%.6f", west-.03, south-.03, east+.05, north+.05) + "&zoom=8&likely_vacant=true", -1}, {"shape", "/api/v1/parcels/map?bbox=" + closeBox + "&zoom=16&likely_vacant=true", -1}, {"facts", "/api/v1/parcels/" + parcelID, 1}, {"tax", "/api/v1/parcels/" + taxID + "/tax", 1}, {"soil", "/api/v1/parcels/" + soilID + "/soil", 1}}
+	routes := []route{
+		{"sources", "/api/v1/sources", 4}, {"lookup", "/api/v1/parcels/lookup?q=" + lookup[:2], 1},
+		{"lookup-miss", "/api/v1/parcels/lookup?q=zzzzzzzzunlikely", 0}, {"no-filter", "/api/v1/parcels", 0},
+		{"list-first", "/api/v1/parcels?vacancy_tier=unknown&page_size=20", -1},
+		{"list-combined-false", "/api/v1/parcels?vacancy_tier=unknown&min_acres=1&delinquent=false&page_size=20", -1},
+		{"list-combined-true", "/api/v1/parcels?vacancy_tier=unknown&min_acres=1&delinquent=true&page_size=20", -1},
+		{"grid", "/api/v1/parcels/map?bbox=" + broadBox + "&zoom=8&vacancy_tier=unknown", -1},
+		{"grid-moving", "/api/v1/parcels/map?bbox=" + fmt.Sprintf("%.6f,%.6f,%.6f,%.6f", west-.03, south-.03, east+.05, north+.05) + "&zoom=8&vacancy_tier=unknown", -1},
+		{"shape", "/api/v1/parcels/map?bbox=" + closeBox + "&zoom=16&vacancy_tier=unknown", -1},
+		{"facts", "/api/v1/parcels/" + parcelID, 1}, {"tax", "/api/v1/parcels/" + taxID + "/tax", 1},
+		{"soil", "/api/v1/parcels/" + soilID + "/soil", 1},
+	}
 	_, status, _, first := request(routes[4].path)
 	if status != 200 {
 		t.Fatal("list first-page failed")
@@ -131,8 +142,8 @@ func TestParcelRealData(t *testing.T) {
 	if err = json.Unmarshal(first, &page); err != nil || page.NextCursor == "" {
 		t.Fatal("no later page")
 	}
-	routes = append(routes, route{"list-later", routes[4].path + "&cursor=" + page.NextCursor, -1}, route{"grid-county", "/api/v1/parcels/map?bbox=" + countyBox + "&zoom=8&likely_vacant=true", -1})
-	_, denseStatus, _, _ := request("/api/v1/parcels/map?bbox=" + countyBox + "&zoom=16&likely_vacant=true")
+	routes = append(routes, route{"list-later", routes[4].path + "&cursor=" + page.NextCursor, -1}, route{"grid-county", "/api/v1/parcels/map?bbox=" + countyBox + "&zoom=8&vacancy_tier=unknown", -1})
+	_, denseStatus, _, _ := request("/api/v1/parcels/map?bbox=" + countyBox + "&zoom=16&vacancy_tier=unknown")
 	if denseStatus != http.StatusRequestEntityTooLarge {
 		t.Fatalf("dense feature limit status=%d want=413", denseStatus)
 	}
@@ -189,7 +200,7 @@ func TestParcelRealData(t *testing.T) {
 			}
 			if r.label == "list-first" || r.label == "list-later" {
 				var expected int64
-				if err = pool.QueryRow(context.Background(), `SELECT count(*) FROM parcels WHERE county_id='union' AND source_name='union_county_gis' AND likely_vacant=true`).Scan(&expected); err != nil {
+				if err = pool.QueryRow(context.Background(), `SELECT count(*) FROM parcels p WHERE county_id='union' AND source_name='union_county_gis' AND `+vacancyTierTruth+`='unknown'`).Scan(&expected); err != nil {
 					t.Fatal(err)
 				}
 				if count != expected {

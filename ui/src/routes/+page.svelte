@@ -127,7 +127,7 @@ const spatialParams = $derived.by(() => {
   if (draftFilters.outOfState) params.set('out_of_state_mailing', 'yes');
   if (draftFilters.delinquent) params.set('delinquent', 'true');
   if (draftFilters.foreclosure) params.set('foreclosure', 'true');
-  if (draftFilters.likelyVacant) params.set('likely_vacant', 'true');
+  if (draftFilters.vacancyTier) params.set('vacancy_tier', draftFilters.vacancyTier);
   if (draftFilters.soilType) params.set('soil_type', draftFilters.soilType);
   if (draftFilters.soilUse && draftFilters.soilRating) { params.set('soil_use', draftFilters.soilUse); params.set('soil_rating', draftFilters.soilRating); }
   if (floodCategory) { params.set('flood_category', floodCategory); params.set('flood_contact', floodContact); }

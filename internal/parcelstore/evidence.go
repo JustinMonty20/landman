@@ -18,12 +18,12 @@ import (
 var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // StageEvidencePart keeps the complete original feature alongside the normalized part.
-func (w *ShapeWriter) StageEvidencePart(ctx context.Context, parcel models.GISParcel, vacant bool, rawKey string, feature json.RawMessage) error {
+func (w *ShapeWriter) StageEvidencePart(ctx context.Context, parcel models.GISParcel, rawKey string, feature json.RawMessage) error {
 	hash, err := parcelevidence.SourceHash(feature)
 	if err != nil {
 		return err
 	}
-	return w.stagePart(ctx, parcel, vacant, rawKey, feature, &hash)
+	return w.stagePart(ctx, parcel, rawKey, feature, &hash)
 }
 
 // ApplyEvidence serializes source evidence, history and current rows in the caller's publication transaction.
@@ -243,20 +243,18 @@ type evidencePublication struct {
 }
 
 func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invalidGeometry bool, publication evidencePublication) (int, error) {
-	rows, err := w.tx.Query(ctx, `SELECT payload,likely_vacant,source_feature,source_hash FROM parcel_import_parts WHERE source_parcel_id=$1 ORDER BY ordinal`, pid)
+	rows, err := w.tx.Query(ctx, `SELECT payload,source_feature,source_hash FROM parcel_import_parts WHERE source_parcel_id=$1 ORDER BY ordinal`, pid)
 	if err != nil {
 		return 0, err
 	}
 	var last models.GISParcel
-	var vacant bool
 	var features []json.RawMessage
 	count := 0
 	sourceBytes := 0
 	for rows.Next() {
 		var payload, feature []byte
 		var hash string
-		var partVacant bool
-		if err = rows.Scan(&payload, &partVacant, &feature, &hash); err != nil {
+		if err = rows.Scan(&payload, &feature, &hash); err != nil {
 			break
 		}
 		if feature == nil || hash == "" {
@@ -274,7 +272,6 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invali
 		}
 		features = append(features, feature)
 		_ = hash
-		vacant = vacant || partVacant
 		count++
 	}
 	rows.Close()
@@ -322,13 +319,13 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invali
 		return 0, err
 	}
 	geometryHash := parcelevidence.GeometryHash(shape)
-	normalizedHash, err := parcelevidence.NormalizedHash(last, vacant, geometryHash)
+	normalizedHash, err := parcelevidence.NormalizedHash(last, geometryHash)
 	if err != nil {
 		return 0, err
 	}
 	unchanged := oldHash != nil && *oldHash == normalizedHash && oldHashVersion != nil && *oldHashVersion == parcelevidence.NormalizedHashVersion && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion
 	if !unchanged && oldHash != nil && oldHashVersion != nil && *oldHashVersion != parcelevidence.NormalizedHashVersion && oldGeometry != nil && *oldGeometry == geometryHash && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion {
-		unchanged, err = w.matchesStoredProjection(ctx, pid, last, shape, vacant)
+		unchanged, err = w.matchesStoredProjection(ctx, pid, last, shape)
 		if err != nil {
 			return 0, err
 		}
@@ -379,7 +376,7 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invali
 		return 0, err
 	}
 	last.Geometry.Shape = &decoded
-	if err = w.saveParcelAndSales(ctx, last, vacant); err != nil {
+	if err = w.saveParcelAndSales(ctx, last); err != nil {
 		return 0, err
 	}
 	if err = w.analyzeAfterSavedPart(ctx); err != nil {
@@ -412,7 +409,7 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invali
 // Compare the complete mapped serving projection without invoking business DML.
 // PostgreSQL casts JSON decimal tokens to NUMERIC at the same column precision
 // as the writer. Generated IDs and content timestamps are excluded.
-func (w *ShapeWriter) matchesStoredProjection(ctx context.Context, pid string, candidate models.GISParcel, shape []byte, vacant bool) (bool, error) {
+func (w *ShapeWriter) matchesStoredProjection(ctx context.Context, pid string, candidate models.GISParcel, shape []byte) (bool, error) {
 	p := candidate
 	if err := parcelevidence.NormalizeStorageNumbers(&p); err != nil {
 		return false, err
@@ -446,7 +443,7 @@ func (w *ShapeWriter) matchesStoredProjection(ctx context.Context, pid string, c
 		"valuation_total": num("FMV_TOTAL", p.Valuation.Total), "valuation_assessed": num("TOTVAL", p.Valuation.Assessed),
 		"srid": defaultStorageSRID, "source_srid": p.Geometry.SourceSRID,
 		"source_area": num("SHAPE.STArea()", p.Geometry.SourceArea), "source_length": num("SHAPE.STLength()", p.Geometry.SourceLength),
-		"source_extras": extras, "likely_vacant": vacant,
+		"source_extras": extras,
 	}
 	sales := make([]map[string]any, 0, len(p.Sales))
 	for _, sale := range p.Sales {

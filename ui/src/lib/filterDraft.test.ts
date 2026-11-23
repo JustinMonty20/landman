@@ -7,12 +7,12 @@ test('a new filter preview has no selections', () => {
 });
 
 test('preview selections keep owner, tax, and parcel fields in their groups', () => {
-  const filters = { ...emptyFilterDraft(), businessName: true, outOfState: true, delinquent: true, foreclosure: true, likelyVacant: true, minAcres: 0, maxAcres: 20 };
+  const filters = { ...emptyFilterDraft(), businessName: true, outOfState: true, delinquent: true, foreclosure: true, vacancyTier: 'unknown' as const, minAcres: 0, maxAcres: 20 };
   const selections = filterSelections(filters);
   assert.equal(selections.length, 7);
   assert.deepEqual(selections.filter((selection) => selection.group === 'Owner').map((selection) => selection.key), ['businessName', 'outOfState']);
   assert.deepEqual(selections.filter((selection) => selection.group === 'Tax').map((selection) => selection.key), ['delinquent', 'foreclosure']);
-  assert.deepEqual(selections.filter((selection) => selection.group === 'Parcel').map((selection) => selection.key), ['minAcres', 'maxAcres', 'likelyVacant']);
+  assert.deepEqual(selections.filter((selection) => selection.group === 'Parcel').map((selection) => selection.key), ['minAcres', 'maxAcres', 'vacancyTier']);
   assert.equal(selections.find((selection) => selection.key === 'minAcres')?.label, 'At least 0 acres');
 });
 

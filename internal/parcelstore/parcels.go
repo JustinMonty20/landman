@@ -47,13 +47,12 @@ func NewShapeWriter(ctx context.Context, connectionString string) (*ShapeWriter,
 // NewShapeWriterTx stages parcel parts on the caller-owned publication transaction.
 func NewShapeWriterTx(ctx context.Context, tx pgx.Tx) (*ShapeWriter, error) {
 	_, err := tx.Exec(ctx, `CREATE TEMP TABLE parcel_shape_parts (
-		source_parcel_id TEXT NOT NULL, shape GEOMETRY(Geometry, 3857) NOT NULL,
-		likely_vacant BOOLEAN NOT NULL
+		source_parcel_id TEXT NOT NULL, shape GEOMETRY(Geometry, 3857) NOT NULL
 	) ON COMMIT DROP;
 	CREATE TEMP TABLE parcel_import_parts (
 		ordinal BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		source_parcel_id TEXT NOT NULL, payload BYTEA NOT NULL, shape BYTEA NOT NULL,
-		likely_vacant BOOLEAN NOT NULL, raw_key TEXT NOT NULL,
+		raw_key TEXT NOT NULL,
         source_feature JSONB, source_hash TEXT
 	) ON COMMIT DROP;
 	CREATE INDEX ON parcel_import_parts(source_parcel_id);
@@ -69,7 +68,7 @@ func NewShapeWriterTx(ctx context.Context, tx pgx.Tx) (*ShapeWriter, error) {
 // original shape on the same transaction. Sequences missing from parcel.Sales
 // are deleted. An empty Sales slice deletes every sale for that parcel. A sale
 // error aborts the transaction. The writer updates table statistics every 2,000 parts.
-func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, likelyVacant bool) error {
+func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel) error {
 	shape, _, err := encodeShape(parcel.Geometry)
 	if err != nil {
 		return err
@@ -77,18 +76,18 @@ func (w *ShapeWriter) SavePart(ctx context.Context, parcel models.GISParcel, lik
 	if len(shape) == 0 {
 		return fmt.Errorf("parcelstore: %s has no rings", parcel.Identity.SourceParcelID)
 	}
-	if err := w.saveParcelAndSales(ctx, parcel, likelyVacant); err != nil {
+	if err := w.saveParcelAndSales(ctx, parcel); err != nil {
 		return err
 	}
-	if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape, likely_vacant)
-		VALUES ($1, ST_GeomFromEWKB($2), $3)`, parcel.Identity.SourceParcelID, shape, likelyVacant); err != nil {
+	if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_shape_parts (source_parcel_id, shape)
+		VALUES ($1, ST_GeomFromEWKB($2))`, parcel.Identity.SourceParcelID, shape); err != nil {
 		return err
 	}
 	return w.analyzeAfterSavedPart(ctx)
 }
 
-func (w *ShapeWriter) saveParcelAndSales(ctx context.Context, parcel models.GISParcel, likelyVacant bool) error {
-	parcelID, err := SaveParcel(ctx, w.tx, parcel, likelyVacant)
+func (w *ShapeWriter) saveParcelAndSales(ctx context.Context, parcel models.GISParcel) error {
+	parcelID, err := SaveParcel(ctx, w.tx, parcel)
 	if err != nil {
 		return err
 	}
@@ -120,12 +119,10 @@ func (w *ShapeWriter) analyzeAfterSavedPart(ctx context.Context) error {
 	return nil
 }
 
-// Commit combines parts across pages and replaces the shape and vacancy flag.
+// Commit combines complete parcel polygons across pages.
 func (w *ShapeWriter) Commit(ctx context.Context) error {
-	_, err := w.tx.Exec(ctx, `UPDATE parcels AS p SET shape = parts.shape,
-		likely_vacant = parts.likely_vacant, updated_at = now()
-		FROM (SELECT source_parcel_id, ST_Multi(ST_Union(shape)) AS shape,
-			bool_or(likely_vacant) AS likely_vacant
+	_, err := w.tx.Exec(ctx, `UPDATE parcels AS p SET shape = parts.shape, updated_at = now()
+		FROM (SELECT source_parcel_id, ST_Multi(ST_Union(shape)) AS shape
 			FROM parcel_shape_parts GROUP BY source_parcel_id) AS parts
 		WHERE p.county_id = 'union' AND p.source_name = 'union_county_gis'
 		AND p.source_parcel_id = parts.source_parcel_id`)
@@ -170,7 +167,7 @@ const defaultStorageSRID = 3857
 //
 // The caller owns tx. SaveParcel does not begin or commit a transaction.
 // An error leaves tx aborted. The caller rolls it back.
-func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel, likelyVacant ...bool) (models.ParcelID, error) {
+func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel) (models.ParcelID, error) {
 	if err := identityKey(parcel.Identity); err != nil {
 		return "", err
 	}
@@ -183,10 +180,6 @@ func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel, likelyV
 		extras = json.RawMessage(`{}`)
 	}
 
-	vacant := false
-	if len(likelyVacant) > 0 {
-		vacant = likelyVacant[0]
-	}
 	var id models.ParcelID
 	err = tx.QueryRow(ctx, saveParcelSQL,
 		parcel.Identity.CountyID,
@@ -241,7 +234,6 @@ func SaveParcel(ctx context.Context, tx pgx.Tx, parcel models.GISParcel, likelyV
 		numericValue(parcel.StorageNumbers["SHAPE.STArea()"], parcel.Geometry.SourceArea),
 		numericValue(parcel.StorageNumbers["SHAPE.STLength()"], parcel.Geometry.SourceLength),
 		extras,
-		vacant,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("parcelstore: save parcel: %w", err)
@@ -351,8 +343,7 @@ INSERT INTO parcels (
 	source_srid,
 	source_area,
 	source_length,
-	source_extras,
-	likely_vacant
+	source_extras
 ) VALUES (
 	$1, $2, $3, $4, $5, $6, $7,
 	$8, $9, $10, $11, $12, $13,
@@ -365,8 +356,7 @@ INSERT INTO parcels (
 	ST_GeomFromEWKB($47),
 	$48,
 	$49, $50, $51,
-	COALESCE($52::jsonb, '{}'::jsonb),
-	$53
+	COALESCE($52::jsonb, '{}'::jsonb)
 )
 ON CONFLICT (county_id, source_name, source_parcel_id)
 DO UPDATE SET
@@ -419,7 +409,6 @@ DO UPDATE SET
 	source_area = EXCLUDED.source_area,
 	source_length = EXCLUDED.source_length,
 	source_extras = EXCLUDED.source_extras,
-	likely_vacant = EXCLUDED.likely_vacant,
 	updated_at = now()
 RETURNING id
 `

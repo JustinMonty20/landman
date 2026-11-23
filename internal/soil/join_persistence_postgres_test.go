@@ -72,7 +72,7 @@ func TestSoilJoinPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = parcelstore.SaveParcel(ctx, tx, record, vacant); err != nil {
+		if _, err = parcelstore.SaveParcel(ctx, tx, record); err != nil {
 			_ = tx.Rollback(ctx)
 			t.Fatal(err)
 		}
@@ -108,7 +108,7 @@ func TestSoilJoinPersistence(t *testing.T) {
 			t.Fatalf("%s joins: %d want %d: %v", objectID, count, want, err)
 		}
 	}
-	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN parcels p ON j.parcel_id=p.id WHERE p.source_name=$1 AND p.source_parcel_id='1' AND p.year_built=1998 AND NOT p.likely_vacant`, source).Scan(&count); err != nil || count != 2 {
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM soil_polygon_parcels j JOIN parcels p ON j.parcel_id=p.id WHERE p.source_name=$1 AND p.source_parcel_id='1' AND p.year_built=1998`, source).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("house joins: %d %v", count, err)
 	}
 	var retiredID string

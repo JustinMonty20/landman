@@ -11,7 +11,7 @@ import (
 
 func TestFilters(t *testing.T) {
 	for _, tc := range []string{
-		"unknown=x", "zoom=14", "likely_vacant=true&likely_vacant=false", "min_acres=NaN", "max_acres=+Inf", "min_acres=-1", "min_acres=3&max_acres=2", "bbox=1,2,1,3", "bbox=181,0,182,1", "bbox=-180,-90,180,90", "bbox=0,85.051129,1,86", "bbox=0,-86,1,-85.051129", "bbox=0,0,1", "bbox=0,0,1,NaN", "viewport_bbox=0,0,1,NaN", "viewport_bbox=1,2,1,3", "page_size=101", "page_size=0", "likely_vacant=1", "cursor=" + strings.Repeat("x", 2049),
+		"unknown=x", "zoom=14", "vacancy_tier=unknown&vacancy_tier=review", "min_acres=NaN", "max_acres=+Inf", "min_acres=-1", "min_acres=3&max_acres=2", "bbox=1,2,1,3", "bbox=181,0,182,1", "bbox=-180,-90,180,90", "bbox=0,85.051129,1,86", "bbox=0,-86,1,-85.051129", "bbox=0,0,1", "bbox=0,0,1,NaN", "viewport_bbox=0,0,1,NaN", "viewport_bbox=1,2,1,3", "page_size=101", "page_size=0", "vacancy_tier=occupied", "likely_vacant=true", "cursor=" + strings.Repeat("x", 2049),
 	} {
 		q, e := url.ParseQuery(tc)
 		if e != nil {
@@ -21,12 +21,18 @@ func TestFilters(t *testing.T) {
 			t.Errorf("accepted %s", tc)
 		}
 	}
-	f, e := parseFilters(url.Values{"bbox": {"-81,34,-80,35"}, "min_acres": {"1.5"}, "likely_vacant": {"false"}, "delinquent": {"true"}})
-	if e != nil || f.Bounds.West != -81 || *f.AcresMin != 1.5 || *f.LikelyVacant || !*f.Delinquent {
+	f, e := parseFilters(url.Values{"bbox": {"-81,34,-80,35"}, "min_acres": {"1.5"}, "vacancy_tier": {"unknown"}, "delinquent": {"true"}})
+	if e != nil || f.Bounds.West != -81 || *f.AcresMin != 1.5 || *f.VacancyTier != "unknown" || !*f.Delinquent {
 		t.Fatalf("filter %+v: %v", f, e)
 	}
 	if f.PageSize != 50 || !f.active() {
 		t.Fatal("wrong defaults")
+	}
+	for _, tier := range []string{"strong_candidate", "review", "conflict", "unknown"} {
+		parsed, err := parseFilters(url.Values{"vacancy_tier": {tier}})
+		if err != nil || parsed.VacancyTier == nil || *parsed.VacancyTier != tier || !parsed.active() {
+			t.Fatalf("tier %s unavailable: %+v %v", tier, parsed, err)
+		}
 	}
 	if _, e = finite("NaN", 0, math.MaxFloat64); e == nil {
 		t.Fatal("NaN accepted")

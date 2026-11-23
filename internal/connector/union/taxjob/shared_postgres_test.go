@@ -98,7 +98,7 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 		BillingSourceURL: union.BillingURL, PipelineSourceURL: union.PipelineURL,
 	}
 	for _, key := range []string{"09125043", "09336350", "07129160", "02239077"} {
-		if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis',$1,true)`, key); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES ('union','179','union_county_gis',$1)`, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -193,7 +193,7 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_latest_observations WHERE source_name='union_delinquent'`).Scan(&captureID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis','07105038A',true)`); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES ('union','179','union_county_gis','07105038A')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := runner.Run(ctx, jobs.Definition{ID: "union.gis.soil", Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) {
@@ -228,7 +228,7 @@ func TestSharedTaxRunRetainsAndReplaysFourFiles(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM tax_latest_observations WHERE source_name='union_foreclosure'`).Scan(&foreclosureCapture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis','07129161',false)`); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES ('union','179','union_county_gis','07129161')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Replay(ctx, pool, cfg.ArtifactDir, foreclosureCapture); err != nil {

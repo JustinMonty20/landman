@@ -121,12 +121,12 @@ func TestShapeWriterUnionAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	if err := w.SavePart(ctx, parcel, false); err != nil {
+	if err := w.SavePart(ctx, parcel); err != nil {
 		t.Fatal(err)
 	}
 	second := square(2)
 	parcel.Geometry.Shape = &second
-	if err := w.SavePart(ctx, parcel, true); err != nil {
+	if err := w.SavePart(ctx, parcel); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Commit(ctx); err != nil {
@@ -139,13 +139,12 @@ func TestShapeWriterUnionAndRetry(t *testing.T) {
 	defer conn.Close(ctx)
 	var id string
 	var area float64
-	var vacant bool
-	query := `SELECT id, ST_Area(shape), likely_vacant FROM parcels WHERE source_parcel_id=$1`
-	if err := conn.QueryRow(ctx, query, parcel.Identity.SourceParcelID).Scan(&id, &area, &vacant); err != nil {
+	query := `SELECT id, ST_Area(shape) FROM parcels WHERE source_parcel_id=$1`
+	if err := conn.QueryRow(ctx, query, parcel.Identity.SourceParcelID).Scan(&id, &area); err != nil {
 		t.Fatal(err)
 	}
-	if id == "" || area != 2 || !vacant {
-		t.Fatalf("id=%q area=%v vacant=%v", id, area, vacant)
+	if id == "" || area != 2 {
+		t.Fatalf("id=%q area=%v", id, area)
 	}
 	again, err := parcelstore.NewShapeWriter(ctx, dsn)
 	if err != nil {
@@ -153,25 +152,25 @@ func TestShapeWriterUnionAndRetry(t *testing.T) {
 	}
 	defer again.Close()
 	parcel.Geometry.Shape = &first
-	if err := again.SavePart(ctx, parcel, false); err != nil {
+	if err := again.SavePart(ctx, parcel); err != nil {
 		t.Fatal(err)
 	}
 	if err := again.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var newID string
-	if err := conn.QueryRow(ctx, query, parcel.Identity.SourceParcelID).Scan(&newID, &area, &vacant); err != nil {
+	if err := conn.QueryRow(ctx, query, parcel.Identity.SourceParcelID).Scan(&newID, &area); err != nil {
 		t.Fatal(err)
 	}
-	if newID != id || area != 1 || vacant {
-		t.Fatalf("retry id=%q area=%v vacant=%v", newID, area, vacant)
+	if newID != id || area != 1 {
+		t.Fatalf("retry id=%q area=%v", newID, area)
 	}
 	if _, err := conn.Exec(ctx, `DELETE FROM parcels WHERE source_parcel_id=$1`, parcel.Identity.SourceParcelID); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestShapeWriterPersistsNumericZeroVacancy(t *testing.T) {
+func TestShapeWriterPreservesNumericZeroBuildingFacts(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		year *int64
@@ -197,7 +196,7 @@ func TestShapeWriterPersistsNumericZeroVacancy(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer writer.Close()
-			if err := writer.SavePart(ctx, parcel, true); err != nil {
+			if err := writer.SavePart(ctx, parcel); err != nil {
 				t.Fatalf("save numeric-zero parcel: %v", err)
 			}
 			if err := writer.Commit(ctx); err != nil {
@@ -215,12 +214,11 @@ func TestShapeWriterPersistsNumericZeroVacancy(t *testing.T) {
 			})
 			var year *int64
 			var sqft *float64
-			var vacant bool
-			if err := conn.QueryRow(ctx, `SELECT year_built, sqft, likely_vacant FROM parcels WHERE county_id=$1 AND source_name=$2 AND source_parcel_id=$3`, parcel.Identity.CountyID, parcel.Identity.SourceName, parcel.Identity.SourceParcelID).Scan(&year, &sqft, &vacant); err != nil {
+			if err := conn.QueryRow(ctx, `SELECT year_built, sqft FROM parcels WHERE county_id=$1 AND source_name=$2 AND source_parcel_id=$3`, parcel.Identity.CountyID, parcel.Identity.SourceName, parcel.Identity.SourceParcelID).Scan(&year, &sqft); err != nil {
 				t.Fatal(err)
 			}
-			if !vacant || (tc.year != nil && (year == nil || *year != 0)) || (tc.sqft != nil && (sqft == nil || *sqft != 0)) {
-				t.Fatalf("year=%v sqft=%v likely_vacant=%v", year, sqft, vacant)
+			if (tc.year != nil && (year == nil || *year != 0)) || (tc.sqft != nil && (sqft == nil || *sqft != 0)) {
+				t.Fatalf("year=%v sqft=%v", year, sqft)
 			}
 		})
 	}
@@ -241,11 +239,11 @@ func TestShapeWriterRejectsMissingShapeAndRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.SavePart(ctx, parcel, true); err != nil {
+	if err := writer.SavePart(ctx, parcel); err != nil {
 		t.Fatal(err)
 	}
 	parcel.Geometry.Shape = nil
-	if err := writer.SavePart(ctx, parcel, false); err == nil {
+	if err := writer.SavePart(ctx, parcel); err == nil {
 		t.Fatal("missing rings saved")
 	}
 	writer.Close()
@@ -318,7 +316,7 @@ func TestShapeWriterSaleFailureRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = writer.SavePart(ctx, parcel, false)
+	err = writer.SavePart(ctx, parcel)
 	writer.Close()
 	if err == nil {
 		t.Fatal("negative sale amount saved")
@@ -346,7 +344,7 @@ func TestShapeWriterCountyMatchesParcel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = writer.SavePart(ctx, blank, false)
+	err = writer.SavePart(ctx, blank)
 	writer.Close()
 	if !errors.Is(err, parcelstore.ErrMissingNaturalKey) {
 		t.Fatalf("blank county error = %v", err)
@@ -357,7 +355,7 @@ func TestShapeWriterCountyMatchesParcel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = writer.SavePart(ctx, unknown, false)
+	err = writer.SavePart(ctx, unknown)
 	writer.Close()
 	if err == nil || errors.Is(err, parcelstore.ErrParcelNotFound) {
 		t.Fatalf("unknown county error = %v", err)
@@ -381,7 +379,7 @@ func commitPart(t *testing.T, dsn string, parcel models.GISParcel) {
 		t.Fatal(err)
 	}
 	defer writer.Close()
-	if err := writer.SavePart(context.Background(), parcel, false); err != nil {
+	if err := writer.SavePart(context.Background(), parcel); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Commit(context.Background()); err != nil {

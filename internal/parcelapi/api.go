@@ -34,7 +34,7 @@ type Bounds struct{ West, South, East, North float64 }
 type Filters struct {
 	AcresMin               *float64
 	AcresMax               *float64
-	LikelyVacant           *bool
+	VacancyTier            *string
 	Delinquent             *bool
 	OutOfStateMailing      *string
 	EntityNameIndicator    *string
@@ -63,7 +63,7 @@ type Parcel struct {
 	ParcelNumber *string   `json:"parcel_number"`
 	Address      *string   `json:"address"`
 	MappedAcres  *string   `json:"mapped_acres"`
-	LikelyVacant bool      `json:"likely_vacant"`
+	VacancyTier  string    `json:"vacancy_tier"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 type Feature struct {
@@ -123,9 +123,9 @@ func parseFilters(q url.Values) (Filters, error) {
 
 func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	f := Filters{PageSize: 50}
-	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "viewport_bbox", "page_size", "cursor", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
+	allowed := []string{"min_acres", "max_acres", "vacancy_tier", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "viewport_bbox", "page_size", "cursor", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
 	if mapQuery {
-		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
+		allowed = []string{"min_acres", "max_acres", "vacancy_tier", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
 	}
 	if err := parse(q, allowed...); err != nil {
 		return f, err
@@ -186,13 +186,21 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	for _, item := range []struct {
 		key    string
 		target **bool
-	}{{"likely_vacant", &f.LikelyVacant}, {"delinquent", &f.Delinquent}} {
+	}{{"delinquent", &f.Delinquent}} {
 		if raw, ok := q[item.key]; ok {
 			v, e := strconv.ParseBool(raw[0])
 			if e != nil || (raw[0] != "true" && raw[0] != "false") {
 				return f, errors.New("invalid boolean")
 			}
 			*item.target = &v
+		}
+	}
+	if raw, ok := q["vacancy_tier"]; ok {
+		switch raw[0] {
+		case "strong_candidate", "review", "conflict", "unknown":
+			f.VacancyTier = &raw[0]
+		default:
+			return f, errors.New("invalid vacancy tier")
 		}
 	}
 	for _, item := range []struct {
@@ -269,7 +277,7 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	return f, nil
 }
 func (f Filters) active() bool {
-	return f.Browse || f.Foreclosure != nil || f.SoilType != nil || f.SoilRating != nil || f.AcresMin != nil || f.AcresMax != nil || f.LikelyVacant != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil || f.spatialFilter()
+	return f.Browse || f.Foreclosure != nil || f.SoilType != nil || f.SoilRating != nil || f.AcresMin != nil || f.AcresMax != nil || f.VacancyTier != nil || f.Delinquent != nil || f.OutOfStateMailing != nil || f.EntityNameIndicator != nil || f.CorporateNameIndicator != nil || f.spatialFilter()
 }
 
 func (f Filters) spatialFilter() bool { return f.FloodCategory != nil || f.Jurisdiction != nil }
@@ -312,7 +320,7 @@ func optString(p *string) any {
 	return *p
 }
 func (f Filters) args() []any {
-	a := []any{countyID, parcelSource, optFloat(f.AcresMin), optFloat(f.AcresMax), optBool(f.LikelyVacant), optBool(f.Delinquent), nil, nil, nil, nil}
+	a := []any{countyID, parcelSource, optFloat(f.AcresMin), optFloat(f.AcresMax), optString(f.VacancyTier), optBool(f.Delinquent), nil, nil, nil, nil}
 	if f.Bounds != nil {
 		a[6] = f.Bounds.West
 		a[7] = f.Bounds.South
@@ -325,7 +333,7 @@ func (f Filters) args() []any {
 
 const filterPredicate = `($3::float8 IS NULL OR p.mapped_acres >= $3)
  AND ($4::float8 IS NULL OR p.mapped_acres <= $4)
- AND ($5::boolean IS NULL OR p.likely_vacant=$5)
+ AND ($5::text IS NULL OR ` + vacancyTierSQL + `=$5)
  AND ($6::boolean IS NULL OR EXISTS (SELECT 1 FROM tax_delinquent_balances d WHERE d.parcel_id=p.id AND d.balance_due>0 AND EXISTS (SELECT 1 FROM tax_file_imports i WHERE i.active AND i.county_id=d.county_id AND i.source_name=d.source_name) )=$6)
  AND ($11::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.out_of_state_mailing=$11))
 AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM parcel_owner_labels l WHERE l.parcel_id=p.id AND l.entity_name_indicator=$12))
@@ -382,11 +390,11 @@ const floodMatchQuery = `WITH flood_matches AS MATERIALIZED (
  ) candidate
  WHERE h.source_group='zoning' AND ` + jurisdictionKeySQL + `=$16::text
 ) `
-const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,p.likely_vacant,p.updated_at`
+const parcelColumns = `p.id::text,p.parcel_number,p.situs_line_1,p.mapped_acres::text,` + vacancyTierSQL + `,p.updated_at`
 
 func scanParcel(row pgx.Row) (Parcel, error) {
 	var p Parcel
-	err := row.Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.VacancyTier, &p.UpdatedAt)
 	return p, err
 }
 
@@ -497,7 +505,11 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	if err := tx.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&labelRevision); err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision, floodRevision, zoningRevision)))
+	var vacancyRevision string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT string_agg(source_name||':'||capture_id::text||':'||observed_at::text,',' ORDER BY source_name) FROM vacancy_latest_observations),'') || ':' || (SELECT count(*)::text||':'||coalesce(max(assessed_at)::text,'') FROM vacancy_assessments)`).Scan(&vacancyRevision); err != nil {
+		return "", err
+	}
+	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision, floodRevision, zoningRevision, vacancyRevision)))
 	return hex.EncodeToString(h[:]), nil
 }
 func (f Filters) sourcesReady(ctx context.Context, tx pgx.Tx) bool {
@@ -581,7 +593,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			var priority bool
 			var err error
 			if f.ViewportBounds != nil {
-				err = rows.Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt, &priority)
+				err = rows.Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.VacancyTier, &p.UpdatedAt, &priority)
 			} else {
 				p, err = scanParcel(rows)
 			}
@@ -682,7 +694,7 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"); e != nil {
+	if e := parse(q, "bbox", "zoom", "min_acres", "max_acres", "vacancy_tier", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"); e != nil {
 		bad(w, e)
 		return
 	}
@@ -799,7 +811,7 @@ func (h *Handler) mapView(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item Feature
 		var geometry []byte
-		if err = rows.Scan(&item.ID, &item.ParcelNumber, &item.Address, &item.MappedAcres, &item.LikelyVacant, &item.UpdatedAt, &geometry, &item.Match); err != nil {
+		if err = rows.Scan(&item.ID, &item.ParcelNumber, &item.Address, &item.MappedAcres, &item.VacancyTier, &item.UpdatedAt, &geometry, &item.Match); err != nil {
 			rows.Close()
 			unavailable(w)
 			return
@@ -886,7 +898,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request, id string) {
 	var sourceID string
 	var valuationLand, valuationImprovement, valuationTotal, valuationAssessed *string
 	var location []byte
-	e = tx.QueryRow(r.Context(), `SELECT `+parcelColumns+`,p.source_parcel_id,p.valuation_land::text,p.valuation_improvement::text,p.valuation_total::text,p.valuation_assessed::text,CASE WHEN parcel_boundary_usable(p.shape) THEN ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(p.shape),4326))::jsonb END FROM parcels p WHERE p.id=$1 AND p.county_id=$2 AND p.source_name=$3`, id, countyID, parcelSource).Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt, &sourceID, &valuationLand, &valuationImprovement, &valuationTotal, &valuationAssessed, &location)
+	e = tx.QueryRow(r.Context(), `SELECT `+parcelColumns+`,p.source_parcel_id,p.valuation_land::text,p.valuation_improvement::text,p.valuation_total::text,p.valuation_assessed::text,CASE WHEN parcel_boundary_usable(p.shape) THEN ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(p.shape),4326))::jsonb END FROM parcels p WHERE p.id=$1 AND p.county_id=$2 AND p.source_name=$3`, id, countyID, parcelSource).Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.VacancyTier, &p.UpdatedAt, &sourceID, &valuationLand, &valuationImprovement, &valuationTotal, &valuationAssessed, &location)
 	if errors.Is(e, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return

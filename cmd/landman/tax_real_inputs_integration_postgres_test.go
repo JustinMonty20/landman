@@ -74,7 +74,7 @@ func TestRealTaxInputsDisposable(t *testing.T) {
 	seed := func(key string) string {
 		t.Helper()
 		var id string
-		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis',$1,true) ON CONFLICT (county_id,source_name,source_parcel_id) DO UPDATE SET likely_vacant=true RETURNING id::text`, key).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id) VALUES ('union','179','union_county_gis',$1) ON CONFLICT (county_id,source_name,source_parcel_id) DO UPDATE SET source_parcel_id=EXCLUDED.source_parcel_id RETURNING id::text`, key).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		return id
@@ -213,7 +213,7 @@ DELETE FROM job_attempts WHERE job_id='union.tax'`); err != nil {
 		pool.Close()
 	}()
 	for _, key := range []string{"09125043", "09336350", "02239077"} {
-		if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis',$1,true)`, key); err != nil {
+		if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES('union','179','union_county_gis',$1)`, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -269,8 +269,8 @@ JOIN tax_foreclosure_parcels j ON j.case_id=c.id JOIN parcels p ON p.id=j.parcel
 WHERE c.case_number='26M000471-890' AND p.source_parcel_id='09125043'`).Scan(&caseID, &currentLink); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant)
-VALUES('union','179','union_county_gis','07129163',true)`); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id)
+VALUES('union','179','union_county_gis','07129163')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO tax_foreclosure_parcels(case_id,parcel_id)
@@ -314,7 +314,7 @@ func TestDuplicateBillingRetry(t *testing.T) {
 		}
 		pool.Close()
 	}()
-	if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis','09336350',true)`); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES ('union','179','union_county_gis','09336350')`); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile("internal/connector/union/testdata/tax/billing.csv")
@@ -417,7 +417,7 @@ func TestParcelCommitAfterTaxActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis','09336350',true)`); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES('union','179','union_county_gis','09336350')`); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile("internal/connector/union/testdata/tax/billing.csv")
@@ -477,7 +477,7 @@ func TestForeclosureRetryChecksEachCasePIN(t *testing.T) {
 		pool.Close()
 	}()
 	for _, key := range []string{"07129160", "07129161", "07129163"} {
-		if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis',$1,true)`, key); err != nil {
+		if _, err = pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES('union','179','union_county_gis',$1)`, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -494,7 +494,7 @@ func TestForeclosureRetryChecksEachCasePIN(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis','07129162',true)`); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES('union','179','union_county_gis','07129162')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = taxjob.Run(ctx, pool, cfg); err != nil {
@@ -522,7 +522,7 @@ func TestRealUnionTaxJobDisposable(t *testing.T) {
 	}
 	defer pool.Close()
 	for _, key := range []string{"09336350", "09125043", "02239077"} {
-		if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES('union','179','union_county_gis',$1,true) ON CONFLICT DO NOTHING`, key); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES('union','179','union_county_gis',$1) ON CONFLICT DO NOTHING`, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -540,7 +540,7 @@ func TestRealUnionTaxJobDisposable(t *testing.T) {
 		_, err = source.Read(ctx, func(row union.BillRow) error {
 			if !seen[row.ParcelKey] {
 				seen[row.ParcelKey] = true
-				parcels = append(parcels, []any{"union", "179", "union_county_gis", row.ParcelKey, false})
+				parcels = append(parcels, []any{"union", "179", "union_county_gis", row.ParcelKey})
 			}
 			return nil
 		})
@@ -555,7 +555,7 @@ func TestRealUnionTaxJobDisposable(t *testing.T) {
 				filtered = append(filtered, parcel)
 			}
 		}
-		n, err := pool.CopyFrom(ctx, pgx.Identifier{"parcels"}, []string{"county_id", "county_code", "source_name", "source_parcel_id", "likely_vacant"}, pgx.CopyFromRows(filtered))
+		n, err := pool.CopyFrom(ctx, pgx.Identifier{"parcels"}, []string{"county_id", "county_code", "source_name", "source_parcel_id"}, pgx.CopyFromRows(filtered))
 		if err != nil {
 			t.Fatal(err)
 		}

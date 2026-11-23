@@ -70,14 +70,13 @@ func TestSaveDelinquent(t *testing.T) {
 	defer tx.Rollback(ctx)
 	var vacantID, housedID string
 	for i, entry := range []struct {
-		key    string
-		vacant bool
-		id     *string
+		key string
+		id  *string
 	}{
-		{rows[0].ParcelKey, true, &vacantID}, {rows[1].ParcelKey, false, &housedID},
+		{rows[0].ParcelKey, &vacantID}, {rows[1].ParcelKey, &housedID},
 	} {
-		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id, likely_vacant)
-VALUES ('union','179','union_county_gis',$1,$2) RETURNING id::text`, entry.key, entry.vacant).Scan(entry.id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id)
+VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, entry.key).Scan(entry.id); err != nil {
 			t.Fatalf("seed parcel %d: %v", i, err)
 		}
 	}
@@ -134,7 +133,7 @@ FROM tax_delinquent_balances WHERE parcel_id=$1`, vacantID).Scan(&id, &parcelID,
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tax_file_imports WHERE source_name='union_delinquent' AND active`).Scan(&evidence); err != nil {
 		t.Fatal(err)
 	}
-	if countAfter != before || housedRows != 1 || owedVacant != 1 || owedHoused != 0 || evidence != 1 {
+	if countAfter != before || housedRows != 1 || owedVacant != 1 || owedHoused != 1 || evidence != 1 {
 		t.Fatalf("parcels=%d/%d housed=%d owed=%d/%d evidence=%d", countAfter, before, housedRows, owedVacant, owedHoused, evidence)
 	}
 	if _, ok, err := latest.Latest(ctx); err != nil || ok {
@@ -208,8 +207,8 @@ func TestSaveDelinquentReplacesVersionAndRelinks(t *testing.T) {
 	seedParcel := func(key string) string {
 		t.Helper()
 		var id string
-		if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id, likely_vacant)
-VALUES ('union','179','union_county_gis',$1,true) RETURNING id::text`, key).Scan(&id); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id)
+VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, key).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM parcels WHERE id::text=$1`, id) })

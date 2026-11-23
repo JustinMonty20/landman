@@ -102,6 +102,29 @@ test('filters survive hidden panels and regional zoom with matching results', as
   await expect(panel.getByText('1 filter selected', { exact: true })).toBeVisible();
 });
 
+test('all vacancy tiers request the same list and map filter', async ({ page }, testInfo) => {
+  const panel = page.getByRole('complementary', { name: 'Parcel filters' });
+  await panel.getByRole('button', { name: 'Parcel filters', exact: true }).click();
+  const tier = panel.getByRole('combobox', { name: 'Vacancy tier' });
+  const paths: string[] = [];
+  page.on('request', request => {
+    if (request.url().includes('/api/v1/parcels')) paths.push(request.url());
+  });
+  for (const [value, label] of [['strong_candidate', 'Strong candidate'], ['review', 'Review'], ['conflict', 'Conflict'], ['unknown', 'Unknown']]) {
+    await tier.selectOption(value);
+    await expect(panel.getByRole('button', { name: `Remove Vacancy: ${label.toLowerCase()}` })).toBeVisible();
+    await expect.poll(() => paths.some(path => path.includes('/api/v1/parcels?') && path.includes(`vacancy_tier=${value}`))).toBe(true);
+    await expect.poll(() => paths.some(path => path.includes('/api/v1/parcels/map?') && path.includes(`vacancy_tier=${value}`))).toBe(true);
+    if (value === 'unknown') {
+      await tier.scrollIntoViewIfNeeded();
+      await expect(tier).toHaveValue('unknown');
+      await page.screenshot({ path: testInfo.outputPath('unknown-vacancy-tier.png') });
+    }
+  }
+  await panel.getByRole('button', { name: 'Remove Vacancy: unknown' }).click();
+  await expect(tier).toHaveValue('');
+});
+
 test('expanded filter sections scroll inside the panel and keep the footer reachable', async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 640 });
   const panel = page.getByRole('complementary', { name: 'Parcel filters' });

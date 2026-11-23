@@ -141,8 +141,8 @@ func TestCountySizedParcelRepeatability(t *testing.T) {
 	if area != 2 || owner != "owner 118000" {
 		t.Fatalf("cross-page multipart area=%v owner=%s", area, owner)
 	}
-	if countRows(t, ctx, pool, "parcels WHERE source_parcel_id='7' AND NOT likely_vacant") != 1 {
-		t.Fatal("fallback vacancy override lost")
+	if countRows(t, ctx, pool, "parcels WHERE source_parcel_id='7'") != 1 {
+		t.Fatal("fallback parcel identity lost")
 	}
 	if _, err := pool.Exec(ctx, `CREATE TABLE fixture_parcels_before AS SELECT id,to_jsonb(p)-'updated_at' AS value,ST_AsEWKB(shape) AS shape FROM parcels p;
  CREATE TABLE fixture_sales_before AS SELECT id,to_jsonb(s)-'updated_at' AS value FROM parcel_sales s`); err != nil {

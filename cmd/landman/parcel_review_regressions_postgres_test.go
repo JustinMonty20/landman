@@ -80,7 +80,7 @@ func TestQuarantineResolutionAcrossPublicationBatches(t *testing.T) {
 	}
 }
 
-func TestReviewMultipartClearsOmittedValuesAndNumericZeroVacancy(t *testing.T) {
+func TestReviewMultipartClearsOmittedValuesAndPreservesNumericZero(t *testing.T) {
 	ctx, dsn, pool := parcelFixtureDB(t)
 	a, b := feature(1, "A", "first", true, 1), feature(2, "A", "", true, 0)
 	delete(b["attributes"].(map[string]interface{}), "CURR_NAME1")
@@ -91,12 +91,12 @@ func TestReviewMultipartClearsOmittedValuesAndNumericZeroVacancy(t *testing.T) {
 	}
 	var owner string
 	var sales int
-	var vacant bool
-	if e := pool.QueryRow(ctx, `SELECT coalesce(current_name_1,'NULL'),(SELECT count(*) FROM parcel_sales),likely_vacant FROM parcels`).Scan(&owner, &sales, &vacant); e != nil {
+	var year *int64
+	if e := pool.QueryRow(ctx, `SELECT coalesce(current_name_1,'NULL'),(SELECT count(*) FROM parcel_sales),year_built FROM parcels`).Scan(&owner, &sales, &year); e != nil {
 		t.Fatal(e)
 	}
-	if owner != "NULL" || sales != 0 || !vacant {
-		t.Errorf("owner=%s sales=%d likely_vacant=%t; want NULL/0/true", owner, sales, vacant)
+	if owner != "NULL" || sales != 0 || year == nil || *year != 0 {
+		t.Errorf("owner=%s sales=%d year_built=%v; want NULL/0/0", owner, sales, year)
 	}
 }
 func TestReviewUnsignedCaptureCannotReplacePopulatedStore(t *testing.T) {

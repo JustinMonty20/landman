@@ -99,14 +99,13 @@ func TestSaveBill(t *testing.T) {
 	defer tx.Rollback(ctx)
 	var vacantID, housedID string
 	for i, item := range []struct {
-		key    string
-		vacant bool
-		id     *string
+		key string
+		id  *string
 	}{
-		{rows[0].ParcelKey, true, &vacantID}, {rows[1].ParcelKey, false, &housedID},
+		{rows[0].ParcelKey, &vacantID}, {rows[1].ParcelKey, &housedID},
 	} {
-		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id, likely_vacant)
-VALUES ('union','179','union_county_gis',$1,$2) RETURNING id::text`, item.key, item.vacant).Scan(item.id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id)
+VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, item.key).Scan(item.id); err != nil {
 			t.Fatalf("seed parcel %d: %v", i, err)
 		}
 	}
@@ -224,8 +223,8 @@ func TestSaveBillRelinksUnmatched(t *testing.T) {
 		t.Fatalf("unmatched billing latest: ok=%v err=%v", ok, err)
 	}
 	var parcelID string
-	if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id, likely_vacant)
-VALUES ('union','179','union_county_gis',$1,false) RETURNING id::text`, rows[0].ParcelKey).Scan(&parcelID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id, county_code, source_name, source_parcel_id)
+VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, rows[0].ParcelKey).Scan(&parcelID); err != nil {
 		t.Fatal(err)
 	}
 	if second := save(); second.Saved != 1 || second.Unmatched != 0 || second.Deleted != 0 {

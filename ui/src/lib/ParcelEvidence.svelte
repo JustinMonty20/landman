@@ -5,7 +5,7 @@ let { id, fields, releaseId, onlocation, onresearch }: { id: string; fields: Det
 type Section<T> = { status: 'loading' } | { status: 'unavailable' } | { status: 'ready'; data: T };
 type Facts = { location?: { coordinates: [number, number] } | null; parcel: { parcel_number: string | null; address: string | null; mapped_acres: string | null; updated_at: string }; source: string; owner_labels: null | { entity_name_indicator: string | null }; valuation?: { land: string | null; improvement: string | null; total: string | null; assessed: string | null }; sales: { date: string | null; amount: string | null; deed_book: string | null; deed_page: string | null }[] };
 type Tax = { bills: { year: number; total_taxes: string; fetched_at: string }[]; foreclosure_cases: { case_number: string | null; status: string | null; sale_on: string | null; fetched_at: string | null }[]; pipeline?: { case_number: string | null; status: string | null; sale_on: string | null; fetched_at: string | null }[]; delinquent_balances?: { year: number; balance_due: string; fetched_at: string }[]; reported_delinquent_total: string | null; note: string };
-type Vacancy = { available: boolean; tier: string; reason: string; facts?: Record<string, boolean | null> };
+type Vacancy = { available: boolean; tier: string; reason: string; facts?: Record<string, unknown>; structure_source_as_of?: string; assessment_source_as_of?: string; structures_retrieved_at?: string; assessment_retrieved_at?: string };
 type Soil = { calculated_at?: string; available: boolean; reason?: string; total_acres: number | null; uses: { use: string; rated: { rating: string; area: { acres: number } }[]; unrated: { acres: number }; uncovered: { acres: number }; ambiguous: { acres: number }; next_step: string; map_units?: { map_unit_key: string; interpretation: { fetched_at?: string; revision?: { survey_saved_on?: string | null }; components?: { name: string; reason_name?: string; reason?: string }[] } }[] }[]; freshness: { stale: boolean; reasons: string[]; refresh_failed_at: string | null } };
 type Freshness = { stale: boolean; reasons: string[]; source_fetched_at: string | null; refresh_failed_at: string | null };
 type Zoning = { available: boolean; unmapped_acres: number; zones: { jurisdiction: string; district_code: string | null; description?: string | null; case_reference?: string | null; area: { acres: number } }[]; jurisdictions: { name: string | null }[]; freshness: Freshness };
@@ -111,10 +111,10 @@ const soilUse = (field: DetailField) => ({ soil_septic: 'conventional-septic', s
   <h2>Vacancy screening</h2>{@render status(vacancy)}
   {#if vacancy.status === 'ready'}
     <dl>
-      {#if has('vacancy_tier')}<dt>Vacancy tier</dt><dd>{vacancy.data.available ? text(vacancy.data.tier) : 'No published vacancy evidence'}</dd>{/if}
+      {#if has('vacancy_tier')}<dt>Vacancy tier</dt><dd>{vacancy.data.available ? text(vacancy.data.tier) : 'Unknown · no current validated assessment'}</dd>{/if}
       {#if has('vacancy_reason')}<dt>Vacancy reason</dt><dd>{vacancy.data.available ? text(vacancy.data.reason).replaceAll('_', ' ') : 'No published vacancy evidence'}</dd>{/if}
     </dl>
-    {#if vacancy.data.available && vacancy.data.facts}<details><summary>Contributing vacancy evidence</summary>{#each Object.entries(vacancy.data.facts) as [label, value]}<p>{label.replaceAll('_',' ')}: {value == null ? 'unknown' : String(value)}</p>{/each}</details>{/if}
+    {#if vacancy.data.available && vacancy.data.facts}<details><summary>Contributing vacancy evidence</summary>{#each Object.entries(vacancy.data.facts) as [label, value]}<p>{label.replaceAll('_',' ')}: {value == null ? 'unknown' : String(value)}</p>{/each}<p>Structures source as of: {text(vacancy.data.structure_source_as_of)} · retrieved {text(vacancy.data.structures_retrieved_at)}</p><p>Assessment source as of: {text(vacancy.data.assessment_source_as_of)} · retrieved {text(vacancy.data.assessment_retrieved_at)}</p></details>{/if}
     <small>Provisional screening, not occupancy verification.</small>
   {/if}
 </section>

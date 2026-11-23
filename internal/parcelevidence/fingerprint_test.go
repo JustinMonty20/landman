@@ -25,7 +25,7 @@ func TestStorageNumericFingerprintRoundsHalfAwayFromZero(t *testing.T) {
 	fingerprint := func(amount float64) string {
 		t.Helper()
 		parcel := models.GISParcel{Sales: []models.ParcelSale{{Sequence: 1, Amount: &amount}}}
-		hash, err := parcelevidence.NormalizedHash(parcel, false, "same-geometry")
+		hash, err := parcelevidence.NormalizedHash(parcel, "same-geometry")
 		if err != nil {
 			t.Fatal(err)
 		}

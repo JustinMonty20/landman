@@ -15,6 +15,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const vacancyTierTruth = `COALESCE((SELECT a.tier FROM vacancy_assessments a
+ JOIN parcel_evidence_current c ON c.county_id=p.county_id AND c.source_name=p.source_name AND c.source_parcel_id=p.source_parcel_id
+ JOIN vacancy_live_validation sv ON sv.generation_id=a.structure_generation AND sv.source_name='union_structures_171'
+ JOIN vacancy_live_generations sg ON sg.id=sv.generation_id
+ JOIN vacancy_latest_observations sh ON sh.source_name=sg.source_name AND sh.capture_id=sg.capture_id
+ JOIN vacancy_live_validation av ON av.generation_id=a.assessment_generation AND av.source_name='union_assessed_value_0'
+ JOIN vacancy_live_generations ag ON ag.id=av.generation_id
+ JOIN vacancy_latest_observations ah ON ah.source_name=ag.source_name AND ah.capture_id=ag.capture_id
+ WHERE a.parcel_id=p.id AND a.parcel_generation=c.observation_id::text || ':' || c.normalized_hash || ':' || c.geometry_hash
+ AND sv.normalized_sha256=sg.normalized_sha256 AND av.normalized_sha256=ag.normalized_sha256),'unknown')`
+
 func nearestRank95(n int) int { return int(math.Ceil(.95*float64(n))) - 1 }
 
 func TestNearestRank95(t *testing.T) {
@@ -148,7 +159,7 @@ func verifyCopiedResponse(t *testing.T, pool *pgxpool.Pool, label, path string, 
 		if err := json.Unmarshal(body, &got); err != nil {
 			t.Fatal(err)
 		}
-		where := `p.county_id='union' AND p.source_name='union_county_gis' AND p.likely_vacant=true`
+		where := `p.county_id='union' AND p.source_name='union_county_gis' AND ` + vacancyTierTruth + `='unknown'`
 		if q.Has("min_acres") {
 			where += ` AND p.mapped_acres>=1`
 		}
@@ -234,7 +245,7 @@ func verifyCopiedResponse(t *testing.T, pool *pgxpool.Pool, label, path string, 
 			}
 			args[i] = v
 		}
-		truth := `SELECT p.id::text,p.likely_vacant,ST_X(ST_Transform(ST_PointOnSurface(p.shape),4326)),ST_Y(ST_Transform(ST_PointOnSurface(p.shape),4326)) FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($1,$2,$3,$4,4326),3857)) ORDER BY p.id`
+		truth := `SELECT p.id::text,(` + vacancyTierTruth + `='unknown'),ST_X(ST_Transform(ST_PointOnSurface(p.shape),4326)),ST_Y(ST_Transform(ST_PointOnSurface(p.shape),4326)) FROM parcels p WHERE p.county_id='union' AND p.source_name='union_county_gis' AND ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($1,$2,$3,$4,4326),3857)) ORDER BY p.id`
 		rows, e := pool.Query(context.Background(), truth, args...)
 		if e != nil {
 			t.Fatal(e)
