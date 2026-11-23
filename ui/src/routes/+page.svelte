@@ -432,7 +432,7 @@ return () => task.abort();
                     <li>Union County tax records · A county parcel number is required to open the tax record.</li>
                   {/if}
                   {#if currentResearch?.coordinates && currentResearch.coordinates.every(Number.isFinite)}
-                    <li><a href={'https://www.google.com/maps/@?api=1&map_action=map&center=' + currentResearch.coordinates[1] + '%2C' + currentResearch.coordinates[0] + '&zoom=18&basemap=satellite'} target="_blank" rel="noopener noreferrer">Open satellite view</a> · Point inside stored parcel; imagery does not show boundaries or guarantee currency.</li>
+                    <li><a href={'https://earth.google.com/web/search/' + currentResearch.coordinates[1] + ',' + currentResearch.coordinates[0]} target="_blank" rel="noopener noreferrer">Open satellite view</a> · Google Earth at a point inside the stored parcel. Imagery does not show boundaries or guarantee currency.</li>
                   {/if}
                 </ul>
                 <p>County parcel number: {currentResearch ? currentResearch.parcelNumber || 'Not recorded' : 'Loading…'}. Both county links open this parcel directly. The tax link opens the 2026 record. An unavailable lookup does not mean the county has no record.</p>

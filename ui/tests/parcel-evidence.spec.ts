@@ -14,7 +14,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.route('**/api/me/parcel-detail-fields', route => route.fulfill({ json: { fields: ['mapped_acres', 'soil_septic', 'delinquent_total', 'zoning_district', 'road_distance', 'flood_unknown'] } }));
  const requested: string[] = [];
  const externalRequests: string[] = [];
- page.on('request', request => { if (['property.spatialest.com', 'unionnc.devnetwedge.com', 'www.google.com'].includes(new URL(request.url()).hostname)) externalRequests.push(request.url()); });
+ page.on('request', request => { if (['property.spatialest.com', 'unionnc.devnetwedge.com', 'earth.google.com'].includes(new URL(request.url()).hostname)) externalRequests.push(request.url()); });
  await page.route('**/api/v1/**', route => {
   const url = new URL(route.request().url()); requested.push(url.pathname);
   if (url.pathname === '/api/v1/parcels') return route.fulfill({ json: { items: [{ id: first, parcel_number: '00123450', address: 'Fixture Way' }, { id: second, parcel_number: 'SECOND', address: null }], count: 2, source_stamp: 'fixture' } });
@@ -64,13 +64,14 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
   await expect(link).toHaveAttribute('target', '_blank');
   await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
  }
- await expect(sites.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', /center=34\.89%2C-80\.7.*basemap=satellite/);
+ await expect(sites.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', 'https://earth.google.com/web/search/34.89,-80.7');
  expect(requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first))).toHaveLength(evidenceRequests);
  expect(externalRequests).toEqual([]);
  await page.screenshot({ path: testInfo.outputPath('research-links.png'), fullPage: true });
  for (const [name, url, pattern] of [
    ['Union County property records', 'https://property.spatialest.com/nc/union#/property/00123450', 'https://property.spatialest.com/**'],
-   ['Union County tax records', 'https://unionnc.devnetwedge.com/parcel/view/00123450/2026', 'https://unionnc.devnetwedge.com/**']
+   ['Union County tax records', 'https://unionnc.devnetwedge.com/parcel/view/00123450/2026', 'https://unionnc.devnetwedge.com/**'],
+   ['Open satellite view', 'https://earth.google.com/web/search/34.89,-80.7', 'https://earth.google.com/**']
  ] as const) {
    await page.context().route(pattern, route => route.fulfill({ contentType: 'text/html', body: '<title>County record fixture</title>' }));
    const newTab = page.waitForEvent('popup');
@@ -89,7 +90,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.mouse.click(center.x, center.y);
  await expect(panel).toContainText('County parcel number: 00123450');
  await expect(sites.getByRole('link', { name: 'Union County property records' })).toHaveAttribute('href', 'https://property.spatialest.com/nc/union#/property/00123450');
- await expect(sites.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', /center=34\.89%2C-80\.7.*basemap=satellite/);
+ await expect(sites.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', 'https://earth.google.com/web/search/34.89,-80.7');
  expect(requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first))).toHaveLength(evidenceRequests);
  await page.screenshot({ path: testInfo.outputPath('research-map-reselected.png'), fullPage: true });
  await panel.getByRole('tab', { name: 'Evidence', exact: true }).click();

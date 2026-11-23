@@ -38,7 +38,7 @@ For a saved parcel, show a **Request tax info** action. Each explicit action mak
 
 Deliver these three browser links together in the parcel detail panel. Make them available without saving the parcel. Open each external page only when the buyer selects its link.
 
-- **Open in Google Maps (satellite).** Show the link for every parcel with valid geometry, regardless of vacancy tier or site address. Center the view on a point inside the stored parcel boundary. Do not embed imagery. The external view does not show the Landman boundary or guarantee current imagery.
+- **Open in Google Earth.** Show the link for every parcel with valid geometry, regardless of vacancy tier or site address. Center the view on a point inside the stored parcel boundary. Do not embed imagery. The external view does not show the Landman boundary or guarantee current imagery.
 - **Open Union County property record.** Use `https://property.spatialest.com/nc/union#/property/{parcel_id}`. Verify the link with a real county parcel before release.
 - **Open Union County tax record.** Use the DevNet parcel page, for example `https://unionnc.devnetwedge.com/parcel/view/09336350/2026`. Use a verified tax year for the record. Do not hard-code the example year or assume the current calendar year is available.
 

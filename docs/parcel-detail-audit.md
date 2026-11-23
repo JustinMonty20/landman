@@ -64,7 +64,7 @@ The stored boundary layer also names Hemby Bridge, Mineral Springs, Mint Hill, U
 ## External parcel links
 
 - **Open Union County property record.** Use `https://property.spatialest.com/nc/union#/property/{parcel_id}` as a browser link only. Verify that a real parcel opens with the county parcel number, not the Landman UUID, before adding the link to the panel. Preserve leading zeros. The site home page responded, but this audit did not verify a parcel deep link. Do not fetch or scrape records through this feature.
-- **Open satellite view.** Keep this separate from the property record. The existing browser plan specifies Google Maps in satellite mode, centered on a point inside the parcel. Do not send owner data to either site.
+- **Open satellite view.** Keep this separate from the property record. The existing browser plan specifies Google Earth Web, centered on a point inside the parcel. Do not send owner data to either site.
 
 ## Rules for the panel
 
