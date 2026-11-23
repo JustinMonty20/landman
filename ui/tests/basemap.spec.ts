@@ -37,6 +37,7 @@ for (const blocked of [false, true]) {
       if (url.origin !== info.project.use.baseURL) return route.abort();
       if (!/^\/(api|auth)(\/|$)/.test(url.pathname)) return route.continue();
       if (url.pathname === '/api/me') return route.fulfill({ json: { id, email: 'buyer@example.test', name: 'Buyer' } });
+      if (url.pathname === '/api/me/parcel-detail-groups') return route.fulfill({ json: { groups: ['acreage'] } });
       if (url.pathname === '/api/v1/parcels/soil-types') return route.fulfill({ json: { items: [] } });
       if (url.pathname === '/api/v1/parcels/map') {
         const geometry = centerParcel(url.searchParams.get('bbox')!);
@@ -80,7 +81,8 @@ for (const blocked of [false, true]) {
     await page.screenshot({ path: info.outputPath('02-filtered.png') });
     await result.click();
     await expect(page.getByRole('heading', { name: 'Parcel evidence', exact: true })).toBeVisible();
-    await expect(page.getByText('Parcel P-1 · Fixture Road', { exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Parcel identity' })).toContainText('P-1 · Fixture Road');
+    await expect(page.getByRole('heading', { name: 'Acreage', exact: true })).toBeVisible();
     await expect(locate).toBeEnabled();
     await expect(page.getByText('Map unavailable.', { exact: false })).toHaveCount(0);
     expect(metadataRequests).toBe(1);
