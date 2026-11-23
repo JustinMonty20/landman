@@ -26,7 +26,7 @@ test('regional map has clickable counties without a dropdown, legend, or empty f
 test('clicking Union opens filters and preserves panel preferences across zoom levels', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Inspect Union, NC', exact: true }).click();
-  await expect(page.getByRole('searchbox', { name: 'Find parcel ID or address' })).toBeDisabled();
+  await expect(page.getByRole('combobox', { name: 'Find parcel ID or address' })).toBeEnabled();
   await expect(page.getByRole('heading', { name: 'Filter Union parcels' })).toBeVisible();
   const panel = await page.getByRole('region', { name: 'Map panel' }).boundingBox();
   expect(panel!.y).toBe(164);

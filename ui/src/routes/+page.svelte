@@ -53,6 +53,47 @@ let parcels = $state<ParcelShape[]>([]);
 let parcelError = $state('');
 let parcelID = $state('');
 const currentResearch = $derived(research?.id === parcelID ? research : undefined);
+type ParcelSuggestion = { id: string; parcel_number: string | null; address: string | null };
+let finderText = $state('');
+let finderOpen = $state(false);
+let suggestions = $state<ParcelSuggestion[]>([]);
+let finderStatus = $state('');
+let activeSuggestion = $state(0);
+const finderQuery = $derived(finderText.trim());
+$effect(() => {
+  const query = finderQuery;
+  const available = parcelView;
+  const county = selectedId;
+  suggestions = [];
+  finderStatus = '';
+  activeSuggestion = 0;
+  if (!available || county !== '37179') return;
+  const length = new TextEncoder().encode(query).length;
+  if (length < 2) return;
+  if (length > 80) { finderStatus = 'Enter 80 bytes or fewer.'; return; }
+  const task = new AbortController();
+  finderStatus = 'Searching…';
+  readMapData<{ items: ParcelSuggestion[] }>(`/api/v1/parcels/lookup?q=${encodeURIComponent(query)}`, task.signal).then(data => {
+    if (task.signal.aborted) return;
+    suggestions = data.items;
+    finderStatus = data.items.length ? '' : 'No parcels found.';
+  }).catch(() => { if (!task.signal.aborted) finderStatus = 'Parcel search is unavailable. Try again.'; });
+  return () => task.abort();
+});
+function chooseSuggestion(parcel: ParcelSuggestion) {
+  finderOpen = false;
+  finderText = '';
+  inspectParcel(parcel.id, true);
+}
+function finderKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') { finderOpen = false; return; }
+  if (!suggestions.length) return;
+  if (!finderOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) finderOpen = true;
+  if (!finderOpen) return;
+  if (event.key === 'ArrowDown') { event.preventDefault(); activeSuggestion = (activeSuggestion + 1) % suggestions.length; }
+  if (event.key === 'ArrowUp') { event.preventDefault(); activeSuggestion = (activeSuggestion + suggestions.length - 1) % suggestions.length; }
+  if (event.key === 'Enter') { event.preventDefault(); chooseSuggestion(suggestions[activeSuggestion]); }
+}
 let floodOn = $state(false);
 type FloodCategory = keyof typeof floodStyles;
 let floodCategory = $state<FloodCategory | ''>('');
@@ -267,7 +308,7 @@ function showSelectedFilters() {
   if (detail === 'region') selectCounty(selectedId);
 }
 function selectCounty(id: CountyId) {
-  if (selectedId !== id) parcelID = '';
+  if (selectedId !== id) { parcelID = ''; finderText = ''; finderOpen = false; }
   selectedId = id;
   focusRequest += 1;
   detail = 'county';
@@ -302,8 +343,13 @@ return () => task.abort();
     {#if selected.status === 'locked'}<p class="locked-notice" role="status">{selected.name} County is locked. Parcel discovery is not available.</p>{/if}
     {#if parcelView}
       <div class="map-controls">
-        <div class="search-row"><label class="search"><span>Find parcel ID or address</span><input class="input" type="search" aria-describedby="parcel-availability" placeholder={`Find parcel in ${selected.name} County`} disabled /></label></div>
-        <span class="sr-only" id="parcel-availability">Parcel search and filters are unavailable. Zoom in and select a parcel to see flood evidence.</span>
+        <div class="search-row" onfocusout={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) finderOpen = false; }}>
+          <label class="search"><span>Find parcel ID or address</span><input class="input" type="search" role="combobox" aria-autocomplete="list" aria-expanded={finderOpen && !!finderQuery} aria-controls="parcel-suggestions" aria-activedescendant={finderOpen && suggestions.length ? `parcel-suggestion-${activeSuggestion}` : undefined} placeholder={`Find parcel in ${selected.name} County`} bind:value={finderText} onfocus={() => finderOpen = true} oninput={() => finderOpen = true} onkeydown={finderKeydown} /></label>
+          {#if finderOpen && finderQuery}<div id="parcel-suggestions" class="search-suggestions" role="listbox" aria-label="Parcel suggestions">
+            {#each suggestions as parcel, index (parcel.id)}<button id={`parcel-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion} onclick={() => chooseSuggestion(parcel)}>{parcel.address || 'Address not recorded'} · {parcel.parcel_number || `Parcel ${parcel.id.slice(0, 8)}`}</button>{/each}
+            {#if finderStatus}<p role="status">{finderStatus}</p>{/if}
+          </div>{/if}
+        </div>
         {#if filterCount > 0}{@render countySummary()}{/if}
       </div>
     {/if}
@@ -473,7 +519,6 @@ return () => task.abort();
 <style>
 h1 { font-size: 19px; font-weight: 650; }
 .results .pagination { margin-top: auto; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .map-controls { max-width: 440px; right: 330px; }
 .county-summary { position: absolute; top: 12px; left: 12px; right: 65px; width: fit-content; max-width: calc(100% - 77px); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 11px; cursor: pointer; }
 .map-controls .county-summary { position: static; max-width: 100%; }
