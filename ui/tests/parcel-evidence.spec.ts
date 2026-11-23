@@ -11,7 +11,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
   return route.continue();
  });
  await page.route('**/api/me', route => route.fulfill({ json: { id: first, email: 'fixture@example.test', name: 'Fixture' } }));
- await page.route('**/api/me/parcel-detail-groups', route => route.fulfill({ json: { groups: ['acreage', 'soil', 'tax', 'zoning', 'roads', 'flood'] } }));
+ await page.route('**/api/me/parcel-detail-fields', route => route.fulfill({ json: { fields: ['mapped_acres', 'soil_septic', 'delinquent_total', 'zoning_district', 'road_distance', 'flood_unknown'] } }));
  const requested: string[] = [];
  await page.route('**/api/v1/**', route => {
   const url = new URL(route.request().url()); requested.push(url.pathname);
@@ -43,10 +43,10 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.getByRole('button', { name: /FIRST · Fixture Way/ }).click();
  await moved;
  const panel = page.getByRole('region', { name: 'Parcel evidence' });
- await expect(panel).toContainText('Parcel FIRST');
+ await expect(panel).toContainText('FIRST · Fixture Way');
  await expect(panel).toContainText('No published soil assessment');
- await expect(panel).toContainText('Reported delinquent total: unknown');
- await expect(panel).toContainText('No FEMA release is stored');
+ await expect(panel).toContainText('Not recorded');
+ await expect(panel).toContainText('No FEMA release stored');
  expect(requested.some(path => path.endsWith('/flood'))).toBe(true);
  expect(requested.some(path => path.endsWith('/zoning'))).toBe(true);
  await page.screenshot({ path: testInfo.outputPath('parcel-core.png'), fullPage: true });
@@ -54,17 +54,17 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await page.getByRole('checkbox', { name: 'Roads' }).check();
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).check();
  await expect(panel).toContainText('No published zoning assessment');
- await expect(panel).toContainText('Evidence is temporarily unavailable');
- await expect(panel).toContainText('No FEMA release is stored');
+ await expect(panel).toContainText('Evidence temporarily unavailable');
+ await expect(panel).toContainText('No FEMA release stored');
  await page.screenshot({ path: testInfo.outputPath('parcel-layers.png'), fullPage: true });
- await panel.getByRole('region', { name: 'Road evidence' }).scrollIntoViewIfNeeded();
- await expect(panel.getByRole('region', { name: 'Road evidence' })).toBeVisible();
+ await panel.getByRole('region', { name: 'Mapped road distance' }).scrollIntoViewIfNeeded();
+ await expect(panel.getByRole('region', { name: 'Mapped road distance' })).toBeVisible();
  await page.screenshot({ path: testInfo.outputPath('parcel-layers-bottom.png'), fullPage: true });
  await page.getByRole('checkbox', { name: 'FEMA flood zones' }).uncheck();
- await expect(panel.getByRole('region', { name: 'Flood evidence' })).toBeVisible();
+ await expect(panel.getByRole('region', { name: 'Unknown coverage acreage' })).toBeVisible();
  await page.getByRole('button', { name: 'Close parcel details' }).click();
  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('FIRST');
  await page.getByRole('button', { name: /SECOND/ }).click();
- await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('Parcel SECOND');
+ await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('SECOND · Fixture Way');
  await expect(panel.getByRole('status').filter({ hasText: 'Parcel location is unavailable.' })).toBeVisible();
 });

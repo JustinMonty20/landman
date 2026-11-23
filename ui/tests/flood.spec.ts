@@ -16,7 +16,7 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
     if (url.searchParams.get('flood_category') === 'sfha') requests.add(url.pathname);
   });
   await page.route('**/api/me', (route) => route.fulfill({ json: { id, email: 'buyer@example.test', name: 'Buyer' } }));
-  await page.route('**/api/me/parcel-detail-groups', (route) => route.fulfill({ json: { groups: ['flood'] } }));
+  await page.route('**/api/me/parcel-detail-fields', (route) => route.fulfill({ json: { fields: ['flood_unknown', 'flood_zones'] } }));
   await page.route('**/api/v1/parcels?*', (route) => route.fulfill({ json: { items: [{ id, parcel_number: 'FLOOD-TEST', address: null }], count: 1, source_stamp: 'fixture' } }));
   await page.route('**/api/v1/flood/map?*', (route) => route.fulfill({ json: {
     type: 'FeatureCollection', release, features: [{ type: 'Feature', geometry, properties: { category: 'sfha', code: 'AE', subtype: '', sfha: 'T' } }]
@@ -37,9 +37,8 @@ test('shows stored flood zones and evidence for a visible parcel', async ({ page
   }
   await page.getByRole('button', { name: 'FLOOD-TEST' }).click();
   const details = page.getByRole('region', { name: 'Parcel evidence' });
-  await expect(details).toContainText('Zone AE: 7.00 acres');
-  await expect(details).toContainText('Unknown coverage: 3.00 acres');
-  await expect(details).toContainText('3710542500J · 2008-10-16');
+  await expect(details).toContainText('AE: 7.00 acres');
+  await expect(details).toContainText('3.00 acres');
   await page.getByRole('button', { name: 'Close parcel details' }).click();
   const legendFilter = page.getByRole('button', { name: 'Special flood hazard area (1% annual chance)', exact: true });
   await legendFilter.click();

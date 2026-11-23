@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -102,8 +103,9 @@ func newServer(ctx context.Context, pool *pgxpool.Pool, c Config, issuer string)
 	s.mux.HandleFunc("GET /auth/google/callback", s.callback)
 	s.mux.HandleFunc("POST /auth/logout", s.logout)
 	s.mux.HandleFunc("GET /api/me", s.me)
-	s.mux.HandleFunc("GET /api/me/parcel-detail-groups", s.getParcelDetailGroups)
-	s.mux.HandleFunc("PUT /api/me/parcel-detail-groups", s.putParcelDetailGroups)
+	s.mux.HandleFunc("GET /api/me/parcel-detail-fields", s.getParcelDetailFields)
+	s.mux.HandleFunc("PUT /api/me/parcel-detail-fields", s.putParcelDetailFields)
+	s.mux.HandleFunc("GET /api/me/parcel-owner/{id}", s.getParcelOwner)
 	return s, nil
 }
 
@@ -303,10 +305,10 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 }
 
 // The account's detail selection is independent of map layers and parcel reads.
-var detailGroupOrder = []string{"acreage", "ownership", "tax", "vacancy", "soil", "zoning", "roads", "flood"}
+var detailFieldOrder = []string{"mapped_acres", "owner_name", "entity_indicator", "sale_count", "delinquent_total", "tax_bill_count", "foreclosure_count", "vacancy_tier", "vacancy_reason", "soil_acres", "soil_septic", "soil_dwelling_without", "soil_dwelling_with", "zoning_district", "zoning_jurisdiction", "zoning_unmapped", "road_distance", "road_name", "road_status", "flood_unknown", "floodway_acres", "flood_zones"}
 
-type detailGroupsResponse struct {
-	Groups []string `json:"groups"`
+type detailFieldsResponse struct {
+	Fields []string `json:"fields"`
 }
 
 func (s *server) detailUser(w http.ResponseWriter, r *http.Request) (User, bool) {
@@ -322,21 +324,21 @@ func (s *server) detailUser(w http.ResponseWriter, r *http.Request) (User, bool)
 	return user, true
 }
 
-func (s *server) getParcelDetailGroups(w http.ResponseWriter, r *http.Request) {
+func (s *server) getParcelDetailFields(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.detailUser(w, r)
 	if !ok {
 		return
 	}
 	var groups []string
-	if err := s.pool.QueryRow(r.Context(), "SELECT parcel_detail_groups FROM app_users WHERE id=$1", user.ID).Scan(&groups); err != nil {
+	if err := s.pool.QueryRow(r.Context(), "SELECT parcel_detail_fields FROM app_users WHERE id=$1", user.ID).Scan(&groups); err != nil {
 		unavailable(w)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(detailGroupsResponse{Groups: groups})
+	json.NewEncoder(w).Encode(detailFieldsResponse{Fields: groups})
 }
 
-func (s *server) putParcelDetailGroups(w http.ResponseWriter, r *http.Request) {
+func (s *server) putParcelDetailFields(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Origin") != s.origin {
 		http.Error(w, "Invalid request origin", http.StatusForbidden)
 		return
@@ -353,10 +355,10 @@ func (s *server) putParcelDetailGroups(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var request struct {
-		Groups *[]string `json:"groups"`
+		Fields *[]string `json:"fields"`
 	}
-	if err := decoder.Decode(&request); err != nil || request.Groups == nil {
-		http.Error(w, "Invalid groups", http.StatusBadRequest)
+	if err := decoder.Decode(&request); err != nil || request.Fields == nil {
+		http.Error(w, "Invalid fields", http.StatusBadRequest)
 		return
 	}
 	var trailing any
@@ -364,33 +366,57 @@ func (s *server) putParcelDetailGroups(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	selected := make(map[string]bool, len(*request.Groups))
-	for _, group := range *request.Groups {
+	selected := make(map[string]bool, len(*request.Fields))
+	for _, group := range *request.Fields {
 		valid := false
-		for _, allowed := range detailGroupOrder {
+		for _, allowed := range detailFieldOrder {
 			if group == allowed {
 				valid = true
 				break
 			}
 		}
 		if !valid || selected[group] {
-			http.Error(w, "Invalid groups", http.StatusBadRequest)
+			http.Error(w, "Invalid fields", http.StatusBadRequest)
 			return
 		}
 		selected[group] = true
 	}
 	groups := make([]string, 0, len(selected))
-	for _, group := range detailGroupOrder {
+	for _, group := range detailFieldOrder {
 		if selected[group] {
 			groups = append(groups, group)
 		}
 	}
-	if _, err := s.pool.Exec(r.Context(), "UPDATE app_users SET parcel_detail_groups=$1 WHERE id=$2", groups, user.ID); err != nil {
+	if _, err := s.pool.Exec(r.Context(), "UPDATE app_users SET parcel_detail_fields=$1 WHERE id=$2", groups, user.ID); err != nil {
 		unavailable(w)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(detailGroupsResponse{Groups: groups})
+	json.NewEncoder(w).Encode(detailFieldsResponse{Fields: groups})
+}
+
+// Owner names are sourced only from current county parcel names. No mailing or contact fields.
+func (s *server) getParcelOwner(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.detailUser(w, r); !ok {
+		return
+	}
+	id := r.PathValue("id")
+	if !regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`).MatchString(id) {
+		http.Error(w, "Invalid parcel ID", http.StatusBadRequest)
+		return
+	}
+	var first, second *string
+	err := s.pool.QueryRow(r.Context(), `SELECT NULLIF(current_name_1,''),NULLIF(current_name_2,'') FROM parcels WHERE id=$1::uuid AND county_id='union' AND source_name='union_county_gis'`, id).Scan(&first, &second)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"current_name_1": first, "current_name_2": second})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
@@ -424,7 +450,7 @@ func CheckSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 	var column bool
-	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='app_users' AND column_name='parcel_detail_groups')").Scan(&column); err != nil || !column {
+	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='app_users' AND column_name='parcel_detail_fields')").Scan(&column); err != nil || !column {
 		return errors.New("missing parcel detail preferences migration")
 	}
 	return nil
