@@ -150,6 +150,12 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if _, err = pool.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(0,0,10,10,3857) WHERE id=$1::uuid`, id); err != nil {
 		t.Fatal(err)
 	}
+	if err = Publish(ctx, pool); err != nil {
+		t.Fatal("reassess changed parcel without a new parcel observation: ", err)
+	}
+	if got := request("/api/v1/parcels/" + id + "/vacancy"); got["tier"] != "unknown" {
+		t.Fatalf("changed parcel was promoted without new source evidence: %v", got)
+	}
 	_, err = pool.Exec(ctx, `UPDATE parcel_evidence_current SET normalized_hash=repeat('f',64) WHERE source_parcel_id='vacancy-test-a'`)
 	if err != nil {
 		t.Fatal(err)

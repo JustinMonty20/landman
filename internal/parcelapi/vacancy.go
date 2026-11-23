@@ -13,8 +13,8 @@ import (
 // The published tier is usable only while its parcel fingerprint, both live
 // generations, validation attestations and latest accepted source heads match.
 // A stale result is unknown, even if an old row says strong_candidate.
-const vacancyFresh = `parcel_boundary_usable(p.shape)
- AND a.parcel_generation=c.observation_id::text || ':' || c.normalized_hash || ':' || c.geometry_hash
+const vacancyFresh = `parcel_boundary_usable(p.shape) AND c.parcel_row_version=p.xmin::text
+ AND a.parcel_generation=c.observation_id::text || ':' || c.normalized_hash || ':' || c.geometry_hash || ':' || p.xmin::text
  AND sv.capture_contract_version=1 AND av.capture_contract_version=1
  AND a.structure_generation=sv.generation_id AND a.assessment_generation=av.generation_id
  AND sv.normalized_sha256=sg.normalized_sha256 AND av.normalized_sha256=ag.normalized_sha256

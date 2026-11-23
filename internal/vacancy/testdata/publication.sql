@@ -4,8 +4,8 @@ INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_nu
 VALUES ('union','179','union_county_gis','vacancy-test-a','vacancy-test-a',0,0,ST_MakeEnvelope(0,0,10,10,3857)),
 ('union','179','union_county_gis','vacancy-test-b','vacancy-test-b',1998,100,ST_MakeEnvelope(10,0,20,10,3857)),
 ('union','179','union_county_gis','vacancy-test-c','vacancy-test-c',0,0,ST_MakeEnvelope(20,0,30,10,3857));
-INSERT INTO parcel_evidence_current(county_id,source_name,source_parcel_id,observation_id,source_hash,source_hash_version,normalized_hash,normalizer_version,normalized_hash_version,geometry_hash,geometry_hash_version,source_features)
-SELECT 'union','union_county_gis',p.source_parcel_id,o.id,repeat('a',64),'test',repeat('b',64),'test','test',repeat('c',64),'test','[]'::jsonb
+INSERT INTO parcel_evidence_current(county_id,source_name,source_parcel_id,observation_id,source_hash,source_hash_version,normalized_hash,normalizer_version,normalized_hash_version,geometry_hash,geometry_hash_version,source_features,parcel_row_version)
+SELECT 'union','union_county_gis',p.source_parcel_id,o.id,repeat('a',64),'test',repeat('b',64),'test','test',repeat('c',64),'test','[]'::jsonb,p.xmin::text
 FROM parcels p CROSS JOIN parcel_evidence_observations o WHERE o.artifact_id='vacancy-publication-test' AND p.source_parcel_id IN ('vacancy-test-a','vacancy-test-b','vacancy-test-c');
 CREATE TEMP TABLE vacancy_test_g(source_name text,id uuid,capture_id uuid) ON COMMIT DROP;
 WITH c AS (INSERT INTO ingest_captures(source_name,observed_at,manifest,manifest_sha256,storage_mode,published_at)

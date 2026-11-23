@@ -75,7 +75,8 @@ const publicationSQL = `WITH source_state AS MATERIALIZED (
  SELECT EXISTS(SELECT 1 FROM vacancy_live_shapes WHERE generation_id=$1::uuid AND shape IS NULL) AS source_shape_incomplete
 ), evidence AS (
  SELECT p.id,x.source_shape_incomplete,p.source_parcel_id,p.shape,p.year_built,p.sqft,p.structure,p.structure_style,
- c.observation_id::text || ':' || c.normalized_hash || ':' || c.geometry_hash AS parcel_generation,
+ CASE WHEN c.parcel_row_version=p.xmin::text THEN
+ c.observation_id::text || ':' || c.normalized_hash || ':' || c.geometry_hash || ':' || p.xmin::text END AS parcel_generation,
  EXISTS (SELECT 1 FROM parcels other WHERE other.id<>p.id AND other.county_id=p.county_id
  AND other.source_name=p.source_name AND other.source_parcel_id=p.source_parcel_id) AS duplicate_pid,
  (SELECT count(DISTINCT (r.market_building::text)) FROM vacancy_live_assessments r
