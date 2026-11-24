@@ -467,4 +467,5 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if got := request("/api/v1/parcels/" + formerID + "/vacancy"); got["tier"] != "unknown" || got["available"] != false {
 		t.Fatalf("weak approval still public: %v", got)
 	}
+	checkAssessmentParcelLockOrder(t, pool)
 }
