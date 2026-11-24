@@ -136,14 +136,40 @@ func TestEmptyRebuildReplayRetainsOBJECTIDTransition(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT source_parcel_id FROM parcel_source_object_identity WHERE raw_key='7070707'`).Scan(&pid); err != nil || pid != "rebuild-live-a" {
 		t.Fatalf("rebuild lost OBJECTID identity: %q %v", pid, err)
 	}
+	var formerID string
+	var formerShape []byte
+	if err = pool.QueryRow(ctx, `SELECT id::text,ST_AsEWKB(shape) FROM parcels WHERE source_parcel_id='rebuild-live-a'`).Scan(&formerID, &formerShape); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `ALTER TABLE parcels ADD CONSTRAINT reject_replay_transition CHECK (current_name_1 IS DISTINCT FROM 'REPLAY-B')`); err != nil {
+		t.Fatal(err)
+	}
 	attrs["PID"] = nil
+	attrs["CURR_NAME1"] = "REPLAY-B"
+	transitionB := publish(true)
+	if _, err = pool.Exec(ctx, `ALTER TABLE parcels DROP CONSTRAINT reject_replay_transition`); err != nil {
+		t.Fatal(err)
+	}
+	outcome, _, err = runner.Run(ctx, jobs.Definition{ID: JobID, Kind: jobs.AttemptReplay, Run: func(runCtx context.Context) (jobs.Result, error) { return job.Replay(runCtx, transitionB) }})
+	if err != nil || outcome != jobs.OutcomeSuccess {
+		t.Fatalf("transition replay %s: %v", outcome, err)
+	}
+	attrs["CURR_NAME1"] = "ACME LLC"
 	_ = publish(false)
 	var marker *string
 	if err = pool.QueryRow(ctx, `SELECT parcel_row_version FROM parcel_evidence_current WHERE source_parcel_id='rebuild-live-a'`).Scan(&marker); err != nil || marker != nil {
 		t.Fatalf("former PID still certified: %v %v", marker, err)
 	}
 	if err = pool.QueryRow(ctx, `SELECT source_parcel_id FROM parcel_evidence_rejection_cutoff WHERE source_parcel_id='rebuild-live-a'`).Scan(&pid); err != nil || pid != "rebuild-live-a" {
-		t.Fatalf("missing transition fence: %q %v", pid, err)
+		t.Fatalf("missing replay transition fence: %q %v", pid, err)
+	}
+	var retainedID string
+	var retainedShape []byte
+	if err = pool.QueryRow(ctx, `SELECT id::text,ST_AsEWKB(shape) FROM parcels WHERE source_parcel_id='rebuild-live-a'`).Scan(&retainedID, &retainedShape); err != nil || retainedID != formerID || !bytes.Equal(retainedShape, formerShape) {
+		t.Fatalf("former parcel changed on replay: %v %v", retainedID, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT source_parcel_id FROM parcel_source_object_identity WHERE raw_key='7070707'`).Scan(&pid); err != nil || pid != "7070707" {
+		t.Fatalf("fallback identity not retained: %q %v", pid, err)
 	}
 	var oversized strings.Builder
 	for i := 0; i < 80; i++ {

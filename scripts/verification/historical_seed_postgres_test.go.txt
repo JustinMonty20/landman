@@ -1,0 +1,131 @@
+//go:build postgres
+
+package parceljob
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/JustinMonty20/landman/internal/jobs"
+	"github.com/JustinMonty20/landman/internal/taxartifact"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func TestHistoricalSchema56Seed(t *testing.T) {
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(cfg.ConnConfig.Database, "landman_parceljob_test_historical_") {
+		t.Fatal("refusing non-disposable database")
+	}
+	ctx, done := context.WithTimeout(context.Background(), 30*time.Second)
+	defer done()
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var db string
+	if err = pool.QueryRow(ctx, `SELECT current_database()`).Scan(&db); err != nil || db != cfg.ConnConfig.Database {
+		t.Fatal("database mismatch", err)
+	}
+	var schema int
+	if err = pool.QueryRow(ctx, `SELECT version_id FROM goose_db_version ORDER BY id DESC LIMIT 1`).Scan(&schema); err != nil || schema != 56 {
+		t.Fatalf("expected schema56 got %d %v", schema, err)
+	}
+	root := os.Getenv("HISTORICAL_ROOT")
+	if root == "" {
+		t.Fatal("HISTORICAL_ROOT required")
+	}
+	job := Job{Root: root, DSN: os.Getenv("DATABASE_URL"), Quarantine: jobs.NewQuarantineStore(pool)}
+	runner, err := jobs.NewRunner(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "parcel-multiple-shells.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source map[string]any
+	if err = json.Unmarshal(fixture, &source); err != nil {
+		t.Fatal(err)
+	}
+	attrs := source["attributes"].(map[string]any)
+	attrs["OBJECTID"] = 7979797
+	attrs["PID"] = "historical-live-a"
+	publish := func(fail bool) string {
+		t.Helper()
+		body, e := json.Marshal(map[string]any{"spatialReference": map[string]any{"wkid": 3857}, "features": []any{source}})
+		if e != nil {
+			t.Fatal(e)
+		}
+		var capture string
+		outcome, _, e := runner.Run(ctx, jobs.Definition{ID: JobID, Kind: jobs.AttemptFullScan, Run: func(runCtx context.Context) (jobs.Result, error) {
+			store, e := taxartifact.NewLocal(root)
+			if e != nil {
+				return jobs.Result{}, e
+			}
+			recorder, e := job.newRecorder(store)
+			if e != nil {
+				return jobs.Result{}, e
+			}
+			for _, page := range []struct {
+				request string
+				crs     int
+				body    []byte
+			}{
+				{"https://example.invalid/query?returnCountOnly=true", 0, []byte(`{"count":1}`)},
+				{"https://example.invalid/query?resultOffset=0&resultRecordCount=1", 3857, body},
+			} {
+				if e = recorder.Record(runCtx, page.request, "", page.crs, bytes.NewReader(page.body)); e != nil {
+					return jobs.Result{}, e
+				}
+			}
+			result, e := job.publishShared(runCtx, store, recorder, nil, 1)
+			if e == nil {
+				attempt, _ := jobs.AttemptID(runCtx)
+				e = pool.QueryRow(runCtx, `SELECT id::text FROM ingest_captures WHERE attempt_id=$1`, attempt).Scan(&capture)
+			}
+			return result, e
+		}})
+		if fail {
+			if e == nil || outcome != jobs.OutcomeFailed {
+				t.Fatalf("expected failed B %s %v", outcome, e)
+			}
+			if e = pool.QueryRow(ctx, `SELECT c.id::text FROM ingest_captures c JOIN job_attempts a ON a.id=c.attempt_id WHERE a.job_id=$1 AND a.outcome='failed' ORDER BY a.started_at DESC LIMIT 1`, JobID).Scan(&capture); e != nil {
+				t.Fatal(e)
+			}
+		} else if e != nil || (outcome != jobs.OutcomeSuccess && outcome != jobs.OutcomeSuccessWithQuarantine) {
+			t.Fatalf("publication %s %v", outcome, e)
+		}
+		return capture
+	}
+	publish(false)
+	if _, err = pool.Exec(ctx, `ALTER TABLE parcels ADD CONSTRAINT reject_historical_b CHECK (current_name_1 IS DISTINCT FROM 'HISTORICAL-B')`); err != nil {
+		t.Fatal(err)
+	}
+	attrs["PID"] = "historical-live-a"
+	attrs["CURR_NAME1"] = "HISTORICAL-B"
+	capture := publish(true)
+	if _, err = pool.Exec(ctx, `ALTER TABLE parcels DROP CONSTRAINT reject_historical_b`); err != nil {
+		t.Fatal(err)
+	}
+	attrs["CURR_NAME1"] = "ACME LLC"
+	source["geometry"] = nil
+	publish(false)
+	if err = os.WriteFile(filepath.Join(root, "historical-b-id"), []byte(capture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var cutoffs int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM parcel_geometry_decisions WHERE source_parcel_id='historical-live-a' AND outcome<>'repaired'`).Scan(&cutoffs); err != nil || cutoffs < 1 {
+		t.Fatalf("no C rejection: %d %v", cutoffs, err)
+	}
+	t.Logf("schema=56 A published B failed capture=%s C rejected cutoff decision=%d", capture, cutoffs)
+}

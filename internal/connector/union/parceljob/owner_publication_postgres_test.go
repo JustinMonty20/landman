@@ -53,6 +53,46 @@ func TestOwnerLabelsCanonicalPublicationReplayAndConcurrentBackfill(t *testing.T
 	attrs := feature["attributes"].(map[string]any)
 	attrs["PID"] = pid
 	attrs["OBJECTID"] = float64(time.Now().UnixNano()%1000000000 + 1)
+	rawKey := fmt.Sprint(int64(attrs["OBJECTID"].(float64)))
+	var captures []string
+	// Restore the disposable source serving state for subsequent package tests.
+	defer func() {
+		cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+		defer done()
+		tx, e := pool.Begin(cleanupCtx)
+		if e != nil {
+			t.Error(e)
+			return
+		}
+		defer tx.Rollback(context.Background())
+		for _, statement := range []string{
+			`DELETE FROM parcel_evidence_current WHERE source_parcel_id=$1`,
+			`DELETE FROM parcel_evidence_history WHERE source_parcel_id=$1`,
+			`DELETE FROM parcels WHERE source_parcel_id=$1`,
+		} {
+			if _, e = tx.Exec(cleanupCtx, statement, pid); e != nil {
+				t.Error(e)
+				return
+			}
+		}
+		if _, e = tx.Exec(cleanupCtx, `DELETE FROM parcel_source_object_identity WHERE raw_key=$1 AND source_parcel_id=$2`, rawKey, pid); e != nil {
+			t.Error(e)
+			return
+		}
+		for _, statement := range []string{
+			`DELETE FROM parcel_derived_handoff WHERE artifact_id=ANY($1)`,
+			`DELETE FROM parcel_geometry_decisions WHERE artifact_id=ANY($1)`,
+			`DELETE FROM parcel_evidence_observations WHERE artifact_id=ANY($1)`,
+		} {
+			if _, e = tx.Exec(cleanupCtx, statement, captures); e != nil {
+				t.Error(e)
+				return
+			}
+		}
+		if e = tx.Commit(cleanupCtx); e != nil {
+			t.Error(e)
+		}
+	}()
 	attrs["CURR_NAME1"] = "ACME LLC"
 	attrs["CURR_STATE"] = "SC"
 	publish := func(name, state string) string {
@@ -95,6 +135,7 @@ func TestOwnerLabelsCanonicalPublicationReplayAndConcurrentBackfill(t *testing.T
 		if err != nil || outcome != jobs.OutcomeSuccess {
 			t.Fatalf("canonical publication %q %q: %v", name, outcome, err)
 		}
+		captures = append(captures, captureID)
 		return captureID
 	}
 	captureID := publish("ACME LLC", "SC")

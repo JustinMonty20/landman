@@ -160,27 +160,21 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	}
 	// Rejections and OBJECTID identity transitions fence older replay without losing
 	// the former parcel's UUID, geometry, or source evidence.
-	if correction {
-		// Rebuilds must retain observed OBJECTID linkage; older replays never replace newer identities.
-		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_source_object_identity(county_id,source_name,raw_key,source_parcel_id,observed_at)
-SELECT 'union','union_county_gis',raw_key,source_parcel_id,$1 FROM parcel_import_identities
-WHERE octet_length(source_parcel_id)<=2048
-ON CONFLICT(county_id,source_name,raw_key) DO UPDATE SET source_parcel_id=EXCLUDED.source_parcel_id,observed_at=EXCLUDED.observed_at
-WHERE parcel_source_object_identity.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt); err != nil {
-			return 0, err
-		}
-	}
-	if !correction {
-		_, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_refused_pids ON COMMIT DROP AS
-      SELECT source_parcel_id FROM parcel_import_rejected WHERE octet_length(source_parcel_id)<=2048
+	_, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_refused_pids ON COMMIT DROP AS
+      SELECT source_parcel_id FROM parcel_import_rejected WHERE NOT $2::boolean AND octet_length(source_parcel_id)<=2048
       UNION SELECT DISTINCT old.source_parcel_id FROM parcel_import_identities i
       JOIN parcel_source_object_identity old ON old.county_id='union'
       AND old.source_name='union_county_gis' AND old.raw_key=i.raw_key
+      LEFT JOIN parcel_evidence_groups g ON g.source_parcel_id=i.source_parcel_id
+      LEFT JOIN parcel_evidence_current c ON c.county_id='union' AND c.source_name='union_county_gis' AND c.source_parcel_id=i.source_parcel_id
+      LEFT JOIN parcel_evidence_observations o ON o.id=c.observation_id
       WHERE old.source_parcel_id<>i.source_parcel_id AND old.observed_at < $1
-      AND octet_length(old.source_parcel_id)<=2048`, manifest.CreatedAt)
-		if err != nil {
-			return 0, err
-		}
+      AND octet_length(old.source_parcel_id)<=2048
+      AND (NOT $2::boolean OR (g.source_parcel_id IS NOT NULL AND (o.observed_at IS NULL OR o.observed_at < $1)))`, manifest.CreatedAt, correction)
+	if err != nil {
+		return 0, err
+	}
+	if !correction {
 		var conflictingIdentity bool
 		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_import_identities i
       JOIN parcel_source_object_identity old ON old.county_id='union' AND old.source_name='union_county_gis' AND old.raw_key=i.raw_key
@@ -190,31 +184,35 @@ WHERE parcel_source_object_identity.observed_at < EXCLUDED.observed_at`, manifes
 		if conflictingIdentity {
 			return 0, fmt.Errorf("source OBJECTID observation is not newer than retained identity")
 		}
-		_, err = w.tx.Exec(ctx, `INSERT INTO parcel_source_object_identity(county_id,source_name,raw_key,source_parcel_id,observed_at)
-      SELECT 'union','union_county_gis',raw_key,source_parcel_id,$1 FROM parcel_import_identities
-      WHERE octet_length(source_parcel_id)<=2048
+	}
+	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_source_object_identity(county_id,source_name,raw_key,source_parcel_id,observed_at)
+      SELECT 'union','union_county_gis',i.raw_key,i.source_parcel_id,$1 FROM parcel_import_identities i
+      LEFT JOIN parcel_evidence_groups g ON g.source_parcel_id=i.source_parcel_id
+      LEFT JOIN parcel_evidence_current c ON c.county_id='union' AND c.source_name='union_county_gis' AND c.source_parcel_id=i.source_parcel_id
+      LEFT JOIN parcel_evidence_observations o ON o.id=c.observation_id
+      WHERE octet_length(i.source_parcel_id)<=2048
+      AND (NOT $2::boolean OR (g.source_parcel_id IS NOT NULL AND (o.observed_at IS NULL OR o.observed_at < $1)))
       ON CONFLICT(county_id,source_name,raw_key) DO UPDATE
       SET source_parcel_id=EXCLUDED.source_parcel_id,observed_at=EXCLUDED.observed_at
-      WHERE parcel_source_object_identity.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt)
-		if err != nil {
-			return 0, err
-		}
-		_, err = w.tx.Exec(ctx, `INSERT INTO parcel_evidence_rejection_cutoff(county_id,source_name,source_parcel_id,observed_at,artifact_id)
+      WHERE parcel_source_object_identity.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt, correction)
+	if err != nil {
+		return 0, err
+	}
+	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_evidence_rejection_cutoff(county_id,source_name,source_parcel_id,observed_at,artifact_id)
       SELECT 'union','union_county_gis',source_parcel_id,$1,$2 FROM parcel_refused_pids
       ON CONFLICT(county_id,source_name,source_parcel_id) DO UPDATE
       SET observed_at=EXCLUDED.observed_at,artifact_id=EXCLUDED.artifact_id
       WHERE parcel_evidence_rejection_cutoff.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt, manifest.ID)
-		if err != nil {
-			return 0, err
-		}
-		_, err = w.tx.Exec(ctx, `UPDATE parcel_evidence_current c SET parcel_row_version=NULL
+	if err != nil {
+		return 0, err
+	}
+	_, err = w.tx.Exec(ctx, `UPDATE parcel_evidence_current c SET parcel_row_version=NULL
       FROM parcel_refused_pids r, parcel_evidence_observations o
       WHERE c.county_id='union' AND c.source_name='union_county_gis'
       AND c.source_parcel_id=r.source_parcel_id AND o.id=c.observation_id
       AND o.observed_at < $1 AND c.parcel_row_version IS NOT NULL`, manifest.CreatedAt)
-		if err != nil {
-			return 0, err
-		}
+	if err != nil {
+		return 0, err
 	}
 	publication := evidencePublication{artifactID: manifest.ID, observedAt: manifest.CreatedAt, observationID: observationID, kind: publicationKind, attemptID: attemptID, replay: correction, quarantine: quarantine, jobID: jobID}
 	processed, groupsChecked := 0, 0
