@@ -128,6 +128,17 @@ func TestHTTPPostGIS(t *testing.T) {
 	if code, _ := request("/api/v1/parcels?discovery=browse&bbox=" + bbox + "&viewport_bbox=-79.901,33.099,-79.899,33.102&page_size=1&cursor=" + url.QueryEscape(priorityCursor)); code != 400 {
 		t.Fatalf("old viewport cursor accepted after pan: %d", code)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE parcels SET year_built=year_built WHERE id=$1`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := request("/api/v1/parcels?" + filter + "&page_size=1&cursor=" + url.QueryEscape(cursor)); code != 400 {
+		t.Fatalf("no-op tuple rewrite accepted stale cursor: %d", code)
+	}
+	code, list = request("/api/v1/parcels?" + filter + "&page_size=1")
+	if code != 200 {
+		t.Fatal(code)
+	}
+	cursor = list["next_cursor"].(string)
 	if _, err = pool.Exec(ctx, `UPDATE parcels SET valuation_improvement=1 WHERE id=$1`, ids[0]); err != nil {
 		t.Fatal(err)
 	}

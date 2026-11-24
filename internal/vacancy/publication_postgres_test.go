@@ -40,10 +40,10 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	}
 	threeReceipts := regexp.MustCompile(`"receipts":\[[^]]+\]`)
 	spans := threeReceipts.FindAllStringIndex(string(raw), -1)
-	if len(spans) != 2 {
-		t.Fatal("expected both fixture receipt tapes")
+	if len(spans) != 4 {
+		t.Fatal("expected both fixture receipt tapes and their digests")
 	}
-	impossible := string(raw[:spans[1][0]]) + `"receipts":[{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&returnCountOnly=true&where=1%3D1"},{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&returnCountOnly=true&where=OBJECTID"},{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&outFields=%2A&where=OBJECTID"}]` + string(raw[spans[1][1]:])
+	impossible := string(raw[:spans[2][0]]) + `"receipts":[{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&returnCountOnly=true&where=1%3D1"},{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&returnCountOnly=true&where=OBJECTID"},{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&outFields=%2A&where=OBJECTID"}]` + string(raw[spans[2][1]:])
 	denied, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -179,6 +179,10 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	for _, sample := range []struct{ raw, tier string }{
 		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":" 0 ","SQFT":"0"}}]`, "strong_candidate"},
 		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":" ","SQFT":0}}]`, "unknown"},
+		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":"\t\n\r\u000b\u000c\u00a0\u2003","SQFT":0}}]`, "unknown"},
+		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":"0x0p0","SQFT":0}}]`, "unknown"},
+		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":"1e9999999","SQFT":0}}]`, "unknown"},
+		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":"0e9999999","SQFT":0}}]`, "strong_candidate"},
 		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":null,"SQFT":0}}]`, "unknown"},
 	} {
 		if _, err := pool.Exec(ctx, `UPDATE parcel_evidence_current SET source_features=$1::jsonb WHERE source_parcel_id='vacancy-test-a'`, sample.raw); err != nil {

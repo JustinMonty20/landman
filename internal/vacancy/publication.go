@@ -82,14 +82,15 @@ const publicationSQL = `WITH source_state AS MATERIALIZED (
  AND other.source_name=p.source_name AND other.source_parcel_id=p.source_parcel_id) AS duplicate_pid,
  (c.source_features IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.source_features) part
  WHERE nullif(part->'attributes'->>'PID','') IS DISTINCT FROM p.source_parcel_id
- OR nullif(btrim(part->'attributes'->>'YEARBLT'),'') IS NULL
- OR nullif(btrim(part->'attributes'->>'SQFT'),'') IS NULL
- OR (coalesce(nullif(btrim(part->'attributes'->>'YEARBLT'),'')::numeric,0)>0
- OR coalesce(nullif(btrim(part->'attributes'->>'SQFT'),'')::numeric,0)>0
+ OR (part->'attributes'->>'YEARBLT') IS NULL
+ OR (part->'attributes'->>'SQFT') IS NULL
+ -- Only a recognized zero spelling proves absence. Never cast untrusted source text.
+ OR (part->'attributes'->>'YEARBLT') !~ '^[[:space:]]*[+-]?(0+(\.0*)?|\.0+)([eE][+-]?[0-9]+)?[[:space:]]*$'
+ OR (part->'attributes'->>'SQFT') !~ '^[[:space:]]*[+-]?(0+(\.0*)?|\.0+)([eE][+-]?[0-9]+)?[[:space:]]*$'
  OR coalesce(part->'attributes'->>'STRUCTTYPE','')<>''
  OR coalesce(part->'attributes'->>'STRUCTSTYLE','')<>'')
  <> (coalesce(p.year_built,0)>0 OR coalesce(p.sqft,0)>0
- OR coalesce(p.structure,'')<>'' OR coalesce(p.structure_style,'')<>''))) AS ambiguous_parcel_facts,
+ OR coalesce(p.structure,'')<>'' OR coalesce(p.structure_style,'')<>'')) AS ambiguous_parcel_facts,
  (SELECT count(DISTINCT (r.market_building::text)) FROM vacancy_live_assessments r
  WHERE r.generation_id=$2::uuid AND r.parcel_number=p.source_parcel_id
  AND r.parcel_year=$3 AND r.assess_category='AV') AS value_count,

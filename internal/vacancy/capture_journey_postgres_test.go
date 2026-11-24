@@ -29,7 +29,14 @@ func TestCapturedReceiptsAdmissionPublicationAndAPI(t *testing.T) {
 	if dsn == "" {
 		t.Skip("API_TEST_DATABASE_URL not set")
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(config.ConnConfig.Database, "landman_api_test_") {
+		t.Fatal("requires configured disposable PostGIS database")
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}

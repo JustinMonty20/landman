@@ -240,6 +240,20 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations WHERE normalizer_version='vacancy-rows-v1'`) != 5 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
 		t.Fatalf("correction replay failed: %v", err)
 	}
+	// Simulate an upgraded retained capture whose old boolean proof was withdrawn.
+	// The same actual captured bytes must regain proof without inheriting approval.
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET parser_admission_verified=false,parser_manifest_sha256=NULL WHERE capture_id=$1::uuid`, current); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, current) }})
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE g.capture_id='`+current+`'::uuid AND g.parser_admission_verified AND g.parser_manifest_sha256=c.manifest_sha256`) != 1 {
+		t.Fatalf("identical replay failed to reissue exact-capture proof: %v", err)
+	}
+	for _, mutation := range []string{`UPDATE ingest_captures SET manifest=manifest||decode('20','hex') WHERE id=$1::uuid`, `UPDATE ingest_captures SET manifest_sha256=decode(repeat('a',64),'hex') WHERE id=$1::uuid`} {
+		if _, err := pool.Exec(ctx, mutation, current); err == nil || !strings.Contains(err.Error(), "immutable") {
+			t.Fatalf("capture proof bytes could be rewritten: %v", err)
+		}
+	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
 	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 5 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
 		t.Fatalf("older replay changed evidence or contacted HTTP: %v", err)

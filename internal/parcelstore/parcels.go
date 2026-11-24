@@ -55,8 +55,8 @@ func NewShapeWriterTx(ctx context.Context, tx pgx.Tx) (*ShapeWriter, error) {
 		raw_key TEXT NOT NULL,
         source_feature JSONB, source_hash TEXT
 	) ON COMMIT DROP;
-	CREATE INDEX ON parcel_import_parts(source_parcel_id);
-	CREATE TEMP TABLE parcel_import_rejected(source_parcel_id TEXT PRIMARY KEY, invalid_geometry boolean NOT NULL) ON COMMIT DROP;
+	CREATE INDEX ON parcel_import_parts USING hash(source_parcel_id);
+	CREATE TEMP TABLE parcel_import_rejected(source_parcel_id TEXT NOT NULL, source_parcel_hash BYTEA GENERATED ALWAYS AS (digest(source_parcel_id,'sha256')) STORED PRIMARY KEY, invalid_geometry boolean NOT NULL) ON COMMIT DROP;
 	CREATE TEMP TABLE parcel_import_identities(raw_key TEXT PRIMARY KEY, source_parcel_id TEXT NOT NULL) ON COMMIT DROP; CREATE INDEX ON parcel_import_identities USING hash(source_parcel_id)`)
 	if err != nil {
 		return nil, err

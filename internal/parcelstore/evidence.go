@@ -31,6 +31,11 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	if _, err := w.tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('union.parcel.evidence.publication'))`); err != nil {
 		return 0, err
 	}
+	// Lock the shared revision before replay may lock an evidence tuple. Parcel
+	// statements take this lock before individual parcel tuples as well.
+	if _, err := w.tx.Exec(ctx, `SELECT 1 FROM vacancy_source_revision WHERE county_id='union' FOR UPDATE`); err != nil {
+		return 0, err
+	}
 	if verifyParcelGeometryRepair {
 		var disposable bool
 		if err := w.tx.QueryRow(ctx, `SELECT current_database() = 'landman_parcel_repair_test'`).Scan(&disposable); err != nil {
@@ -155,13 +160,24 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	}
 	// Rejections and OBJECTID identity transitions fence older replay without losing
 	// the former parcel's UUID, geometry, or source evidence.
+	if correction {
+		// Rebuilds must retain observed OBJECTID linkage; older replays never replace newer identities.
+		if _, err := w.tx.Exec(ctx, `INSERT INTO parcel_source_object_identity(county_id,source_name,raw_key,source_parcel_id,observed_at)
+SELECT 'union','union_county_gis',raw_key,source_parcel_id,$1 FROM parcel_import_identities
+WHERE octet_length(source_parcel_id)<=2048
+ON CONFLICT(county_id,source_name,raw_key) DO UPDATE SET source_parcel_id=EXCLUDED.source_parcel_id,observed_at=EXCLUDED.observed_at
+WHERE parcel_source_object_identity.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt); err != nil {
+			return 0, err
+		}
+	}
 	if !correction {
 		_, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_refused_pids ON COMMIT DROP AS
-      SELECT source_parcel_id FROM parcel_import_rejected
+      SELECT source_parcel_id FROM parcel_import_rejected WHERE octet_length(source_parcel_id)<=2048
       UNION SELECT DISTINCT old.source_parcel_id FROM parcel_import_identities i
       JOIN parcel_source_object_identity old ON old.county_id='union'
       AND old.source_name='union_county_gis' AND old.raw_key=i.raw_key
-      WHERE old.source_parcel_id<>i.source_parcel_id AND old.observed_at < $1`, manifest.CreatedAt)
+      WHERE old.source_parcel_id<>i.source_parcel_id AND old.observed_at < $1
+      AND octet_length(old.source_parcel_id)<=2048`, manifest.CreatedAt)
 		if err != nil {
 			return 0, err
 		}
@@ -176,6 +192,7 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 		}
 		_, err = w.tx.Exec(ctx, `INSERT INTO parcel_source_object_identity(county_id,source_name,raw_key,source_parcel_id,observed_at)
       SELECT 'union','union_county_gis',raw_key,source_parcel_id,$1 FROM parcel_import_identities
+      WHERE octet_length(source_parcel_id)<=2048
       ON CONFLICT(county_id,source_name,raw_key) DO UPDATE
       SET source_parcel_id=EXCLUDED.source_parcel_id,observed_at=EXCLUDED.observed_at
       WHERE parcel_source_object_identity.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt)

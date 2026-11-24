@@ -4,11 +4,26 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"strings"
 	"testing"
 )
 
 // The refusal path must not register a destructive cleanup callback first.
 // This checks ordering without connecting to, or mutating, a denied database.
+func TestCaptureJourneyRejectsConfiguredTargetBeforeConnection(t *testing.T) {
+	source, err := os.ReadFile("capture_journey_postgres_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	parse := strings.Index(text, "pgxpool.ParseConfig(dsn)")
+	guard := strings.Index(text, "strings.HasPrefix(config.ConnConfig.Database")
+	connect := strings.Index(text, "pgxpool.NewWithConfig(ctx, config)")
+	if parse < 0 || guard < parse || connect < guard {
+		t.Fatal("configured database target must be checked before opening any connection")
+	}
+}
 func TestCaptureJourneyGuardsDatabaseBeforeDestructiveCleanup(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "capture_journey_postgres_test.go", nil, 0)
 	if err != nil {

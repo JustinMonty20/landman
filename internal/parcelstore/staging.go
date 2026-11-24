@@ -57,8 +57,16 @@ func (w *ShapeWriter) RejectPID(ctx context.Context, pid string, invalidGeometry
 	if pid == "" {
 		return ErrMissingNaturalKey
 	}
-	_, err := w.tx.Exec(ctx, `INSERT INTO parcel_import_rejected VALUES($1,$2) ON CONFLICT(source_parcel_id) DO UPDATE SET invalid_geometry=parcel_import_rejected.invalid_geometry OR EXCLUDED.invalid_geometry`, pid, invalidGeometry)
-	return err
+	tag, err := w.tx.Exec(ctx, `INSERT INTO parcel_import_rejected(source_parcel_id,invalid_geometry) VALUES($1,$2)
+ON CONFLICT(source_parcel_hash) DO UPDATE SET invalid_geometry=parcel_import_rejected.invalid_geometry OR EXCLUDED.invalid_geometry
+WHERE parcel_import_rejected.source_parcel_id=EXCLUDED.source_parcel_id`, pid, invalidGeometry)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("parcelstore: rejected PID fingerprint collision")
+	}
+	return nil
 }
 
 type stagedPart struct {

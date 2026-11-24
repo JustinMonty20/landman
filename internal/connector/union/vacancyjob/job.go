@@ -500,6 +500,11 @@ func (p *publisher) normalizedFingerprint() (string, error) {
 const normalizerVersion = "vacancy-rows-v1"
 
 func (p *publisher) Apply(ctx context.Context, tx pgx.Tx, ob ingest.Observation) error {
+	manifestBytes, err := json.Marshal(ob.Manifest)
+	if err != nil {
+		return err
+	}
+	manifestDigest := sha256.Sum256(manifestBytes)
 	fingerprint, err := p.normalizedFingerprint()
 	if err != nil {
 		return err
@@ -532,7 +537,7 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 	}
 	if latestID != "" && latestHash == fingerprint && latestVersion == normalizerVersion {
 		if ob.Replay && latestCapture == ob.ID {
-			_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET validation_note=$2 WHERE id=$1 AND validation_note IS DISTINCT FROM $2`, latestID, p.validationNote())
+			_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET validation_note=$2,parser_admission_verified=$3,parser_manifest_sha256=$4 WHERE id=$1`, latestID, p.validationNote(), p.parserAdmissionVerified, manifestDigest[:])
 			if err != nil {
 				return err
 			}
@@ -553,9 +558,9 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4,validation_note=$5,parser_admission_verified=$6 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count, p.validationNote(), p.parserAdmissionVerified)
+		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4,validation_note=$5,parser_admission_verified=$6,parser_manifest_sha256=$7 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count, p.validationNote(), p.parserAdmissionVerified, manifestDigest[:])
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version,parser_admission_verified) VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, p.validationNote(), fingerprint, normalizerVersion, p.parserAdmissionVerified).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version,parser_admission_verified,parser_manifest_sha256) VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, p.validationNote(), fingerprint, normalizerVersion, p.parserAdmissionVerified, manifestDigest[:]).Scan(&id)
 	}
 	if err != nil {
 		return err
