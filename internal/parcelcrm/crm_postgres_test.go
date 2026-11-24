@@ -106,10 +106,10 @@ func TestBoardIsolationAndRevision(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.mutate(ctx, a, id, "state", board.DefaultStateID, "", card.Revision-1); !errors.Is(e, conflict) {
+	if _, e = s.mutate(ctx, a, id, "state", board.DefaultStateID, "", card.Revision-1); !errors.Is(e, errConflict) {
 		t.Fatalf("stale move: %v", e)
 	}
-	if _, e = s.mutate(ctx, a, id, "exclude", "", "", card.Revision); !errors.Is(e, invalid) {
+	if _, e = s.mutate(ctx, a, id, "exclude", "", "", card.Revision); !errors.Is(e, errInvalid) {
 		t.Fatalf("empty exclusion reason: %v", e)
 	}
 	card, e = s.mutate(ctx, a, id, "exclude", "", "Not a lead", card.Revision)
@@ -173,10 +173,10 @@ func TestReplayAfterRemovalRequiresRevision(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.favorite(ctx, a, id, nil); !errors.Is(e, conflict) {
+	if _, e = s.favorite(ctx, a, id, nil); !errors.Is(e, errConflict) {
 		t.Fatalf("original replay: %v", e)
 	}
-	if _, e = s.favorite(ctx, a, id, &initial.Revision); !errors.Is(e, conflict) {
+	if _, e = s.favorite(ctx, a, id, &initial.Revision); !errors.Is(e, errConflict) {
 		t.Fatalf("stale restore: %v", e)
 	}
 	restored, e := s.favorite(ctx, a, id, &removed.Revision)
@@ -200,8 +200,8 @@ func TestConcurrentDeleteAndMoveHistory(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	third := board.States[2]
-	// Both operations start while the account lock is held. Either legal order must preserve exact history.
+	_ = board.States[2]
+	// Move into the state being deleted; either lock order must leave valid history.
 	lock, e := s.DB.Begin(ctx)
 	if e != nil {
 		t.Fatal(e)
@@ -215,7 +215,7 @@ func TestConcurrentDeleteAndMoveHistory(t *testing.T) {
 	}
 	done := make(chan result, 2)
 	go func() {
-		_, err := s.mutate(ctx, a, id, "state", third.ID, "", card.Revision)
+		_, err := s.mutate(ctx, a, id, "state", second.ID, "", card.Revision)
 		done <- result{"move", err}
 	}()
 	go func() {
@@ -225,10 +225,14 @@ func TestConcurrentDeleteAndMoveHistory(t *testing.T) {
 	if e = lock.Commit(ctx); e != nil {
 		t.Fatal(e)
 	}
+	moveSucceeded := false
 	for i := 0; i < 2; i++ {
 		select {
 		case r := <-done:
-			if r.err != nil {
+			if r.kind == "move" && r.err == nil {
+				moveSucceeded = true
+			}
+			if r.err != nil && !(r.kind == "move" && errors.Is(r.err, pgx.ErrNoRows)) {
 				t.Fatalf("%s: %v", r.kind, r.err)
 			}
 		case <-time.After(5 * time.Second):
@@ -239,12 +243,13 @@ func TestConcurrentDeleteAndMoveHistory(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	var n int
-	if e = s.DB.QueryRow(ctx, `SELECT count(*) FROM user_parcel_state_changes WHERE user_id=$1 AND parcel_id=$2`, string(a), id).Scan(&n); e != nil {
+	var history string
+	if e = s.DB.QueryRow(ctx, `SELECT coalesce(string_agg(old_state_name || '->' || new_state_name, ',' ORDER BY id),'') FROM user_parcel_state_changes WHERE user_id=$1 AND parcel_id=$2`, string(a), id).Scan(&history); e != nil {
 		t.Fatal(e)
 	}
-	if current.StateID != third.ID || n != 1 {
-		t.Fatalf("card=%+v changes=%d", current, n)
+	// Delete-first: no move or history. Move-first: New -> Second -> New.
+	if current.StateID != board.DefaultStateID || (moveSucceeded && history != "New->Second,Second->New") || (!moveSucceeded && history != "") {
+		t.Fatalf("card=%+v history=%s", current, history)
 	}
 }
 func TestBoundedPagesAndOrigin(t *testing.T) {
@@ -258,7 +263,7 @@ func TestBoundedPagesAndOrigin(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.cards(ctx, a, board.DefaultStateID, "", 51, false); !errors.Is(e, invalid) {
+	if _, e = s.cards(ctx, a, board.DefaultStateID, "", 51, false); !errors.Is(e, errInvalid) {
 		t.Fatalf("limit: %v", e)
 	}
 	cards, e := s.cards(ctx, a, board.DefaultStateID, "", 1, false)

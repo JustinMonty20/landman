@@ -43,8 +43,8 @@ type Board struct {
 	Next           string  `json:"next"`
 }
 
-var conflict = errors.New("revision conflict")
-var invalid = errors.New("invalid request")
+var errConflict = errors.New("revision conflict")
+var errInvalid = errors.New("invalid request")
 
 func uuid(s string) bool {
 	if len(s) != 36 {
@@ -98,11 +98,11 @@ func (s Store) boardPage(ctx context.Context, user AccountID, cursor string) (Bo
 	if cursor != "" {
 		parts := strings.Split(cursor, "|")
 		if len(parts) != 2 || !uuid(parts[1]) {
-			return Board{}, invalid
+			return Board{}, errInvalid
 		}
 		n, e := strconv.Atoi(parts[0])
 		if e != nil || n < 0 {
-			return Board{}, invalid
+			return Board{}, errInvalid
 		}
 		position = &n
 		stateID = &parts[1]
@@ -136,10 +136,10 @@ func (s Store) boardPage(ctx context.Context, user AccountID, cursor string) (Bo
 func (s Store) cards(ctx context.Context, user AccountID, state, cursor string, limit int, hide bool) ([]Card, error) {
 	out := []Card{}
 	if !uuid(state) {
-		return out, invalid
+		return out, errInvalid
 	}
 	if limit < 1 || limit > 50 {
-		return out, invalid
+		return out, errInvalid
 	}
 	var exists bool
 	if e := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_lead_states WHERE user_id=$1 AND id=$2)`, string(user), state).Scan(&exists); e != nil {
@@ -153,7 +153,7 @@ func (s Store) cards(ctx context.Context, user AccountID, state, cursor string, 
 	if cursor != "" {
 		parts := strings.Split(cursor, "|")
 		if len(parts) != 2 || !uuid(parts[1]) {
-			return out, invalid
+			return out, errInvalid
 		}
 		at = &parts[0]
 		parcel = &parts[1]
@@ -204,7 +204,7 @@ func (s Store) favorite(ctx context.Context, user AccountID, id string, revision
 		}
 		if !active {
 			if revision == nil || current != *revision {
-				return Card{}, conflict
+				return Card{}, errConflict
 			}
 			if _, e = tx.Exec(ctx, `UPDATE user_parcels SET favorite=true,revision=revision+1 WHERE user_id=$1 AND parcel_id=$2`, string(user), id); e != nil {
 				return Card{}, e
@@ -224,6 +224,11 @@ func (s Store) mutate(ctx context.Context, user AccountID, id, action, target, r
 		return Card{}, e
 	}
 	defer tx.Rollback(ctx)
+	// Match favorite and state deletion lock order before touching the card.
+	var locked string
+	if e = tx.QueryRow(ctx, `SELECT id::text FROM app_users WHERE id=$1 FOR UPDATE`, string(user)).Scan(&locked); e != nil {
+		return Card{}, e
+	}
 	var old string
 	e = tx.QueryRow(ctx, `SELECT state_id::text FROM user_parcels WHERE user_id=$1 AND parcel_id=$2 FOR UPDATE`, string(user), id).Scan(&old)
 	if e != nil {
@@ -233,7 +238,7 @@ func (s Store) mutate(ctx context.Context, user AccountID, id, action, target, r
 	switch action {
 	case "state":
 		if !uuid(target) {
-			return Card{}, invalid
+			return Card{}, errInvalid
 		}
 		var oldName, newName string
 		e = tx.QueryRow(ctx, `SELECT name FROM user_lead_states WHERE user_id=$1 AND id=$2`, string(user), old).Scan(&oldName)
@@ -252,19 +257,19 @@ func (s Store) mutate(ctx context.Context, user AccountID, id, action, target, r
 		tag, e = tx.Exec(ctx, `UPDATE user_parcels SET favorite=false,revision=revision+1 WHERE user_id=$1 AND parcel_id=$2 AND revision=$3 AND favorite`, string(user), id, revision)
 	case "exclude":
 		if len(strings.TrimSpace(reason)) < 1 || len(reason) > 500 {
-			return Card{}, invalid
+			return Card{}, errInvalid
 		}
 		tag, e = tx.Exec(ctx, `UPDATE user_parcels SET excluded=true,exclusion_reason=$3,revision=revision+1 WHERE user_id=$1 AND parcel_id=$2 AND revision=$4 AND favorite`, string(user), id, strings.TrimSpace(reason), revision)
 	case "restore":
 		tag, e = tx.Exec(ctx, `UPDATE user_parcels SET excluded=false,exclusion_reason='',revision=revision+1 WHERE user_id=$1 AND parcel_id=$2 AND revision=$3 AND favorite`, string(user), id, revision)
 	default:
-		return Card{}, invalid
+		return Card{}, errInvalid
 	}
 	if e != nil {
 		return Card{}, e
 	}
 	if tag.RowsAffected() == 0 {
-		return Card{}, conflict
+		return Card{}, errConflict
 	}
 	if action == "exclude" || action == "restore" {
 		_, e = tx.Exec(ctx, `INSERT INTO user_parcel_exclusion_changes(user_id,parcel_id,excluded,reason) VALUES($1,$2,$3,$4)`, string(user), id, action == "exclude", func() string {
@@ -306,36 +311,36 @@ func (s Store) state(ctx context.Context, user AccountID, id, action, name, dest
 	}
 	name = strings.TrimSpace(name)
 	if name != "" && len(name) > 80 {
-		return Board{}, invalid
+		return Board{}, errInvalid
 	}
 	switch action {
 	case "create":
 		if name == "" {
-			return Board{}, invalid
+			return Board{}, errInvalid
 		}
 		_, e = tx.Exec(ctx, `INSERT INTO user_lead_states(user_id,name,position) VALUES($1,$2,(SELECT coalesce(max(position)+1,0) FROM user_lead_states WHERE user_id=$1))`, string(user), name)
 	case "rename", "reorder":
 		var tag pgconn.CommandTag
 		if action == "rename" {
 			if name == "" {
-				return Board{}, invalid
+				return Board{}, errInvalid
 			}
 			tag, e = tx.Exec(ctx, `UPDATE user_lead_states SET name=$3,revision=revision+1 WHERE user_id=$1 AND id=$2 AND revision=$4`, string(user), id, name, revision)
 		} else {
 			n, err := strconv.Atoi(name)
 			if err != nil || n < 0 || n > 100000 {
-				return Board{}, invalid
+				return Board{}, errInvalid
 			}
 			var old int
 			if e = tx.QueryRow(ctx, `SELECT position FROM user_lead_states WHERE user_id=$1 AND id=$2 AND revision=$3`, string(user), id, revision).Scan(&old); e != nil {
-				return Board{}, conflict
+				return Board{}, errConflict
 			}
 			var count int
 			if e = tx.QueryRow(ctx, `SELECT count(*) FROM user_lead_states WHERE user_id=$1`, string(user)).Scan(&count); e != nil {
 				return Board{}, e
 			}
 			if n >= count {
-				return Board{}, invalid
+				return Board{}, errInvalid
 			}
 			if n < old {
 				_, e = tx.Exec(ctx, `UPDATE user_lead_states SET position=position+1,revision=revision+1 WHERE user_id=$1 AND position >= $2 AND position < $3 AND id<>$4`, string(user), n, old, id)
@@ -348,21 +353,21 @@ func (s Store) state(ctx context.Context, user AccountID, id, action, name, dest
 			tag, e = tx.Exec(ctx, `UPDATE user_lead_states SET position=$3,revision=revision+1 WHERE user_id=$1 AND id=$2 AND revision=$4`, string(user), id, n, revision)
 		}
 		if e == nil && tag.RowsAffected() == 0 {
-			return Board{}, conflict
+			return Board{}, errConflict
 		}
 	case "default":
 		tag, err := tx.Exec(ctx, `UPDATE user_crm_settings SET default_state_id=$2,revision=revision+1 WHERE user_id=$1 AND revision=$3 AND EXISTS(SELECT 1 FROM user_lead_states WHERE user_id=$1 AND id=$2)`, string(user), id, revision)
 		e = err
 		if e == nil && tag.RowsAffected() == 0 {
-			return Board{}, conflict
+			return Board{}, errConflict
 		}
 	case "delete":
 		if !uuid(dest) || dest == id {
-			return Board{}, invalid
+			return Board{}, errInvalid
 		}
 		var oldName, newName string
 		if e = tx.QueryRow(ctx, `SELECT name FROM user_lead_states WHERE user_id=$1 AND id=$2 AND revision=$3`, string(user), id, revision).Scan(&oldName); e != nil {
-			return Board{}, conflict
+			return Board{}, errConflict
 		}
 		if e = tx.QueryRow(ctx, `SELECT name FROM user_lead_states WHERE user_id=$1 AND id=$2`, string(user), dest).Scan(&newName); e != nil {
 			return Board{}, e
@@ -385,7 +390,7 @@ SELECT user_id,parcel_id,$4,$5 FROM moved`, string(user), id, dest, oldName, new
 			_, e = tx.Exec(ctx, `WITH ordered AS (SELECT id,row_number() OVER (ORDER BY position,id)-1 AS new_pos FROM user_lead_states WHERE user_id=$1) UPDATE user_lead_states st SET position=ordered.new_pos,revision=st.revision+1 FROM ordered WHERE st.user_id=$1 AND st.id=ordered.id AND st.position<>ordered.new_pos`, string(user))
 		}
 	default:
-		return Board{}, invalid
+		return Board{}, errInvalid
 	}
 	if e != nil {
 		return Board{}, e
@@ -403,24 +408,24 @@ func failure(w http.ResponseWriter, e error) {
 	var pgErr *pgconn.PgError
 	if errors.As(e, &pgErr) {
 		if pgErr.Code == "23505" {
-			e = conflict
+			e = errConflict
 		}
 		if pgErr.Code == "23503" {
 			e = pgx.ErrNoRows
 		}
 		if pgErr.Code == "22P02" || pgErr.Code == "22007" || pgErr.Code == "22008" {
-			e = invalid
+			e = errInvalid
 		}
 	}
 	switch {
 	case errors.Is(e, pgx.ErrNoRows):
 		http.Error(w, "Not found", 404)
-	case errors.Is(e, conflict):
-		http.Error(w, "Revision conflict. Reload and retry.", 409)
-	case errors.Is(e, invalid):
+	case errors.Is(e, errConflict):
+		http.Error(w, "Revision conflict. Reload and retry.", http.StatusConflict)
+	case errors.Is(e, errInvalid):
 		http.Error(w, "Invalid request", 400)
 	default:
-		http.Error(w, "CRM unavailable", 503)
+		http.Error(w, "CRM unavailable", http.StatusServiceUnavailable)
 	}
 }
 
@@ -428,11 +433,11 @@ func failure(w http.ResponseWriter, e error) {
 func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, origin string) {
 	if r.Method != "GET" {
 		if r.Header.Get("Origin") != origin {
-			http.Error(w, "Invalid request origin", 403)
+			http.Error(w, "Invalid request origin", http.StatusForbidden)
 			return
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
-			http.Error(w, "Expected JSON", 415)
+			http.Error(w, "Expected JSON", http.StatusUnsupportedMediaType)
 			return
 		}
 	}
@@ -452,12 +457,12 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 		d := json.NewDecoder(r.Body)
 		d.DisallowUnknownFields()
 		if e := d.Decode(&req); e != nil {
-			failure(w, invalid)
+			failure(w, errInvalid)
 			return
 		}
 		var extra any
 		if e := d.Decode(&extra); !errors.Is(e, io.EOF) {
-			failure(w, invalid)
+			failure(w, errInvalid)
 			return
 		}
 	}
@@ -474,7 +479,7 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 		if q.Has("limit") {
 			limit, e = strconv.Atoi(q.Get("limit"))
 			if e != nil {
-				failure(w, invalid)
+				failure(w, errInvalid)
 				return
 			}
 		}
@@ -513,7 +518,7 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 		case len(parts) == 3 && parts[2] == "exclusion" && r.Method == "DELETE":
 			c, e = s.mutate(ctx, user, id, "restore", "", "", req.Revision)
 		default:
-			e = invalid
+			e = errInvalid
 		}
 		if e == nil {
 			send(w, c)

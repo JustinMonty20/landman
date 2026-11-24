@@ -40,8 +40,9 @@ pendingCards[id]=true;
 try {const params=new URLSearchParams({limit:'20',hide_excluded:String(hide)});if(cursor)params.set('cursor',cursor);
 const data=await api<{items:Card[];next:string}>(`/api/me/crm/board/${id}?${params}`);
 if(request!==generation || hide!==hideExcluded || (more && next[id]!==cursor))return;
-cards[id]=more?[...(cards[id]??[]),...data.items]:data.items;next[id]=data.next;
-}finally{if(request===generation)pendingCards[id]=false}
+cards[id]=more?[...(cards[id]??[]),...data.items]:data.items;next[id]=data.next;if(more)error='';
+}catch(e){if(request===generation && hide===hideExcluded && (!more || next[id]===cursor))error=String(e)}
+finally{if(request===generation)pendingCards[id]=false}
 }
 async function change(url:string,method:string,payload:object) {busy=true;error='';try {await api(url,method,payload);await load()}catch(e){error=String(e);await load().catch(()=>{});error=String(e)}finally{busy=false}}
 function move(card:Card,id:string) {if(id!==card.state_id)void change(`/api/me/favorites/${card.parcel_id}/state`,'PUT',{state_id:id,revision:card.revision})}
@@ -78,7 +79,7 @@ onMount(()=>{void load()});
 <button onclick={() => {if(confirm('Remove this favorite? Its state and exclusion remain saved.'))void change(`/api/me/favorites/${card.parcel_id}`,'DELETE',{revision:card.revision})}} disabled={busy}>Remove favorite</button>
 </article>
 {/each}
-{#if next[s.id]}<button disabled={busy || pendingCards[s.id]} onclick={async()=>{try{await loadCards(s.id,true)}catch(e){error=String(e)}}}>Load more in {s.name}</button>{/if}
+{#if next[s.id]}<button disabled={busy || pendingCards[s.id]} onclick={() => void loadCards(s.id,true)}>Load more in {s.name}</button>{/if}
 </section>
 {/each}
 </div>

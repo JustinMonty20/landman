@@ -10,12 +10,14 @@ test('deep-linked parcel offers an idempotent favorite action', async ({page}, i
   });
   await page.route('**/api/me',route=>route.fulfill({json:{id:'buyer-fixture',email:'buyer@example.test',name:'Buyer'}}));
   await page.route('**/api/me/parcel-detail-fields',route=>route.fulfill({json:{fields:[]}}));
+  await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:'11111111-1111-4111-8111-111111111111',name:'New'}],default_state_id:'11111111-1111-4111-8111-111111111111',revision:1,next:''}}));
   let saves=0;
   await page.route(`**/api/me/favorites/${parcel}`,route=>{if(route.request().method()==='GET')return route.fulfill({status:404});saves++;return route.fulfill({json:{parcel_id:parcel,favorite:true,state_id:'11111111-1111-4111-8111-111111111111',revision:1,excluded:false,exclusion_reason:''}})});
   await page.goto(`/?parcel=${parcel}`);
   await expect(page.getByRole('heading',{name:'Parcel evidence'})).toBeVisible();
   await page.getByRole('button',{name:'Save favorite'}).click();
   await expect(page.getByRole('button',{name:'Saved to favorites'})).toBeVisible();
+  await expect(page.getByRole('combobox',{name:'Change saved parcel state'})).toHaveValue('11111111-1111-4111-8111-111111111111');
   expect(saves).toBe(1);
   await expect(page.getByRole('link',{name:'Open favorites board'})).toHaveAttribute('href','/favorites');
   await page.screenshot({path:info.outputPath('03-discovery-saved.png'),fullPage:true});
@@ -31,7 +33,7 @@ let state=oldState,revision=3,release:(()=>void)|undefined;
 const card=(id:string)=>({parcel_id:id,favorite:true,state_id:state,revision,excluded:false,exclusion_reason:''});
 await page.route(`**/api/me/favorites/${parcel}`,async route=>{
 if(route.request().method()==='GET')return route.fulfill({status:404});
-await new Promise<void>(resolve=>release=resolve);return route.fulfill({json:card(parcel)});
+await new Promise<void>(resolve=>release=resolve);return route.fulfill({json:{...card(parcel),state_id:newState,revision:99}});
 });
 await page.route(`**/api/me/favorites/${b}`,route=>route.fulfill({json:card(b)}));
 await page.route(`**/api/me/favorites/${b}/state`,route=>{expect(route.request().postDataJSON()).toEqual({state_id:newState,revision:3});state=newState;revision++;return route.fulfill({json:card(b)})});
@@ -39,8 +41,31 @@ await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:o
 await page.route('**/api/me/crm/board/*',route=>route.fulfill({json:{items:route.request().url().includes(newState)&&state===newState?[{...card(b),parcel_number:'B-PARCEL',address:'B Street',favorited_at:'2026-11-24'}]:[],next:''}}));
 await page.goto(`/?parcel=${parcel}`);await expect(page.getByRole('button',{name:'Save favorite'})).toBeVisible();await page.getByRole('button',{name:'Save favorite'}).click();
 await page.getByRole('combobox',{name:'Find parcel ID or address'}).fill('B-PARCEL');await page.getByRole('option',{name:/B Street/}).click();
-await expect(page.getByRole('combobox',{name:'Change saved parcel state'})).toBeVisible();release?.();await expect(page.getByRole('button',{name:'Saved to favorites'})).toBeVisible();
+await expect(page.getByRole('combobox',{name:'Change saved parcel state'})).toHaveValue(oldState);release?.();await expect(page.getByRole('button',{name:'Saved to favorites'})).toBeVisible();await expect(page.getByRole('combobox',{name:'Change saved parcel state'})).toHaveValue(oldState);
 await page.getByRole('combobox',{name:'Change saved parcel state'}).selectOption(newState);await expect(page.getByText('State changed.')).toBeVisible();await page.screenshot({path:info.outputPath('04-discovery-state.png'),fullPage:true});
 await page.goto(`/?parcel=${b}`);await expect(page.getByRole('combobox',{name:'Change saved parcel state'})).toHaveValue(newState);
 await page.goto('/favorites');await expect(page.getByRole('region',{name:'Contacted'}).getByText('B-PARCEL')).toBeVisible();await page.screenshot({path:info.outputPath('05-board-state.png'),fullPage:true});
+});
+test('failed discovery move restores confirmed selection; conflict refreshes revision', async ({page}) => {
+const old='11111111-1111-4111-8111-111111111111', target='22222222-2222-4222-8222-222222222222';
+await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin!=='http://127.0.0.1:5174' || /^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
+await page.route('**/api/me',route=>route.fulfill({json:{id:'buyer-fixture',email:'buyer@example.test',name:'Buyer'}}));
+await page.route('**/api/me/parcel-detail-fields',route=>route.fulfill({json:{fields:[]}}));
+let revision=3,attempts=0;
+const card=()=>({parcel_id:parcel,favorite:true,state_id:old,revision,excluded:false,exclusion_reason:''});
+await page.route(`**/api/me/favorites/${parcel}`,route=>route.fulfill({json:card()}));
+await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:old,name:'New'},{id:target,name:'Contacted'}],default_state_id:old,revision:1,next:''}}));
+await page.route(`**/api/me/favorites/${parcel}/state`,route=>{
+attempts++;
+expect(route.request().postDataJSON()).toEqual({state_id:target,revision:attempts===3?4:3});
+if(attempts===2)revision=4;
+return route.fulfill({status:attempts===2?409:503,body:'unavailable'});
+});
+await page.goto(`/?parcel=${parcel}`);
+const select=page.getByRole('combobox',{name:'Change saved parcel state'});
+await expect(select).toHaveValue(old);
+await select.selectOption(target);await expect(page.getByText(/Could not change state/)).toBeVisible();await expect(select).toHaveValue(old);
+await select.selectOption(target);await expect(page.getByText(/Another tab changed/)).toBeVisible();await expect(select).toHaveValue(old);
+await select.selectOption(target);await expect(page.getByText(/Could not change state/)).toBeVisible();await expect(select).toHaveValue(old);
+expect(attempts).toBe(3);
 });

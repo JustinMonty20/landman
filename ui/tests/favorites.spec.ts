@@ -58,3 +58,21 @@ await page.goto('/favorites');
 const more=page.getByRole('button',{name:'Load more in New'});await expect(more).toBeVisible();await more.dblclick({delay:5});await expect(more).toBeDisabled();expect(requested).toBe(1);
 await page.getByRole('checkbox',{name:'Hide excluded'}).check();await expect(more).toHaveCount(0);resolvePage?.();await expect(page.getByText('SECOND')).toHaveCount(0);await expect(page.getByText('FIRST')).toHaveCount(1);
 });
+test('old page rejection cannot overwrite reloaded board; retry clears current error', async ({page}) => {
+await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin!==origin || /^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
+await page.route('**/api/me',route=>route.fulfill({json:{id:'buyer-fixture',email:'buyer@example.test',name:'Buyer'}}));
+await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:first,name:'New',position:0,revision:1,count:1}],default_state_id:first,revision:1,next:''}}));
+let release:(()=>void)|undefined, pages=0;
+await page.route(`**/api/me/crm/board/${first}*`,async route=>{
+const url=new URL(route.request().url());
+if(url.searchParams.has('cursor')){pages++;if(pages===1)await new Promise<void>(resolve=>release=resolve);return route.fulfill({status:503,body:'unavailable'})}
+return route.fulfill({json:{items:[{parcel_id:parcel,parcel_number:'FIRST',address:null,state_id:first,revision:1,excluded:false,exclusion_reason:'',favorited_at:'2026-11-24'}],next:'cursor'}});
+});
+await page.goto('/favorites');const more=page.getByRole('button',{name:'Load more in New'});await expect(more).toBeVisible();await more.click();
+await page.getByRole('button',{name:'Reload board'}).click();await expect(more).toBeEnabled();
+const staleResponse=page.waitForResponse(response=>response.url().includes('/api/me/crm/board/') && response.status()===503);release?.();await staleResponse;
+await expect(page.getByRole('alert')).toHaveCount(0);
+await more.click();await expect(page.getByRole('alert')).toContainText('503');
+await page.route(`**/api/me/crm/board/${first}*`,route=>route.fulfill({json:{items:[{parcel_id:second,parcel_number:'SECOND',address:null,state_id:first,revision:1,excluded:false,exclusion_reason:'',favorited_at:'2026-11-25'}],next:''}}));
+await more.click();await expect(page.getByText('SECOND')).toBeVisible();await expect(page.getByRole('alert')).toHaveCount(0);
+});

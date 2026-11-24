@@ -81,12 +81,17 @@ try {const res=await fetch(`/api/me/favorites/${id}`,{method:'PUT',headers:{'Con
 catch(e){if(parcelID===id && favoriteRequest===request)favoriteStatus=String(e)}
 finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
 }
-async function moveFavoriteState(state_id:string){
+async function moveFavoriteState(state_id:string,select:HTMLSelectElement){
 const id=parcelID,revision=favorite?.revision;
 if(!revision || !state_id || state_id===favorite?.state_id)return;
 const request=++favoriteRequest;favoritePending=true;favoriteStatus='Changing state…';
-try {const res=await fetch(`/api/me/favorites/${id}/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state_id,revision})});if(!res.ok)throw Error(res.status===409?'Another tab changed this parcel. Reload and retry.':'Could not change state.');const data:Favorite=await res.json();if(parcelID===id && favoriteRequest===request){favorite=data;favoriteStatus='State changed.'}}
-catch(e){if(parcelID===id && favoriteRequest===request)favoriteStatus=String(e)}
+try {const res=await fetch(`/api/me/favorites/${id}/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state_id,revision})});
+if(!res.ok){
+if(res.status===409){const current=await fetch(`/api/me/favorites/${id}`);if(current.ok){const data:Favorite=await current.json();if(parcelID===id && favoriteRequest===request){favorite=data;select.value=data.state_id}}}
+throw Error(res.status===409?'Another tab changed this parcel. Reload and retry.':'Could not change state.');
+}
+const data:Favorite=await res.json();if(parcelID===id && favoriteRequest===request){favorite=data;favoriteStatus='State changed.'}}
+catch(e){if(parcelID===id && favoriteRequest===request){select.value=favorite?.state_id ?? '';favoriteStatus=String(e)}}
 finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
 }
 const currentResearch = $derived(research?.id === parcelID ? research : undefined);
@@ -505,7 +510,7 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <div class="detail-editor favorite-actions"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite || favoritePending}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a>{#if favorite?.favorite}<label class="favorite-state">Change state <select aria-label="Change saved parcel state" value={favorite.state_id} disabled={favoritePending || !favoriteStates.length} onchange={(e)=>void moveFavoriteState(e.currentTarget.value)}>{#each favoriteStates as state}<option value={state.id}>{state.name}</option>{/each}</select></label>{/if}<p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
+            <div class="detail-editor favorite-actions"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite || favoritePending}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a>{#if favorite?.favorite}<label class="favorite-state">Change state <select aria-label="Change saved parcel state" value={favorite.state_id} disabled={favoritePending || !favoriteStates.length} onchange={(e)=>void moveFavoriteState(e.currentTarget.value,e.currentTarget)}>{#each favoriteStates as state}<option value={state.id}>{state.name}</option>{/each}</select></label>{/if}<p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
