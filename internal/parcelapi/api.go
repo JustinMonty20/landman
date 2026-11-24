@@ -40,6 +40,7 @@ type Filters struct {
 	EntityNameIndicator    *string
 	CorporateNameIndicator *string
 	Bounds                 *Bounds
+	ViewportBounds         *Bounds
 	Jurisdiction           *string
 	FloodCategory          *string
 	FloodContact           string
@@ -55,6 +56,7 @@ type cursor struct {
 	After  string `json:"after"`
 	Filter string `json:"filter"`
 	Stamp  string `json:"stamp"`
+	InView bool   `json:"in_view,omitempty"`
 }
 type Parcel struct {
 	ID           string    `json:"id"`
@@ -121,7 +123,7 @@ func parseFilters(q url.Values) (Filters, error) {
 
 func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	f := Filters{PageSize: 50}
-	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "page_size", "cursor", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
+	allowed := []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "viewport_bbox", "page_size", "cursor", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
 	if mapQuery {
 		allowed = []string{"min_acres", "max_acres", "likely_vacant", "delinquent", "out_of_state_mailing", "entity_name_indicator", "corporate_name_indicator", "bbox", "zoom", "flood_category", "flood_contact", "jurisdiction", "discovery", "foreclosure", "soil_type", "soil_use", "soil_rating"}
 	}
@@ -240,6 +242,13 @@ func parseFilterValues(q url.Values, mapQuery bool) (Filters, error) {
 	if raw, ok := q["bbox"]; ok {
 		var e error
 		f.Bounds, e = parseBounds(raw[0])
+		if e != nil {
+			return f, e
+		}
+	}
+	if raw, ok := q["viewport_bbox"]; ok {
+		var e error
+		f.ViewportBounds, e = parseBounds(raw[0])
 		if e != nil {
 			return f, e
 		}
@@ -530,6 +539,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	after := "00000000-0000-0000-0000-000000000000"
+	afterInView := true
 	if f.After != "" {
 		c, err := decodeCursor(f.After)
 		if err != nil || c.Filter != f.digest() || c.Stamp != s {
@@ -537,8 +547,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		after = c.After
+		afterInView = c.InView
 	}
 	items := []Parcel{}
+	priorities := []bool{}
 	count := int64(0)
 	next := ""
 	if f.active() {
@@ -548,19 +560,38 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a := append(f.args(), after, f.PageSize+1)
-		rows, err := tx.Query(r.Context(), floodMatchQuery+`SELECT `+parcelColumns+` FROM parcels p WHERE `+predicate+` AND p.id>$21::uuid ORDER BY p.id LIMIT $22`, a...)
+		query := floodMatchQuery + `SELECT ` + parcelColumns + ` FROM parcels p WHERE ` + predicate + ` AND p.id>$21::uuid ORDER BY p.id LIMIT $22`
+		if f.ViewportBounds != nil {
+			b := f.ViewportBounds
+			a = append(a, b.West, b.South, b.East, b.North, afterInView)
+			query = floodMatchQuery + `SELECT ` + parcelColumns + `,p.in_view FROM (
+ SELECT p.*, p.xmin AS xmin, COALESCE(p.shape && ST_Transform(ST_MakeEnvelope($23,$24,$25,$26,4326),3857)
+ AND CASE WHEN parcel_boundary_usable(p.shape) THEN ST_Intersects(p.shape,ST_Transform(ST_MakeEnvelope($23,$24,$25,$26,4326),3857)) ELSE false END,false) AS in_view
+ FROM parcels p WHERE ` + predicate + `) p
+ WHERE (p.in_view < $27 OR (p.in_view = $27 AND p.id>$21::uuid))
+ ORDER BY p.in_view DESC,p.id LIMIT $22`
+		}
+		rows, err := tx.Query(r.Context(), query, a...)
 		if err != nil {
 			unavailable(w)
 			return
 		}
 		for rows.Next() {
-			p, err := scanParcel(rows)
+			var p Parcel
+			var priority bool
+			var err error
+			if f.ViewportBounds != nil {
+				err = rows.Scan(&p.ID, &p.ParcelNumber, &p.Address, &p.MappedAcres, &p.LikelyVacant, &p.UpdatedAt, &priority)
+			} else {
+				p, err = scanParcel(rows)
+			}
 			if err != nil {
 				rows.Close()
 				unavailable(w)
 				return
 			}
 			items = append(items, p)
+			priorities = append(priorities, priority)
 		}
 		e = rows.Err()
 		rows.Close()
@@ -570,7 +601,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(items) > f.PageSize {
 			items = items[:f.PageSize]
-			next = encodeCursor(cursor{items[len(items)-1].ID, f.digest(), s})
+			next = encodeCursor(cursor{After: items[len(items)-1].ID, Filter: f.digest(), Stamp: s, InView: priorities[f.PageSize-1]})
 		}
 	}
 	if e = tx.Commit(r.Context()); e != nil {

@@ -142,9 +142,15 @@ function selectJurisdiction(key: string) {
 function clearFlood() { floodCategory = ''; floodContact = 'area'; resetMatches(); }
 
 let previousFilterQuery = "";
+let previousViewport = '';
 $effect(() => {
  const query = spatialParams.toString();
- if (query !== previousFilterQuery) { previousFilterQuery = query; resetMatches(); }
+ const view = parcelView ? viewport?.bbox ?? '' : '';
+ if (query !== previousFilterQuery || view !== previousViewport) {
+  previousFilterQuery = query;
+  previousViewport = view;
+  resetMatches();
+ }
 });
 let flood = $state<FloodMap>();
 let floodError = $state('');
@@ -293,12 +299,14 @@ $effect(() => {
 
 $effect(() => {
  const params = spatialParams;
+ const view = parcelView ? viewport?.bbox : undefined;
  const cursor = matchCursor;
  matches = undefined;
  matchError = '';
  if (!parcelView || !params) return;
  const task = new AbortController();
  const query = new URLSearchParams(params);
+ if (view) query.set('viewport_bbox', view);
  if (cursor) query.set('cursor', cursor);
  readMapData<NonNullable<typeof matches>>(`/api/v1/parcels?${query}`, task.signal).then(data => {
   if (!task.signal.aborted) matches = data;

@@ -128,6 +128,7 @@ When the operator corrects you ("wrong," "no, do X," restated intent), classify:
 
 ## Git Hygiene
 
+- Before implementation, create a task branch in a separate worktree from the intended PR base. Keep the operator checkout unchanged.
 - Commits: one self-contained task, all verifications green. If a failing state is necessary, explain in the commit message.
 - For dependent plan PRs, create and maintain an explicit stack. Each child targets its direct unmerged parent. Before handoff, verify each target and that every dependency expected on `main` is reachable from `origin/main`; retarget and rebase children when a parent lands. Never ask the operator to land a stack parent after its child merged into that parent.
 
