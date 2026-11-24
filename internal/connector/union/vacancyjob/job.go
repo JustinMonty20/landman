@@ -91,6 +91,9 @@ func (j Job) Import(ctx context.Context) (jobs.Result, error) {
 		}
 		return jobs.Result{}, err
 	}
+	if err = recorder.SetCount(n); err != nil {
+		return jobs.Result{}, err
+	}
 	_, err = (ingest.Engine{Pool: j.Pool, Store: j.Artifacts}).Ingest(ctx, recorder, &publisher{layer: j.Layer})
 	return jobs.Result{Processed: n}, err
 }
@@ -529,7 +532,11 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 				return err
 			}
 		}
-		return ingest.ErrObservationOnly
+		if ob.Replay {
+			return ingest.ErrObservationOnly
+		}
+		// A repeat is a new captured generation, never an inherited attestation.
+		latestID = ""
 	}
 	id := latestID
 	if latestCapture == ob.ID {

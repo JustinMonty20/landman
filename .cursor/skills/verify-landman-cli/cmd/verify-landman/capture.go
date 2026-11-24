@@ -146,21 +146,10 @@ func sameIDs(got, want []string) bool {
 	return true
 }
 
-func parcelLikelyVacant(record connector.RawRecord) bool {
-	vacant := union.IsLikelyVacantGISRecord(record)
-	attrs, _ := record.RawData["attributes"].(map[string]any)
-	pid, _ := attrs["PID"].(string)
-	if pid == "" {
-		return false
-	}
-	return vacant
-}
-
 func shapeParcels(previous seedSnapshot, records []connector.RawRecord) ([]renderedParcel, error) {
 	translator := union.NewGISTranslator()
 	byID := map[string]renderedParcel{}
 	for _, record := range records {
-		vacant := parcelLikelyVacant(record)
 		parcel, err := translator.Translate(record)
 		if err != nil {
 			return nil, err
@@ -173,7 +162,7 @@ func shapeParcels(previous seedSnapshot, records []connector.RawRecord) ([]rende
 		if !ok {
 			return nil, fmt.Errorf("county returned parcel %s that is not in the seed", id)
 		}
-		byID[id] = renderedParcel{ID: stored.ID, Vacant: vacant, Parcel: parcel}
+		byID[id] = renderedParcel{ID: stored.ID, Parcel: parcel}
 	}
 	rows := make([]renderedParcel, 0, len(previous.parcels))
 	for _, stored := range previous.parcels {

@@ -153,6 +153,18 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 			return 0, err
 		}
 	}
+	// Rejected non-geometry facts cannot refresh the serving row, but supersede
+	// its former claim of freshness. Keep the UUID, shape and retained evidence.
+	if !correction {
+		_, err := w.tx.Exec(ctx, `UPDATE parcel_evidence_current c SET parcel_row_version=NULL
+		FROM parcel_import_rejected r, parcel_evidence_observations o
+		WHERE c.county_id='union' AND c.source_name='union_county_gis'
+		AND c.source_parcel_id=r.source_parcel_id AND o.id=c.observation_id
+		AND o.observed_at < $1`, manifest.CreatedAt)
+		if err != nil {
+			return 0, err
+		}
+	}
 	publication := evidencePublication{artifactID: manifest.ID, observedAt: manifest.CreatedAt, observationID: observationID, kind: publicationKind, attemptID: attemptID, replay: correction, quarantine: quarantine, jobID: jobID}
 	processed, groupsChecked := 0, 0
 	var cursor int64
@@ -288,9 +300,9 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invali
 			return 0, err
 		}
 	}
-	var previousObservation, oldHash, oldGeometry, oldNormalizer, oldSourceHash, oldSourceVersion, oldHashVersion, oldGeometryVersion *string
+	var previousObservation, oldHash, oldGeometry, oldNormalizer, oldSourceHash, oldSourceVersion, oldHashVersion, oldGeometryVersion, oldRowVersion, servingRowVersion *string
 	var shapeMissing bool
-	err = w.tx.QueryRow(ctx, `SELECT p.shape IS NULL, observation_id::text,normalized_hash,geometry_hash,normalizer_version,source_hash,source_hash_version,normalized_hash_version,geometry_hash_version FROM parcel_evidence_current c JOIN parcels p USING(county_id,source_name,source_parcel_id) WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1 FOR UPDATE OF c`, pid).Scan(&shapeMissing, &previousObservation, &oldHash, &oldGeometry, &oldNormalizer, &oldSourceHash, &oldSourceVersion, &oldHashVersion, &oldGeometryVersion)
+	err = w.tx.QueryRow(ctx, `SELECT p.shape IS NULL, observation_id::text,normalized_hash,geometry_hash,normalizer_version,source_hash,source_hash_version,normalized_hash_version,geometry_hash_version,c.parcel_row_version,p.xmin::text FROM parcel_evidence_current c JOIN parcels p USING(county_id,source_name,source_parcel_id) WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1 FOR UPDATE OF c`, pid).Scan(&shapeMissing, &previousObservation, &oldHash, &oldGeometry, &oldNormalizer, &oldSourceHash, &oldSourceVersion, &oldHashVersion, &oldGeometryVersion, &oldRowVersion, &servingRowVersion)
 	if err != nil && err != pgx.ErrNoRows {
 		return 0, err
 	}
@@ -324,6 +336,13 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invali
 		return 0, err
 	}
 	unchanged := oldHash != nil && *oldHash == normalizedHash && oldHashVersion != nil && *oldHashVersion == parcelevidence.NormalizedHashVersion && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion
+	// A matching retained hash does not certify edits to the serving projection.
+	if unchanged && (oldRowVersion == nil || servingRowVersion == nil || *oldRowVersion != *servingRowVersion) {
+		unchanged, err = w.matchesStoredProjection(ctx, pid, last, shape)
+		if err != nil {
+			return 0, err
+		}
+	}
 	if !unchanged && oldHash != nil && oldHashVersion != nil && *oldHashVersion != parcelevidence.NormalizedHashVersion && oldGeometry != nil && *oldGeometry == geometryHash && oldGeometryVersion != nil && *oldGeometryVersion == parcelevidence.GeometryHashVersion {
 		unchanged, err = w.matchesStoredProjection(ctx, pid, last, shape)
 		if err != nil {

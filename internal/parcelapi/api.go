@@ -505,11 +505,18 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	if err := tx.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&labelRevision); err != nil {
 		return "", err
 	}
-	var vacancyRevision string
+	var vacancyRevision, parcelFreshness string
+	if err := tx.QueryRow(ctx, `SELECT coalesce(string_agg(p.id::text||':'||p.xmin::text,',' ORDER BY p.id),'') FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2`, countyID, parcelSource).Scan(&parcelFreshness); err != nil {
+		return "", err
+	}
 	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT string_agg(source_name||':'||capture_id::text||':'||observed_at::text,',' ORDER BY source_name) FROM vacancy_latest_observations),'') || ':' || (SELECT count(*)::text||':'||coalesce(max(assessed_at)::text,'') FROM vacancy_assessments)`).Scan(&vacancyRevision); err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, files, attempts, soilHeads, labelRevision, floodRevision, zoningRevision, vacancyRevision)))
+	var topologyRevision int64
+	if err := tx.QueryRow(ctx, `SELECT revision FROM vacancy_parcel_topology WHERE county_id=$1`, countyID).Scan(&topologyRevision); err != nil {
+		return "", err
+	}
+	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, parcelFreshness, topologyRevision, files, attempts, soilHeads, labelRevision, floodRevision, zoningRevision, vacancyRevision)))
 	return hex.EncodeToString(h[:]), nil
 }
 func (f Filters) sourcesReady(ctx context.Context, tx pgx.Tx) bool {

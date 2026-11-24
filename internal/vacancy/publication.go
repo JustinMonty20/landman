@@ -80,6 +80,14 @@ const publicationSQL = `WITH source_state AS MATERIALIZED (
  c.observation_id::text || ':' || c.normalized_hash || ':' || c.geometry_hash || ':' || p.xmin::text END AS parcel_generation,
  EXISTS (SELECT 1 FROM parcels other WHERE other.id<>p.id AND other.county_id=p.county_id
  AND other.source_name=p.source_name AND other.source_parcel_id=p.source_parcel_id) AS duplicate_pid,
+ (c.source_features IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.source_features) part
+ WHERE nullif(part->'attributes'->>'PID','') IS DISTINCT FROM p.source_parcel_id
+ OR (coalesce(nullif(part->'attributes'->>'YEARBLT','')::numeric,0)>0
+ OR coalesce(nullif(part->'attributes'->>'SQFT','')::numeric,0)>0
+ OR coalesce(part->'attributes'->>'STRUCTTYPE','')<>''
+ OR coalesce(part->'attributes'->>'STRUCTSTYLE','')<>'')
+ <> (coalesce(p.year_built,0)>0 OR coalesce(p.sqft,0)>0
+ OR coalesce(p.structure,'')<>'' OR coalesce(p.structure_style,'')<>''))) AS ambiguous_parcel_facts,
  (SELECT count(DISTINCT (r.market_building::text)) FROM vacancy_live_assessments r
  WHERE r.generation_id=$2::uuid AND r.parcel_number=p.source_parcel_id
  AND r.parcel_year=$3 AND r.assess_category='AV') AS value_count,
@@ -117,7 +125,7 @@ const publicationSQL = `WITH source_state AS MATERIALIZED (
 ), classified AS (
  SELECT *, CASE
  WHEN parcel_generation IS NULL OR shape IS NULL OR NOT parcel_boundary_usable(shape) OR duplicate_pid OR uncertain_footprint OR source_shape_incomplete
- OR year_built IS NULL OR sqft IS NULL OR value_count<>1 OR missing_building_value OR building_value IS NULL THEN 'unknown'
+ OR ambiguous_parcel_facts OR year_built IS NULL OR sqft IS NULL OR value_count<>1 OR missing_building_value OR building_value IS NULL THEN 'unknown'
  WHEN footprint <> parcel_reports_structure OR footprint <> positive_building_value THEN 'conflict'
  WHEN NOT footprint THEN 'strong_candidate'
  ELSE 'review' END AS tier FROM selected

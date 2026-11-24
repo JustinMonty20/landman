@@ -121,6 +121,15 @@ func (r *Recorder) record(ctx context.Context, request, revision string, crs, st
 }
 func (r *Recorder) Manifest() Manifest { return copyManifest(r.manifest) }
 
+// SetCount binds the source-reported complete capture count after the last receipt.
+func (r *Recorder) SetCount(count int) error {
+	if count < 0 {
+		return errors.New("invalid capture count")
+	}
+	r.manifest.Count = count
+	return nil
+}
+
 // Verify checks responses already retained by this recorder before preparation.
 // Replay still obtains its manifest from the database, never from a caller.
 func (r *Recorder) Verify(ctx context.Context) (VerifiedCapture, error) {

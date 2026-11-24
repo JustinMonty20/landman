@@ -9,8 +9,6 @@ type seedSnapshot struct {
 	columns  map[string][]string
 	known    map[string]map[string]struct{}
 	counts   map[string]int
-	vacant   int
-	built    int
 	parcels  []seedParcel
 	mapUnits map[string]seedMapUnit
 }
@@ -18,7 +16,7 @@ type seedSnapshot struct {
 type seedParcel struct {
 	ID             string
 	SourceParcelID string
-	LikelyVacant   bool
+	YearBuilt      string
 	Situs          string
 }
 
@@ -60,11 +58,7 @@ func parseSeed(text string) (seedSnapshot, error) {
 			}
 			seenParcels[parcel.SourceParcelID] = struct{}{}
 			snap.parcels = append(snap.parcels, parcel)
-			if parcel.LikelyVacant {
-				snap.vacant++
-			} else {
-				snap.built++
-			}
+
 		case "soil_map_units":
 			unit, err := mapUnitFromValues(cols, rest)
 			if err != nil {
@@ -182,11 +176,11 @@ func parcelFromValues(cols []string, rest string) (seedParcel, error) {
 	if err != nil {
 		return seedParcel{}, err
 	}
-	vacant, err := requiredBool(cols, vals, "likely_vacant")
+	year, _, err := optionalString(cols, vals, "year_built")
 	if err != nil {
 		return seedParcel{}, err
 	}
-	return seedParcel{ID: id, SourceParcelID: sourceID, LikelyVacant: vacant, Situs: situs}, nil
+	return seedParcel{ID: id, SourceParcelID: sourceID, YearBuilt: year, Situs: situs}, nil
 }
 
 func mapUnitFromValues(cols []string, rest string) (seedMapUnit, error) {

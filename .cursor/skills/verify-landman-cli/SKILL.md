@@ -34,7 +34,7 @@ Require the named tests to execute. An unset database URL can cause skips and is
 | Case | Required result |
 | --- | --- |
 | Missing PID | Stable fallback identity; no favorable vacancy assumption |
-| Zero and missing numeric fields | Preserve zero; keep missing values distinct |
+| Zero and missing numeric fields | Preserve zero and NULL independently; the seed and check-loaded commands compare reported `year_built` without asserting vacancy from either value |
 | Numeric column boundary or overflow | Accept valid bounds; quarantine invalid values without losing unrelated parcels |
 | Multipart geometry and holes | Preserve all valid parts and assign holes to the containing shell |
 | Invalid part on another page | Quarantine the whole parcel identity; preserve prior published data |
@@ -62,6 +62,10 @@ The command-package unit tests check dispatch and failure ordering. The selected
 - [Qualification checks](features/qualification.md): extended local spatial cases and a separately approved live-source path.
 - County-sized synthetic performance and retained live-capture replay: use `docs/ingestion-gaps-verification.md` only when explicitly selected.
 - Manual tax files and the combined bare command: use `verify-landman-tax` only when that opt-in drive is requested.
+
+## Vacancy cutover
+
+`capture-seed` writes parcel facts without the removed `likely_vacant` column. `check-loaded` compares retained sample `year_built` and situs fields against the seeded database; it does not certify a vacancy tier. For classifier publication and cursor freshness use the disposable PostGIS vacancy tests and the current live capture writer with local HTTP fixtures. The checked-in seed covers parcel, soil, sales, and ownership verification, not county coverage or source admission.
 
 ## Completion
 

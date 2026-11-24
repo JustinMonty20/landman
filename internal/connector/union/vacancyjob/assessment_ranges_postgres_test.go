@@ -165,5 +165,5 @@ func TestAssessmentRangesAtomicAndOffline(t *testing.T) {
 	if err := job.Replay(ctx, original); err != nil || requests != before {
 		t.Fatalf("stale replay: %v requests=%d", err, requests-before)
 	}
-	check(2002)
+	check(4004)
 }

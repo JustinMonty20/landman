@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -45,8 +46,39 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = refusal.Exec(ctx, wrongSource); err == nil || !strings.Contains(err.Error(), "exact-source complete live HTTP receipts") {
+	if _, err = refusal.Exec(ctx, wrongSource); err == nil || !strings.Contains(err.Error(), "current capture protocol and complete live HTTP receipts") {
 		t.Fatal("wrong live source URL admitted: ", err)
+	}
+	if err = refusal.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	future := strings.Replace(string(raw), "current_date,2026 FROM vacancy_test_g", "current_date,9999 FROM vacancy_test_g", 1)
+	if future == string(raw) {
+		t.Fatal("future year fixture not changed")
+	}
+	refusal, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = refusal.Exec(ctx, future); err == nil || !strings.Contains(err.Error(), "future assessment year cannot be admitted") {
+		t.Fatalf("future year admitted: %v", err)
+	}
+	if err = refusal.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	legacy := string(raw)
+	receipts := regexp.MustCompile(`"receipts":\[[^]]+\]`)
+	location := receipts.FindStringIndex(legacy)
+	if location == nil {
+		t.Fatal("no retained receipt fixture")
+	}
+	legacy = legacy[:location[0]] + `"receipts":[{"http_status":200,"response_complete":true,"request":"https://example.test/171/query?where=1%3D1"},{"http_status":200,"response_complete":true,"request":"https://example.test/171/query?where=1%3D1"}]` + legacy[location[1]:]
+	refusal, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = refusal.Exec(ctx, legacy); err == nil || !strings.Contains(err.Error(), "current capture protocol") {
+		t.Fatalf("legacy bounded capture admitted: %v", err)
 	}
 	if err = refusal.Rollback(ctx); err != nil {
 		t.Fatal(err)
@@ -121,54 +153,130 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if got := request("/api/v1/parcels/" + id + "/vacancy"); got["tier"] != "strong_candidate" || got["available"] != true || got["assessment_source_as_of"] == nil || got["structure_source_as_of"] == nil || got["facts"].(map[string]any)["effective_av_year"] != float64(2026) {
 		t.Fatalf("strong detail or provenance: %v", got)
 	}
+	// Neither a fallback OBJECTID nor an earlier multipart building report
+	// may be interpreted as an unambiguous empty parcel.
+	for _, features := range []string{
+		`[{"attributes":{"OBJECTID":1,"PID":"","YEARBLT":0,"SQFT":0}}]`,
+		`[{"attributes":{"OBJECTID":1,"PID":"vacancy-test-a","YEARBLT":2001,"SQFT":100}},
+		  {"attributes":{"OBJECTID":2,"PID":"vacancy-test-a","YEARBLT":0,"SQFT":0}}]`,
+	} {
+		if _, err = pool.Exec(ctx, `UPDATE parcel_evidence_current SET source_features=$1::jsonb WHERE source_parcel_id='vacancy-test-a'`, features); err != nil {
+			t.Fatal(err)
+		}
+		if err = Publish(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+		if got := request("/api/v1/parcels/" + id + "/vacancy"); got["tier"] != "unknown" {
+			t.Fatalf("ambiguous source reported favorable tier: %v", got)
+		}
+	}
+	if _, err = pool.Exec(ctx, `UPDATE parcel_evidence_current SET source_features=jsonb_build_array(jsonb_build_object('attributes',jsonb_build_object('PID','vacancy-test-a','YEARBLT',0,'SQFT',0))) WHERE source_parcel_id='vacancy-test-a'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = Publish(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
 	// A footprint shared by a newly inserted neighbor withdraws the unchanged
-// assessed parcel. Rollbacks must not advance the transactional revision.
-var neighborID, assessedID string
-var assessedRowBefore, assessedRowAfter string
-if err = pool.QueryRow(ctx, `SELECT id::text,xmin::text FROM parcels WHERE source_parcel_id='vacancy-test-b'`).Scan(&assessedID,&assessedRowBefore); err != nil { t.Fatal(err) }
-checkB := func(tier string, available bool) {
- t.Helper()
- if got := request("/api/v1/parcels/"+assessedID+"/vacancy"); got["tier"] != tier || got["available"] != available { t.Fatalf("neighbor detail want %s/%v: %v", tier, available, got) }
- for _, path := range []string{"/api/v1/parcels?"+box+"&vacancy_tier=review", "/api/v1/parcels/map?"+box+"&zoom=14&vacancy_tier=review"} {
-  got := request(path)
-  key := "count"; if strings.Contains(path,"/map?") { key = "match_count" }
-  expected := float64(0); if tier == "review" { expected = 1 }
-  if got[key] != expected { t.Fatalf("neighbor %s want %v: %v", path, expected, got) }
- }
-}
-insertNeighbor := `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number,shape) VALUES ('union','179','union_county_gis','vacancy-topology-neighbor','vacancy-topology-neighbor',ST_MakeEnvelope(11,2,14,4,3857)) RETURNING id::text`
-rollback, err := pool.Begin(ctx); if err != nil { t.Fatal(err) }
-if err = rollback.QueryRow(ctx, insertNeighbor).Scan(&neighborID); err != nil { t.Fatal(err) }
-if err = rollback.Rollback(ctx); err != nil { t.Fatal(err) }
-checkB("review",true)
-if err = pool.QueryRow(ctx, insertNeighbor).Scan(&neighborID); err != nil { t.Fatal(err) }
-checkB("unknown",false)
-if err = Publish(ctx,pool); err != nil { t.Fatal(err) }
-checkB("unknown",true)
-rollback, err = pool.Begin(ctx); if err != nil { t.Fatal(err) }
-if _,err = rollback.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(40,0,41,1,3857) WHERE id=$1::uuid`, neighborID); err != nil { t.Fatal(err) }
-if err = rollback.Rollback(ctx); err != nil { t.Fatal(err) }
-checkB("unknown",true)
-if _,err = pool.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(40,0,41,1,3857) WHERE id=$1::uuid`, neighborID); err != nil { t.Fatal(err) }
-checkB("unknown",false)
-if err = Publish(ctx,pool); err != nil { t.Fatal(err) }
-checkB("review",true)
-// An idempotent neighbor geometry update does not withdraw the assessment.
-if _,err = pool.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(40,0,41,1,3857) WHERE id=$1::uuid`, neighborID); err != nil { t.Fatal(err) }
-checkB("review",true)
-rollback, err = pool.Begin(ctx); if err != nil { t.Fatal(err) }
-if _,err = rollback.Exec(ctx, `DELETE FROM parcels WHERE id=$1::uuid`, neighborID); err != nil { t.Fatal(err) }
-if err = rollback.Rollback(ctx); err != nil { t.Fatal(err) }
-checkB("review",true)
-if _,err = pool.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(11,2,14,4,3857) WHERE id=$1::uuid`, neighborID); err != nil { t.Fatal(err) }
-if err = Publish(ctx,pool); err != nil { t.Fatal(err) }
-checkB("unknown",true)
-if _,err = pool.Exec(ctx, `DELETE FROM parcels WHERE id=$1::uuid`, neighborID); err != nil { t.Fatal(err) }
-checkB("unknown",false)
-if err = Publish(ctx,pool); err != nil { t.Fatal(err) }
-checkB("review",true)
-if err = pool.QueryRow(ctx, `SELECT xmin::text FROM parcels WHERE id=$1::uuid`, assessedID).Scan(&assessedRowAfter); err != nil || assessedRowAfter != assessedRowBefore { t.Fatalf("assessed parcel changed while neighbor changed: %s / %s: %v", assessedRowBefore, assessedRowAfter, err) }
-var priorCapture, newerCapture string
+	// assessed parcel. Rollbacks must not advance the transactional revision.
+	var neighborID, assessedID string
+	var assessedRowBefore, assessedRowAfter string
+	if err = pool.QueryRow(ctx, `SELECT id::text,xmin::text FROM parcels WHERE source_parcel_id='vacancy-test-b'`).Scan(&assessedID, &assessedRowBefore); err != nil {
+		t.Fatal(err)
+	}
+	checkB := func(tier string, available bool) {
+		t.Helper()
+		if got := request("/api/v1/parcels/" + assessedID + "/vacancy"); got["tier"] != tier || got["available"] != available {
+			t.Fatalf("neighbor detail want %s/%v: %v", tier, available, got)
+		}
+		for _, path := range []string{"/api/v1/parcels?" + box + "&vacancy_tier=review", "/api/v1/parcels/map?" + box + "&zoom=14&vacancy_tier=review"} {
+			got := request(path)
+			key := "count"
+			if strings.Contains(path, "/map?") {
+				key = "match_count"
+			}
+			expected := float64(0)
+			if tier == "review" {
+				expected = 1
+			}
+			if got[key] != expected {
+				t.Fatalf("neighbor %s want %v: %v", path, expected, got)
+			}
+		}
+	}
+	insertNeighbor := `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number,shape) VALUES ('union','179','union_county_gis','vacancy-topology-neighbor','vacancy-topology-neighbor',ST_MakeEnvelope(11,2,14,4,3857)) RETURNING id::text`
+	rollback, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = rollback.QueryRow(ctx, insertNeighbor).Scan(&neighborID); err != nil {
+		t.Fatal(err)
+	}
+	if err = rollback.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	checkB("review", true)
+	if err = pool.QueryRow(ctx, insertNeighbor).Scan(&neighborID); err != nil {
+		t.Fatal(err)
+	}
+	checkB("unknown", false)
+	if err = Publish(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	checkB("unknown", true)
+	rollback, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = rollback.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(40,0,41,1,3857) WHERE id=$1::uuid`, neighborID); err != nil {
+		t.Fatal(err)
+	}
+	if err = rollback.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	checkB("unknown", true)
+	if _, err = pool.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(40,0,41,1,3857) WHERE id=$1::uuid`, neighborID); err != nil {
+		t.Fatal(err)
+	}
+	checkB("unknown", false)
+	if err = Publish(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	checkB("review", true)
+	// An idempotent neighbor geometry update does not withdraw the assessment.
+	if _, err = pool.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(40,0,41,1,3857) WHERE id=$1::uuid`, neighborID); err != nil {
+		t.Fatal(err)
+	}
+	checkB("review", true)
+	rollback, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = rollback.Exec(ctx, `DELETE FROM parcels WHERE id=$1::uuid`, neighborID); err != nil {
+		t.Fatal(err)
+	}
+	if err = rollback.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	checkB("review", true)
+	if _, err = pool.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(11,2,14,4,3857) WHERE id=$1::uuid`, neighborID); err != nil {
+		t.Fatal(err)
+	}
+	if err = Publish(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	checkB("unknown", true)
+	if _, err = pool.Exec(ctx, `DELETE FROM parcels WHERE id=$1::uuid`, neighborID); err != nil {
+		t.Fatal(err)
+	}
+	checkB("unknown", false)
+	if err = Publish(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	checkB("review", true)
+	if err = pool.QueryRow(ctx, `SELECT xmin::text FROM parcels WHERE id=$1::uuid`, assessedID).Scan(&assessedRowAfter); err != nil || assessedRowAfter != assessedRowBefore {
+		t.Fatalf("assessed parcel changed while neighbor changed: %s / %s: %v", assessedRowBefore, assessedRowAfter, err)
+	}
+	var priorCapture, newerCapture string
 	if err = pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_structures_171'`).Scan(&priorCapture); err != nil {
 		t.Fatal(err)
 	}
