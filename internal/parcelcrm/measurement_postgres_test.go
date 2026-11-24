@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -40,28 +41,46 @@ func TestBoardFixtureMeasurement(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	var wg sync.WaitGroup
 	for _, user := range []AccountID{a, b} {
-		start := time.Now()
-		board, e := s.board(ctx, user)
-		elapsed := time.Since(start)
-		if e != nil || len(board.States) != 50 {
-			t.Fatalf("board %+v %v", board, e)
-		}
-		body, _ := json.Marshal(board)
-		if board.Next == "" {
-			t.Fatal("missing bounded state cursor")
-		}
-		remaining, e := s.boardPage(ctx, user, board.Next)
-		if e != nil || len(remaining.States) != 0 {
-			t.Fatalf("state cursor %+v %v", remaining, e)
-		}
-		start = time.Now()
-		cards, e := s.cards(ctx, user, board.States[0].ID, "", 20, false)
-		pageElapsed := time.Since(start)
-		if e != nil || len(cards) != 20 {
-			t.Fatalf("page %d %v", len(cards), e)
-		}
-		page, _ := json.Marshal(cards)
-		t.Logf("LOCAL measured account=%s states=%d favorites=1000 board=%s board_bytes=%d page20=%s page_bytes=%d", user, len(board.States), elapsed, len(body), pageElapsed, len(page))
+		wg.Add(1)
+		go func(user AccountID) {
+			defer wg.Done()
+			start := time.Now()
+			board, e := s.board(ctx, user)
+			elapsed := time.Since(start)
+			if e != nil || len(board.States) != 50 {
+				t.Errorf("board %+v %v", board, e)
+				return
+			}
+			body, _ := json.Marshal(board)
+			if board.Next == "" {
+				t.Error("missing bounded state cursor")
+				return
+			}
+			remaining, e := s.boardPage(ctx, user, board.Next)
+			if e != nil || len(remaining.States) != 0 {
+				t.Errorf("state cursor %+v %v", remaining, e)
+				return
+			}
+			start = time.Now()
+			cards, e := s.cards(ctx, user, board.States[0].ID, "", 20, false)
+			pageElapsed := time.Since(start)
+			if e != nil || len(cards) != 20 {
+				t.Errorf("page %d %v", len(cards), e)
+				return
+			}
+			page, _ := json.Marshal(cards)
+			// A real revision-checked write on each account runs concurrently with reads on the other.
+			start = time.Now()
+			_, e = s.mutate(ctx, user, cards[0].ParcelID, "state", board.States[1].ID, "", cards[0].Revision)
+			writeElapsed := time.Since(start)
+			if e != nil {
+				t.Errorf("move: %v", e)
+				return
+			}
+			t.Logf("LOCAL simultaneous user=%s states=%d favorites=1000 board=%s board_bytes=%d page20=%s page_bytes=%d write=%s", user, len(board.States), elapsed, len(body), pageElapsed, len(page), writeElapsed)
+		}(user)
 	}
+	wg.Wait()
 }

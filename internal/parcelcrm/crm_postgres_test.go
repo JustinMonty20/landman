@@ -59,7 +59,7 @@ func TestBoardIsolationAndRevision(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, e := s.favorite(ctx, a, id); e != nil {
+			if _, e := s.favorite(ctx, a, id, nil); e != nil {
 				t.Errorf("concurrent favorite: %v", e)
 			}
 		}()
@@ -132,7 +132,7 @@ func TestBoardIsolationAndRevision(t *testing.T) {
 	if e != nil || card.Favorite != false {
 		t.Fatalf("remove: %+v %v", card, e)
 	}
-	card, e = s.favorite(ctx, a, id)
+	card, e = s.favorite(ctx, a, id, &card.Revision)
 	if e != nil || card.StateID != dest.ID || !card.Excluded {
 		t.Fatalf("restore favorite: %+v %v", card, e)
 	}
@@ -162,10 +162,95 @@ func TestBoardIsolationAndRevision(t *testing.T) {
 		t.Fatalf("refresh: %+v %v", card, e)
 	}
 }
+func TestReplayAfterRemovalRequiresRevision(t *testing.T) {
+	s, a, _, id := fixture(t)
+	ctx := context.Background()
+	initial, e := s.favorite(ctx, a, id, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	removed, e := s.mutate(ctx, a, id, "remove", "", "", initial.Revision)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.favorite(ctx, a, id, nil); !errors.Is(e, conflict) {
+		t.Fatalf("original replay: %v", e)
+	}
+	if _, e = s.favorite(ctx, a, id, &initial.Revision); !errors.Is(e, conflict) {
+		t.Fatalf("stale restore: %v", e)
+	}
+	restored, e := s.favorite(ctx, a, id, &removed.Revision)
+	if e != nil || !restored.Favorite {
+		t.Fatalf("restore %+v %v", restored, e)
+	}
+}
+func TestConcurrentDeleteAndMoveHistory(t *testing.T) {
+	s, a, _, id := fixture(t)
+	ctx := context.Background()
+	card, e := s.favorite(ctx, a, id, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	board, e := s.state(ctx, a, "", "create", "Second", "", 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	second := board.States[1]
+	board, e = s.state(ctx, a, "", "create", "Third", "", 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	third := board.States[2]
+	// Both operations start while the account lock is held. Either legal order must preserve exact history.
+	lock, e := s.DB.Begin(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = lock.Exec(ctx, `SELECT id FROM app_users WHERE id=$1 FOR UPDATE`, string(a)); e != nil {
+		t.Fatal(e)
+	}
+	type result struct {
+		kind string
+		err  error
+	}
+	done := make(chan result, 2)
+	go func() {
+		_, err := s.mutate(ctx, a, id, "state", third.ID, "", card.Revision)
+		done <- result{"move", err}
+	}()
+	go func() {
+		_, err := s.state(ctx, a, second.ID, "delete", "", board.DefaultStateID, second.Revision)
+		done <- result{"delete", err}
+	}()
+	if e = lock.Commit(ctx); e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case r := <-done:
+			if r.err != nil {
+				t.Fatalf("%s: %v", r.kind, r.err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("deadlock")
+		}
+	}
+	current, e := s.card(ctx, a, id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var n int
+	if e = s.DB.QueryRow(ctx, `SELECT count(*) FROM user_parcel_state_changes WHERE user_id=$1 AND parcel_id=$2`, string(a), id).Scan(&n); e != nil {
+		t.Fatal(e)
+	}
+	if current.StateID != third.ID || n != 1 {
+		t.Fatalf("card=%+v changes=%d", current, n)
+	}
+}
 func TestBoundedPagesAndOrigin(t *testing.T) {
 	s, a, _, id := fixture(t)
 	ctx := context.Background()
-	card, e := s.favorite(ctx, a, id)
+	card, e := s.favorite(ctx, a, id, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -192,7 +277,7 @@ func TestBoundedPagesAndOrigin(t *testing.T) {
 	if w.Code != 403 {
 		t.Fatalf("origin: %d", w.Code)
 	}
-	other, e := s.favorite(ctx, a, id)
+	other, e := s.favorite(ctx, a, id, nil)
 	if e != nil || other.Revision != card.Revision {
 		t.Fatalf("idempotency %+v %v", other, e)
 	}

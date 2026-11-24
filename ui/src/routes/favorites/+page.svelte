@@ -17,9 +17,32 @@ async function api<T>(url:string, method='GET', payload?:object):Promise<T> {
  if (!response.ok) throw new Error(response.status===409 ? 'Another tab changed this record. Reload and retry.' : `Request failed (${response.status}).`);
  return response.json();
 }
-async function load() { loading=true; error=''; try { board=await api<Board>('/api/me/crm/board'); await Promise.all(board.states.map(s=>loadCards(s.id,false))); } catch(e) {error=String(e)} finally {loading=false} }
-async function loadMoreStates(){if(!board?.next)return;busy=true;try{const page=await api<Board>(`/api/me/crm/board?cursor=${encodeURIComponent(board.next)}`);board={...board,states:[...board.states,...page.states],next:page.next};await Promise.all(page.states.map(s=>loadCards(s.id,false)))}catch(e){error=String(e)}finally{busy=false}}
-async function loadCards(id:string,more:boolean) { const cursor=more?next[id]:'';const params=new URLSearchParams({limit:'20',hide_excluded:String(hideExcluded)});if(cursor)params.set('cursor',cursor);const data=await api<{items:Card[];next:string}>(`/api/me/crm/board/${id}?${params}`);cards[id]=more?[...(cards[id]??[]),...data.items]:data.items;next[id]=data.next; }
+let generation = 0;
+let pendingCards = $state<Record<string,boolean>>({});
+let pendingStates = $state(false);
+async function load() {
+const request=++generation;loading=true;error='';pendingCards={};next={};cards={};
+try {const data=await api<Board>('/api/me/crm/board');if(request!==generation)return;board=data;await Promise.all(data.states.map(s=>loadCards(s.id,false,request)))}
+catch(e){if(request===generation)error=String(e)}finally{if(request===generation)loading=false}
+}
+async function loadMoreStates(){
+if(!board?.next || pendingStates)return;
+const request=generation,cursor=board.next;pendingStates=true;
+try{const page=await api<Board>(`/api/me/crm/board?cursor=${encodeURIComponent(cursor)}`);if(request!==generation || board?.next!==cursor)return;board={...board,states:[...board.states,...page.states],next:page.next};await Promise.all(page.states.map(s=>loadCards(s.id,false,request)))}
+catch(e){if(request===generation)error=String(e)}finally{pendingStates=false}
+}
+async function loadCards(id:string,more:boolean,request=generation) {
+if(pendingCards[id])return;
+const cursor=more?next[id]:'';
+if(more && !cursor)return;
+const hide=hideExcluded;
+pendingCards[id]=true;
+try {const params=new URLSearchParams({limit:'20',hide_excluded:String(hide)});if(cursor)params.set('cursor',cursor);
+const data=await api<{items:Card[];next:string}>(`/api/me/crm/board/${id}?${params}`);
+if(request!==generation || hide!==hideExcluded || (more && next[id]!==cursor))return;
+cards[id]=more?[...(cards[id]??[]),...data.items]:data.items;next[id]=data.next;
+}finally{if(request===generation)pendingCards[id]=false}
+}
 async function change(url:string,method:string,payload:object) {busy=true;error='';try {await api(url,method,payload);await load()}catch(e){error=String(e);await load().catch(()=>{});error=String(e)}finally{busy=false}}
 function move(card:Card,id:string) {if(id!==card.state_id)void change(`/api/me/favorites/${card.parcel_id}/state`,'PUT',{state_id:id,revision:card.revision})}
 function drop(event:DragEvent,id:string) {event.preventDefault();const parcel=event.dataTransfer?.getData('text/plain');const card=Object.values(cards).flat().find(c=>c.parcel_id===parcel);if(card)move(card,id)}
@@ -55,7 +78,7 @@ onMount(()=>{void load()});
 <button onclick={() => {if(confirm('Remove this favorite? Its state and exclusion remain saved.'))void change(`/api/me/favorites/${card.parcel_id}`,'DELETE',{revision:card.revision})}} disabled={busy}>Remove favorite</button>
 </article>
 {/each}
-{#if next[s.id]}<button disabled={busy} onclick={async()=>{try{await loadCards(s.id,true)}catch(e){error=String(e)}}}>Load more in {s.name}</button>{/if}
+{#if next[s.id]}<button disabled={busy || pendingCards[s.id]} onclick={async()=>{try{await loadCards(s.id,true)}catch(e){error=String(e)}}}>Load more in {s.name}</button>{/if}
 </section>
 {/each}
 </div>

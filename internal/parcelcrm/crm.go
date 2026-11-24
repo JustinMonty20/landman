@@ -177,12 +177,43 @@ func (s Store) card(ctx context.Context, user AccountID, id string) (Card, error
 	e := s.DB.QueryRow(ctx, `SELECT p.parcel_id::text,par.parcel_number,par.situs_line_1,p.state_id::text,p.favorite,p.excluded,p.exclusion_reason,p.revision,p.favorited_at::text FROM user_parcels p JOIN parcels par ON par.id=p.parcel_id WHERE p.user_id=$1 AND p.parcel_id=$2`, string(user), id).Scan(&c.ParcelID, &c.ParcelNumber, &c.Address, &c.StateID, &c.Favorite, &c.Excluded, &c.ExclusionReason, &c.Revision, &c.FavoritedAt)
 	return c, e
 }
-func (s Store) favorite(ctx context.Context, user AccountID, id string) (Card, error) {
+func (s Store) favorite(ctx context.Context, user AccountID, id string, revision *int64) (Card, error) {
 	if e := s.init(ctx, user); e != nil {
 		return Card{}, e
 	}
-	_, e := s.DB.Exec(ctx, `INSERT INTO user_parcels(user_id,parcel_id,state_id) SELECT $1,p.id,settings.default_state_id FROM parcels p JOIN user_crm_settings settings ON settings.user_id=$1 WHERE p.id=$2 ON CONFLICT (user_id,parcel_id) DO UPDATE SET favorite=true,revision=user_parcels.revision+1 WHERE NOT user_parcels.favorite`, string(user), id)
+	tx, e := s.DB.Begin(ctx)
 	if e != nil {
+		return Card{}, e
+	}
+	defer tx.Rollback(ctx)
+	// Account first, card second: state deletion and card moves use the same lock order.
+	var locked string
+	if e = tx.QueryRow(ctx, `SELECT id::text FROM app_users WHERE id=$1 FOR UPDATE`, string(user)).Scan(&locked); e != nil {
+		return Card{}, e
+	}
+	var inserted string
+	e = tx.QueryRow(ctx, `INSERT INTO user_parcels(user_id,parcel_id,state_id) SELECT $1,p.id,settings.default_state_id FROM parcels p JOIN user_crm_settings settings ON settings.user_id=$1 WHERE p.id=$2 ON CONFLICT (user_id,parcel_id) DO NOTHING RETURNING parcel_id::text`, string(user), id).Scan(&inserted)
+	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
+		return Card{}, e
+	}
+	if errors.Is(e, pgx.ErrNoRows) {
+		var active bool
+		var current int64
+		if e = tx.QueryRow(ctx, `SELECT favorite,revision FROM user_parcels WHERE user_id=$1 AND parcel_id=$2 FOR UPDATE`, string(user), id).Scan(&active, &current); e != nil {
+			return Card{}, e
+		}
+		if !active {
+			if revision == nil || current != *revision {
+				return Card{}, conflict
+			}
+			if _, e = tx.Exec(ctx, `UPDATE user_parcels SET favorite=true,revision=revision+1 WHERE user_id=$1 AND parcel_id=$2`, string(user), id); e != nil {
+				return Card{}, e
+			}
+		}
+	} else if inserted == "" {
+		return Card{}, pgx.ErrNoRows
+	}
+	if e = tx.Commit(ctx); e != nil {
 		return Card{}, e
 	}
 	return s.card(ctx, user, id)
@@ -336,11 +367,12 @@ func (s Store) state(ctx context.Context, user AccountID, id, action, name, dest
 		if e = tx.QueryRow(ctx, `SELECT name FROM user_lead_states WHERE user_id=$1 AND id=$2`, string(user), dest).Scan(&newName); e != nil {
 			return Board{}, e
 		}
-		_, e = tx.Exec(ctx, `INSERT INTO user_parcel_state_changes(user_id,parcel_id,old_state_name,new_state_name) SELECT user_id,parcel_id,$3,$4 FROM user_parcels WHERE user_id=$1 AND state_id=$2`, string(user), id, oldName, newName)
-		if e != nil {
-			return Board{}, e
-		}
-		_, e = tx.Exec(ctx, `UPDATE user_parcels SET state_id=$3,revision=revision+1 WHERE user_id=$1 AND state_id=$2`, string(user), id, dest)
+		// Only reassigned rows produce history; RETURNING and history share one statement snapshot.
+		_, e = tx.Exec(ctx, `WITH moved AS (
+UPDATE user_parcels SET state_id=$3,revision=revision+1 WHERE user_id=$1 AND state_id=$2
+RETURNING user_id,parcel_id
+) INSERT INTO user_parcel_state_changes(user_id,parcel_id,old_state_name,new_state_name)
+SELECT user_id,parcel_id,$4,$5 FROM moved`, string(user), id, dest, oldName, newName)
 		if e != nil {
 			return Board{}, e
 		}
@@ -467,7 +499,11 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 		case len(parts) == 2 && r.Method == "GET":
 			c, e = s.card(ctx, user, id)
 		case len(parts) == 2 && r.Method == "PUT":
-			c, e = s.favorite(ctx, user, id)
+			if req.Revision != 0 {
+				c, e = s.favorite(ctx, user, id, &req.Revision)
+			} else {
+				c, e = s.favorite(ctx, user, id, nil)
+			}
 		case len(parts) == 2 && r.Method == "DELETE":
 			c, e = s.mutate(ctx, user, id, "remove", "", "", req.Revision)
 		case len(parts) == 3 && parts[2] == "state" && r.Method == "PUT":

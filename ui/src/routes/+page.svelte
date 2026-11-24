@@ -54,9 +54,41 @@ let parcelError = $state('');
 let parcelID = $state('');
 let favorite = $state<{revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string}|null>(null);
 let favoriteStatus = $state('');
-async function readFavorite(id:string){favorite=null;favoriteStatus='';try{const res=await fetch(`/api/me/favorites/${id}`);if(res.status===404)return;if(!res.ok)throw Error();if(parcelID===id)favorite=await res.json()}catch{favoriteStatus='Favorite status unavailable.'}}
-async function saveFavorite(){const id=parcelID;favoriteStatus='Saving favorite…';try{const res=await fetch(`/api/me/favorites/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw Error();favorite=await res.json();favoriteStatus='Favorite saved.'}catch{favoriteStatus='Could not save favorite.'}}
-
+type Favorite = {revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string};
+let favoriteRequest = 0;
+let favoritePending = $state(false);
+let favoriteStates = $state<{id:string;name:string}[]>([]);
+async function readFavorite(id:string){
+const request=++favoriteRequest;favorite=null;favoriteStatus='';favoriteStates=[];favoritePending=false;
+try {
+const res=await fetch(`/api/me/favorites/${id}`);
+if(res.status===404)return;
+if(!res.ok)throw Error();
+const data:Favorite=await res.json();
+if(parcelID!==id || favoriteRequest!==request)return;
+favorite=data;
+if(data.favorite)await readFavoriteStates(id,request);
+} catch {if(parcelID===id && favoriteRequest===request)favoriteStatus='Favorite status unavailable.'}
+}
+async function readFavoriteStates(id:string,request:number){
+try {const res=await fetch('/api/me/crm/board');if(!res.ok)throw Error();const data:{states:{id:string;name:string}[]} = await res.json();if(parcelID===id && favoriteRequest===request)favoriteStates=data.states;}
+catch {if(parcelID===id && favoriteRequest===request)favoriteStatus='Lead states unavailable.'}
+}
+async function saveFavorite(){
+const id=parcelID,request=++favoriteRequest,revision=favorite?.revision;
+favoritePending=true;favoriteStatus='Saving favorite…';
+try {const res=await fetch(`/api/me/favorites/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(revision ? {revision} : {})});if(!res.ok)throw Error(res.status===409?'Favorite changed. Reload and retry.':'Could not save favorite.');const data:Favorite=await res.json();if(parcelID!==id || favoriteRequest!==request)return;favorite=data;favoriteStatus='Favorite saved.';await readFavoriteStates(id,request)}
+catch(e){if(parcelID===id && favoriteRequest===request)favoriteStatus=String(e)}
+finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
+}
+async function moveFavoriteState(state_id:string){
+const id=parcelID,revision=favorite?.revision;
+if(!revision || !state_id || state_id===favorite?.state_id)return;
+const request=++favoriteRequest;favoritePending=true;favoriteStatus='Changing state…';
+try {const res=await fetch(`/api/me/favorites/${id}/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state_id,revision})});if(!res.ok)throw Error(res.status===409?'Another tab changed this parcel. Reload and retry.':'Could not change state.');const data:Favorite=await res.json();if(parcelID===id && favoriteRequest===request){favorite=data;favoriteStatus='State changed.'}}
+catch(e){if(parcelID===id && favoriteRequest===request)favoriteStatus=String(e)}
+finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
+}
 const currentResearch = $derived(research?.id === parcelID ? research : undefined);
 type ParcelSuggestion = { id: string; parcel_number: string | null; address: string | null };
 let finderText = $state('');
@@ -473,7 +505,7 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <div class="detail-editor"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a><p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
+            <div class="detail-editor favorite-actions"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite || favoritePending}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a>{#if favorite?.favorite}<label class="favorite-state">Change state <select aria-label="Change saved parcel state" value={favorite.state_id} disabled={favoritePending || !favoriteStates.length} onchange={(e)=>void moveFavoriteState(e.currentTarget.value)}>{#each favoriteStates as state}<option value={state.id}>{state.name}</option>{/each}</select></label>{/if}<p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
@@ -578,4 +610,9 @@ h1 { font-size: 19px; font-weight: 650; }
 .coverage-link { position: absolute; bottom: 12px; right: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; color: #93c5fd; }
 :global(input:disabled), :global(select:disabled), :global(button:disabled) { opacity: .6; cursor: not-allowed; }
 @media (max-width: 900px) { .map-controls { right: 65px; max-width: 440px; } }
+
+
+.favorite-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.favorite-state { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.favorite-state select { background: #303438; color: #eee; border: 1px solid #88939c; min-height: 36px; max-width: 100%; }
 </style>
