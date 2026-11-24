@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/parcelcrm"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -103,6 +104,8 @@ func newServer(ctx context.Context, pool *pgxpool.Pool, c Config, issuer string)
 	s.mux.HandleFunc("GET /auth/google/callback", s.callback)
 	s.mux.HandleFunc("POST /auth/logout", s.logout)
 	s.mux.HandleFunc("GET /api/me", s.me)
+	s.mux.HandleFunc("/api/me/crm/", s.crm)
+	s.mux.HandleFunc("/api/me/favorites/", s.crm)
 	s.mux.HandleFunc("GET /api/me/parcel-detail-fields", s.getParcelDetailFields)
 	s.mux.HandleFunc("PUT /api/me/parcel-detail-fields", s.putParcelDetailFields)
 	s.mux.HandleFunc("GET /api/me/parcel-owner/{id}", s.getParcelOwner)
@@ -454,4 +457,13 @@ func CheckSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		return errors.New("missing parcel detail preferences migration")
 	}
 	return nil
+}
+
+// crm passes the authenticated identity to the private workflow boundary.
+func (s *server) crm(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.detailUser(w, r)
+	if !ok {
+		return
+	}
+	(parcelcrm.Store{DB: s.pool}).Serve(w, r, parcelcrm.AccountID(user.ID), s.origin)
 }

@@ -52,6 +52,11 @@ const layerQuery = $derived(parcelView && viewport ? mapLayerQuery(viewport) : '
 let parcels = $state<ParcelShape[]>([]);
 let parcelError = $state('');
 let parcelID = $state('');
+let favorite = $state<{revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string}|null>(null);
+let favoriteStatus = $state('');
+async function readFavorite(id:string){favorite=null;favoriteStatus='';try{const res=await fetch(`/api/me/favorites/${id}`);if(res.status===404)return;if(!res.ok)throw Error();if(parcelID===id)favorite=await res.json()}catch{favoriteStatus='Favorite status unavailable.'}}
+async function saveFavorite(){const id=parcelID;favoriteStatus='Saving favorite…';try{const res=await fetch(`/api/me/favorites/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw Error();favorite=await res.json();favoriteStatus='Favorite saved.'}catch{favoriteStatus='Could not save favorite.'}}
+
 const currentResearch = $derived(research?.id === parcelID ? research : undefined);
 type ParcelSuggestion = { id: string; parcel_number: string | null; address: string | null };
 let finderText = $state('');
@@ -244,6 +249,7 @@ function inspectParcel(id: string, focus = false) {
   parcelFocusError = false;
   if (parcelID !== id) research = undefined;
   parcelID = id;
+  void readFavorite(id);
   panelOpen = true;
 }
 
@@ -335,6 +341,8 @@ onMount(() => {
   }).catch(() => { if (!task.signal.aborted) { groups = [...defaultDetailFields]; draftFields = [...groups]; preferenceStatus = 'Saved details unavailable. Showing default fields; changes cannot be saved until reconnected.'; } });
   const county = counties.find((county) => county.id === new URL(window.location.href).searchParams.get('county'));
   if (county) selectCounty(county.id);
+  const linkedParcel = new URL(window.location.href).searchParams.get('parcel');
+  if (linkedParcel && /^[0-9a-f-]{36}$/i.test(linkedParcel)) { selectCounty('37179'); inspectParcel(linkedParcel, true); }
 return () => task.abort();
 });
 </script>
@@ -347,7 +355,7 @@ return () => task.abort();
   <meta name="description" content="Select a county, then inspect its parcels at closer map levels." />
 </svelte:head>
 <div class="app">
-  <header><a class="brand" href="/">▧ <span>landman</span></a></header>
+  <header><a class="brand" href="/">▧ <span>landman</span></a><a href="/favorites" style="margin-left:24px;color:#93c5fd">Favorites</a></header>
   <main aria-label="Parcel discovery">
     <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} {parcelFocus} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={(jurisdiction ? jurisdictionMap : overlays.zoning) ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if !parcelView && filterCount > 0 && selected.status === 'configured'}{@render countySummary()}{/if}
@@ -465,7 +473,8 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
+            <div class="detail-editor"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a><p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
+<Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
                 <Tabs.Trigger class="btn" value="research">Research links</Tabs.Trigger>
