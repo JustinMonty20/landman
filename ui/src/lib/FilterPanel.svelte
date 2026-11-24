@@ -46,7 +46,9 @@ async function remove(key: keyof FilterDraft) {
             <label class="soil-type">Soil type<select class="select" bind:value={filters.soilType} aria-describedby="soil-options-note"><option value="">Any soil unit</option>{#each soilChoices as choice}<option value={choice.key}>{choice.name}</option>{/each}</select></label>
             <p class="field-help" id="soil-options-note">Choices will come from the county soil data. No text search or sample soil types.</p>
           <label class="soil-type">Intended use<select class="select" bind:value={filters.soilUse} onchange={() => filters.soilRating = ''}><option value="">Any use</option><option value="conventional-septic">Conventional septic</option><option value="dwelling-without-basement">Dwelling without basement</option><option value="dwelling-with-basement">Dwelling with basement</option></select></label>
-            <label class="soil-type">Published rating<select class="select" disabled={!filters.soilUse} bind:value={filters.soilRating}><option value="">Any rating</option><option value="Not limited">Not limited</option><option value="Somewhat limited">Somewhat limited</option><option value="Very limited">Very limited</option></select></label>
+            <label class="soil-type">{filters.soilUse ? 'Published rating (required)' : 'Published rating'}<select class="select" disabled={!filters.soilUse} required={!!filters.soilUse} aria-invalid={!!filters.soilUse && !filters.soilRating} aria-describedby="soil-rating-help" bind:value={filters.soilRating}><option value="">Select a rating</option><option value="Not limited">Not limited</option><option value="Somewhat limited">Somewhat limited</option><option value="Very limited">Very limited</option></select></label>
+            <p class="field-help" id="soil-rating-help">Choose an intended use and a published soil rating to filter parcels. This does not confirm zoning permission or site suitability.</p>
+            {#if filters.soilUse && !filters.soilRating}<p class="validation" role="alert">Select a published rating to apply this intended use.</p>{/if}
           </div>
         </Accordion.ItemContent>
       </Accordion.Item>

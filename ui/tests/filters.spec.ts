@@ -26,6 +26,36 @@ test('filter sections expose data-specific controls and bounded soil choices', a
   await page.screenshot({ path: `test-results/${test.info().project.name}-filter-sections.png` });
 });
 
+test('intended use requires an explicit published rating', async ({ page }, testInfo) => {
+const panel = page.getByRole('complementary', { name: 'Parcel filters' });
+await panel.getByRole('button', { name: 'Soil filters', exact: true }).click();
+const use = panel.getByRole('combobox', { name: 'Intended use', exact: true });
+const rating = panel.getByRole('combobox', { name: /Published rating/ });
+await expect(rating).toBeDisabled();
+await use.selectOption('conventional-septic');
+await expect(rating).toBeEnabled();
+await expect(rating).toHaveValue('');
+await expect(rating).toHaveAttribute('required', '');
+await expect(rating).toHaveAttribute('aria-invalid', 'true');
+await expect(panel.getByRole('alert')).toHaveText('Select a published rating to apply this intended use.');
+await panel.getByRole('alert').scrollIntoViewIfNeeded();
+await page.screenshot({ path: testInfo.outputPath('rating-required.png') });
+const paths: string[] = [];
+page.on('request', request => { if (request.url().includes('/api/v1/parcels')) paths.push(request.url()); });
+await rating.selectOption('Not limited');
+await expect(panel.getByRole('alert')).toHaveCount(0);
+await expect(rating).toHaveAttribute('aria-invalid', 'false');
+for (const endpoint of ['/api/v1/parcels?', '/api/v1/parcels/map?']) {
+await expect.poll(() => paths.some(path => path.includes(endpoint) && new URL(path).searchParams.get('soil_use') === 'conventional-septic' && new URL(path).searchParams.get('soil_rating') === 'Not limited')).toBe(true);
+}
+await page.screenshot({ path: testInfo.outputPath('rating-selected.png') });
+await use.selectOption('dwelling-with-basement');
+await expect(rating).toHaveValue('');
+await expect(panel.getByRole('alert')).toBeVisible();
+await use.selectOption('');
+await expect(rating).toBeDisabled();
+await expect(panel.getByRole('alert')).toHaveCount(0);
+});
 test('filter counts and removal controls update with parcel requests', async ({ page }) => {
   const dataRequests: string[] = [];
   page.on('request', (request) => { if (request.url().includes('/api/')) dataRequests.push(request.url()); });
