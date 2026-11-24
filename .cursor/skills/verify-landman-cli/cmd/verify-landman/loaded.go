@@ -13,10 +13,6 @@ var sampleParcelIDs = []string{"07102010", "07102051"}
 const loadedSQL = `
 SELECT 'count', 'parcels', count(*)::text, '-' FROM parcels
 UNION ALL
-SELECT 'count', 'vacant', (count(*) FILTER (WHERE likely_vacant))::text, '-' FROM parcels
-UNION ALL
-SELECT 'count', 'built', (count(*) FILTER (WHERE NOT likely_vacant))::text, '-' FROM parcels
-UNION ALL
 SELECT 'count', 'soil_map_units', count(*)::text, '-' FROM soil_map_units
 UNION ALL
 SELECT 'count', 'soil_polygons', count(*)::text, '-' FROM soil_polygons
@@ -26,15 +22,13 @@ UNION ALL
 SELECT 'count', 'parcel_sales', count(*)::text, '-' FROM parcel_sales
 UNION ALL
 SELECT 'parcel', source_parcel_id,
-       CASE WHEN likely_vacant THEN 't' ELSE 'f' END,
+       coalesce(year_built::text, ''),
        coalesce(situs_line_1, '')
 FROM parcels
 WHERE source_parcel_id IN ('07102010', '07102051')`
 
 type liveLoaded struct {
 	Parcels  int
-	Vacant   int
-	Built    int
 	MapUnits int
 	Polygons int
 	Overlaps int
@@ -43,8 +37,8 @@ type liveLoaded struct {
 }
 
 type liveParcel struct {
-	LikelyVacant bool
-	Situs        string
+	YearBuilt string
+	Situs     string
 }
 
 // loadedReport prints the seed census and whether the live database matches it.
@@ -60,21 +54,15 @@ func loadedReport(snap seedSnapshot, live liveLoaded) (string, int) {
 
 func censusText(snap seedSnapshot) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "census parcels=%d vacant=%d built=%d soil_map_units=%d soil_polygons=%d soil_polygon_parcels=%d parcel_sales=%d\n",
-		snap.counts["parcels"], snap.vacant, snap.built,
-		snap.counts["soil_map_units"], snap.counts["soil_polygons"],
-		snap.counts["soil_polygon_parcels"], snap.counts["parcel_sales"])
+	fmt.Fprintf(&b, "census parcels=%d soil_map_units=%d soil_polygons=%d soil_polygon_parcels=%d parcel_sales=%d\n",
+		snap.counts["parcels"], snap.counts["soil_map_units"], snap.counts["soil_polygons"], snap.counts["soil_polygon_parcels"], snap.counts["parcel_sales"])
 	for _, id := range sampleParcelIDs {
 		parcel, ok := snap.parcel(id)
 		if !ok {
 			fmt.Fprintf(&b, "census parcel %s missing\n", id)
 			continue
 		}
-		flag := "false"
-		if parcel.LikelyVacant {
-			flag = "true"
-		}
-		fmt.Fprintf(&b, "census parcel %s likely_vacant=%s situs=%s\n", id, flag, parcel.Situs)
+		fmt.Fprintf(&b, "census parcel %s year_built=%s situs=%s\n", id, parcel.YearBuilt, parcel.Situs)
 	}
 	return b.String()
 }
@@ -86,8 +74,6 @@ func loadedProblem(snap seedSnapshot, live liveLoaded) string {
 		got   int
 	}{
 		{"parcels", snap.counts["parcels"], live.Parcels},
-		{"parcels", snap.vacant, live.Vacant},
-		{"parcels", snap.built, live.Built},
 		{"soil_map_units", snap.counts["soil_map_units"], live.MapUnits},
 		{"soil_polygons", snap.counts["soil_polygons"], live.Polygons},
 		{"soil_polygon_parcels", snap.counts["soil_polygon_parcels"], live.Overlaps},
@@ -101,7 +87,7 @@ func loadedProblem(snap seedSnapshot, live liveLoaded) string {
 	for _, id := range sampleParcelIDs {
 		want, ok := snap.parcel(id)
 		got, liveOK := live.Samples[id]
-		if !ok || !liveOK || want.LikelyVacant != got.LikelyVacant || want.Situs != got.Situs {
+		if !ok || !liveOK || want.YearBuilt != got.YearBuilt || want.Situs != got.Situs {
 			return id
 		}
 	}
@@ -129,8 +115,8 @@ func parseLoaded(raw string) (liveLoaded, error) {
 			counts[fields[1]] = n
 		case "parcel":
 			live.Samples[fields[1]] = liveParcel{
-				LikelyVacant: fields[2] == "t" || fields[2] == "true",
-				Situs:        fields[3],
+				YearBuilt: fields[2],
+				Situs:     fields[3],
 			}
 		default:
 			return liveLoaded{}, fmt.Errorf("loaded row %q", line)
@@ -138,12 +124,6 @@ func parseLoaded(raw string) (liveLoaded, error) {
 	}
 	var err error
 	if live.Parcels, err = requiredCount(counts, "parcels"); err != nil {
-		return liveLoaded{}, err
-	}
-	if live.Vacant, err = requiredCount(counts, "vacant"); err != nil {
-		return liveLoaded{}, err
-	}
-	if live.Built, err = requiredCount(counts, "built"); err != nil {
 		return liveLoaded{}, err
 	}
 	if live.MapUnits, err = requiredCount(counts, "soil_map_units"); err != nil {

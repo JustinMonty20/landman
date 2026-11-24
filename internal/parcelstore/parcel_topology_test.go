@@ -56,7 +56,7 @@ func TestShapeWriterLiveMultipleShells(t *testing.T) {
 			t.Errorf("clean up parcel: %v", err)
 		}
 	})
-	if err := writer.SavePart(ctx, *parcel, false); err != nil {
+	if err := writer.SavePart(ctx, *parcel); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Commit(ctx); err != nil {

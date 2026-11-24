@@ -12,7 +12,7 @@ import (
 	"github.com/JustinMonty20/landman/internal/models"
 )
 
-const NormalizedHashVersion = "parcel-storage-v3"
+const NormalizedHashVersion = "parcel-storage-v4"
 const GeometryHashVersion = "postgis-normalized-ewkb-v1"
 
 func checksum(prefix string, data []byte) string {
@@ -166,7 +166,7 @@ func QuantizeSourceNumbers(attributes map[string]interface{}, p *models.GISParce
 
 // NormalizedHash excludes generated IDs and observation metadata. The caller
 // supplies the complete persisted geometry and the final sale slots.
-func NormalizedHash(p models.GISParcel, vacant bool, geometryHash string) (string, error) {
+func NormalizedHash(p models.GISParcel, geometryHash string) (string, error) {
 	p.ID = ""
 	p.Geometry.Shape = nil
 	for i := range p.Sales {
@@ -178,9 +178,8 @@ func NormalizedHash(p models.GISParcel, vacant bool, geometryHash string) (strin
 	}
 	payload, err := json.Marshal(struct {
 		Parcel   models.GISParcel `json:"parcel"`
-		Vacant   bool             `json:"likely_vacant"`
 		Geometry string           `json:"geometry_hash"`
-	}{p, vacant, geometryHash})
+	}{p, geometryHash})
 	if err != nil {
 		return "", err
 	}

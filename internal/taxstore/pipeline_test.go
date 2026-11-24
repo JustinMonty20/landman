@@ -52,7 +52,7 @@ func TestSavePipeline(t *testing.T) {
 	}
 	defer tx.Rollback(ctx)
 	var parcelID string
-	if err := tx.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,likely_vacant) VALUES ('union','179','union_county_gis',$1,false) RETURNING id::text`, rows[0].ParcelKey).Scan(&parcelID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id) VALUES ('union','179','union_county_gis',$1) RETURNING id::text`, rows[0].ParcelKey).Scan(&parcelID); err != nil {
 		t.Fatal(err)
 	}
 	rows = append(rows, union.PipelineProperty{ParcelKey: "NOT-IN-PARCELS"})

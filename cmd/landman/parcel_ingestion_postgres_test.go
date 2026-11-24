@@ -53,7 +53,7 @@ func parcelFixtureDB(t *testing.T) (context.Context, string, *pgxpool.Pool) {
 			t.Error(err)
 		}
 	})
-	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "ingest_captures", "ingest_replay_attempts", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_history", "parcel_derived_handoff", "parcel_geometry_decisions"} {
+	for _, table := range []string{"parcels", "parcel_sales", "job_attempts", "quarantined_records", "parcel_evidence_captures", "ingest_captures", "ingest_replay_attempts", "parcel_evidence_observations", "parcel_evidence_current", "parcel_evidence_rejection_cutoff", "parcel_source_object_identity", "parcel_evidence_history", "parcel_derived_handoff", "parcel_geometry_decisions"} {
 		if _, err := base.Exec(ctx, "CREATE TABLE "+name+"."+table+" (LIKE public."+table+" INCLUDING ALL) WITH (autovacuum_enabled=false)"); err != nil {
 			t.Fatal(err)
 		}

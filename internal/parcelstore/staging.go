@@ -28,11 +28,11 @@ WHERE parcel_import_identities.source_parcel_id=EXCLUDED.source_parcel_id`, rawK
 
 // StagePart defers every parcel and sale mutation until whole-PID eligibility is known.
 // Payload is normalized data. Geometry is encoded separately, never as a geom.T interface.
-func (w *ShapeWriter) StagePart(ctx context.Context, parcel models.GISParcel, vacant bool, rawKey string) error {
-	return w.stagePart(ctx, parcel, vacant, rawKey, nil, nil)
+func (w *ShapeWriter) StagePart(ctx context.Context, parcel models.GISParcel, rawKey string) error {
+	return w.stagePart(ctx, parcel, rawKey, nil, nil)
 }
 
-func (w *ShapeWriter) stagePart(ctx context.Context, parcel models.GISParcel, vacant bool, rawKey string, feature json.RawMessage, hash *string) error {
+func (w *ShapeWriter) stagePart(ctx context.Context, parcel models.GISParcel, rawKey string, feature json.RawMessage, hash *string) error {
 	if err := identityKey(parcel.Identity); err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func (w *ShapeWriter) stagePart(ctx context.Context, parcel models.GISParcel, va
 	if err != nil {
 		return err
 	}
-	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_import_parts(source_parcel_id,payload,shape,likely_vacant,raw_key,source_feature,source_hash) VALUES($1,$2,$3,$4,$5,$6,$7)`, parcel.Identity.SourceParcelID, payload, shape, vacant, rawKey, feature, hash)
+	_, err = w.tx.Exec(ctx, `INSERT INTO parcel_import_parts(source_parcel_id,payload,shape,raw_key,source_feature,source_hash) VALUES($1,$2,$3,$4,$5,$6)`, parcel.Identity.SourceParcelID, payload, shape, rawKey, feature, hash)
 	return err
 }
 
@@ -57,14 +57,21 @@ func (w *ShapeWriter) RejectPID(ctx context.Context, pid string, invalidGeometry
 	if pid == "" {
 		return ErrMissingNaturalKey
 	}
-	_, err := w.tx.Exec(ctx, `INSERT INTO parcel_import_rejected VALUES($1,$2) ON CONFLICT(source_parcel_id) DO UPDATE SET invalid_geometry=parcel_import_rejected.invalid_geometry OR EXCLUDED.invalid_geometry`, pid, invalidGeometry)
-	return err
+	tag, err := w.tx.Exec(ctx, `INSERT INTO parcel_import_rejected(source_parcel_id,invalid_geometry) VALUES($1,$2)
+ON CONFLICT(source_parcel_hash) DO UPDATE SET invalid_geometry=parcel_import_rejected.invalid_geometry OR EXCLUDED.invalid_geometry
+WHERE parcel_import_rejected.source_parcel_id=EXCLUDED.source_parcel_id`, pid, invalidGeometry)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("parcelstore: rejected PID fingerprint collision")
+	}
+	return nil
 }
 
 type stagedPart struct {
 	ordinal        int64
 	payload, shape []byte
-	vacant         bool
 	rawKey         string
 }
 
@@ -77,7 +84,7 @@ func (w *ShapeWriter) Publish(ctx context.Context, quarantine *jobs.QuarantineSt
 	var ordinal int64
 	var processed int
 	for {
-		rows, err := w.tx.Query(ctx, `SELECT ordinal,payload,shape,likely_vacant,raw_key FROM parcel_import_parts p
+		rows, err := w.tx.Query(ctx, `SELECT ordinal,payload,shape,raw_key FROM parcel_import_parts p
    WHERE ordinal>$1 AND NOT EXISTS(SELECT 1 FROM parcel_import_rejected r WHERE r.source_parcel_id=p.source_parcel_id)
    ORDER BY ordinal LIMIT 2000`, ordinal)
 		if err != nil {
@@ -86,7 +93,7 @@ func (w *ShapeWriter) Publish(ctx context.Context, quarantine *jobs.QuarantineSt
 		batch := make([]stagedPart, 0, 2000)
 		for rows.Next() {
 			var part stagedPart
-			if err := rows.Scan(&part.ordinal, &part.payload, &part.shape, &part.vacant, &part.rawKey); err != nil {
+			if err := rows.Scan(&part.ordinal, &part.payload, &part.shape, &part.rawKey); err != nil {
 				rows.Close()
 				return 0, err
 			}
@@ -111,7 +118,7 @@ func (w *ShapeWriter) Publish(ctx context.Context, quarantine *jobs.QuarantineSt
 				return 0, err
 			}
 			parcel.Geometry.Shape = &shape
-			if err := w.SavePart(ctx, parcel, part.vacant); err != nil {
+			if err := w.SavePart(ctx, parcel); err != nil {
 				return 0, err
 			}
 			ordinal = part.ordinal

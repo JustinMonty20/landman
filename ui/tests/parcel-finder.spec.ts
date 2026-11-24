@@ -25,7 +25,7 @@ test('finder narrows immediately and only selection locates the parcel', async (
     if (url.pathname === '/api/v1/parcels/map') return route.fulfill({ json: { features: [], match_count: 1, source_stamp: 'fixture' } });
     if (url.pathname === '/api/v1/parcels') return route.fulfill({ json: { items: [], count: 1, source_stamp: 'fixture' } });
     const parcel = parcels.find(item => url.pathname === `/api/v1/parcels/${item.id}`);
-    if (parcel) return route.fulfill({ json: { location: { type: 'Point', coordinates: [-80.7, 34.89] }, parcel: { parcel_number: parcel.parcel_number, address: parcel.address, mapped_acres: '2.50', likely_vacant: true, updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture', owner_labels: null, sales: [] } });
+    if (parcel) return route.fulfill({ json: { location: { type: 'Point', coordinates: [-80.7, 34.89] }, parcel: { parcel_number: parcel.parcel_number, address: parcel.address, mapped_acres: '2.50', vacancy_tier: 'unknown', updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture', owner_labels: null, sales: [] } });
     if (url.pathname.endsWith('/soil')) return route.fulfill({ json: { available: false, reason: 'no published assessment' } });
     if (url.pathname.endsWith('/tax')) return route.fulfill({ json: { bills: [], delinquent_balances: [], reported_delinquent_total: null, pipeline: [], foreclosure_cases: [] } });
     if (url.pathname.endsWith('/vacancy')) return route.fulfill({ json: { available: false, tier: 'unknown', reason: 'validated_evidence_not_published' } });

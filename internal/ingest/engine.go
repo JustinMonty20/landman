@@ -121,6 +121,15 @@ func (r *Recorder) record(ctx context.Context, request, revision string, crs, st
 }
 func (r *Recorder) Manifest() Manifest { return copyManifest(r.manifest) }
 
+// SetCount binds the source-reported complete capture count after the last receipt.
+func (r *Recorder) SetCount(count int) error {
+	if count < 0 {
+		return errors.New("invalid capture count")
+	}
+	r.manifest.Count = count
+	return nil
+}
+
 // Verify checks responses already retained by this recorder before preparation.
 // Replay still obtains its manifest from the database, never from a caller.
 func (r *Recorder) Verify(ctx context.Context) (VerifiedCapture, error) {
@@ -259,8 +268,18 @@ func (e Engine) publish(ctx context.Context, id string, replay bool, publisher P
 	log.Printf("[ingest] source=%s capture=%s: Run publication transaction", manifest.Source, id)
 	err = e.transaction(ctx, manifest.Source, func(ctx context.Context, tx pgx.Tx) error {
 		var published bool
-		if err := tx.QueryRow(ctx, `SELECT published_at IS NOT NULL FROM ingest_captures WHERE id=$1::uuid FOR UPDATE`, id).Scan(&published); err != nil {
+		var lockedData, lockedHash []byte
+		// Hold manifest edits and deletion while allowing admission's capture FK KEY SHARE.
+		if err := tx.QueryRow(ctx, `SELECT published_at IS NOT NULL,manifest,manifest_sha256 FROM ingest_captures WHERE id=$1::uuid FOR NO KEY UPDATE`, id).Scan(&published, &lockedData, &lockedHash); err != nil {
 			return err
+		}
+		if string(lockedData) != string(data) || string(lockedHash) != string(hash[:]) {
+			return errors.New("capture manifest changed during preparation")
+		}
+		// Verify the same persisted receipts again after preparation, under the
+		// capture lock, before any publisher can issue an admission proof.
+		if _, err := e.verify(ctx, manifest); err != nil {
+			return fmt.Errorf("recheck publication receipts: %w", err)
 		}
 		if published && !replay {
 			return errors.New("capture already published")

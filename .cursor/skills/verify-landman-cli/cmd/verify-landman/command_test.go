@@ -196,8 +196,8 @@ func TestProbeWritesTimingsAndAcceptsSlowPage(t *testing.T) {
 }
 
 const twoParcelSeed = "" +
-	"INSERT INTO parcels (id, source_parcel_id, situs_line_1, likely_vacant) VALUES ('11111111-1111-1111-1111-111111111111'::uuid, '07102010', '105 CUPPED OAK DR', 't');\n" +
-	"INSERT INTO parcels (id, source_parcel_id, situs_line_1, likely_vacant) VALUES ('22222222-2222-2222-2222-222222222222'::uuid, '07102051', '203 WHITE OAK LN', 'f');\n"
+	"INSERT INTO parcels (id, source_parcel_id, situs_line_1, year_built) VALUES ('11111111-1111-1111-1111-111111111111'::uuid, '07102010', '105 CUPPED OAK DR', 0);\n" +
+	"INSERT INTO parcels (id, source_parcel_id, situs_line_1, year_built) VALUES ('22222222-2222-2222-2222-222222222222'::uuid, '07102051', '203 WHITE OAK LN', 1961);\n"
 
 const salePageJSON = `{"features":[
   {"attributes":{"PID":"07102010","OBJECTID":1,"s1_SALEDATE":1790726400000,"s1_SALESAMT":0,"s1_DEED_BOOK":"9472","s1_DEED_PAGE":"0680"}},

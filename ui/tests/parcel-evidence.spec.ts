@@ -30,7 +30,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
   if (url.pathname.endsWith('/zoning')) return route.fulfill({ json: { available: false, freshness: { stale: true, reasons: ['source_unavailable'], source_fetched_at: null, refresh_failed_at: null } } });
   if (url.pathname.endsWith('/roads')) return route.fulfill({ status: 503, body: 'Unavailable' });
   if (url.pathname.endsWith('/flood')) return route.fulfill({ json: { status: 'no_release', release: null, parcel_number: 'FIRST' } });
-  if (url.pathname.match(/\/parcels\/[a-f0-9-]+$/)) return route.fulfill({ json: { location: url.pathname.endsWith(first) ? { type: 'Point', coordinates: [-80.7, 34.89] } : null, parcel: { parcel_number: url.pathname.endsWith(first) ? '00123450' : null, address: 'Fixture Way', mapped_acres: '2.50', likely_vacant: true, updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture-id', owner_labels: null, sales: [] } });
+  if (url.pathname.match(/\/parcels\/[a-f0-9-]+$/)) return route.fulfill({ json: { location: url.pathname.endsWith(first) ? { type: 'Point', coordinates: [-80.7, 34.89] } : null, parcel: { parcel_number: url.pathname.endsWith(first) ? '00123450' : null, address: 'Fixture Way', mapped_acres: '2.50', vacancy_tier: 'unknown', updated_at: '2026-01-01' }, source: 'union_county_gis', source_parcel_id: 'fixture-id', owner_labels: null, sales: [] } });
   if (url.pathname === '/api/v1/qualification/map') return route.fulfill({ json: { type: 'FeatureCollection', features: [], generation: null } });
   if (url.pathname === '/api/v1/flood/map') return route.fulfill({ json: { type: 'FeatureCollection', features: [], release: null } });
   return route.abort();

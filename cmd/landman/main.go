@@ -137,7 +137,7 @@ func command(args []string) (string, error) {
 	}
 	if len(args) == 2 && args[0] == "run" {
 		switch args[1] {
-		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID, fema.JobID, vacancyJobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID:
+		case parcelJobID, soilJobID, screeningJobID, taxJobID, zoningJobID, roadsJobID, qualificationJobID, fema.JobID, vacancyJobID, vacancy.AssessmentJobID, vacancyjob.StructuresID, vacancyjob.AssessedValueID:
 			return args[1], nil
 		}
 	}
@@ -229,7 +229,7 @@ func main() {
 
 func needsSoilArtifacts(mode string) bool {
 	switch mode {
-	case taxJobID, "tax-replay", qualificationJobID, "replay", zoningJobID, roadsJobID, vacancyJobID:
+	case taxJobID, "tax-replay", qualificationJobID, "replay", zoningJobID, roadsJobID, vacancyJobID, vacancy.AssessmentJobID:
 		return false
 	default:
 		return true
@@ -283,7 +283,7 @@ func run(ctx context.Context) error {
 		timeout := jobTimeout
 		if mode == qualificationJobID {
 			timeout = standaloneQualificationTimeout
-		} else if mode == vacancyjob.AssessedValueID {
+		} else if mode == vacancyjob.AssessedValueID || mode == vacancy.AssessmentJobID {
 			timeout = standaloneAssessmentTimeout
 		}
 		var cancel context.CancelFunc
@@ -325,7 +325,7 @@ func run(ctx context.Context) error {
 		return result, err
 	}
 	artifactRoot := os.Getenv("PARCEL_EVIDENCE_DIR")
-	if artifactRoot == "" && mode != taxJobID && mode != "tax-replay" && mode != qualificationJobID && mode != vacancyJobID {
+	if artifactRoot == "" && mode != taxJobID && mode != "tax-replay" && mode != qualificationJobID && mode != vacancyJobID && mode != vacancy.AssessmentJobID {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
@@ -475,6 +475,11 @@ func run(ctx context.Context) error {
 			return fmt.Errorf("soil replay did not validate: %s", outcome)
 		}
 		return nil
+	}
+	if mode == vacancy.AssessmentJobID {
+		return runRequired(ctx, runner, jobs.Definition{ID: vacancy.AssessmentJobID, Run: func(ctx context.Context) (jobs.Result, error) {
+			return jobs.Result{}, vacancy.Publish(ctx, pool)
+		}})
 	}
 	if mode == vacancyJobID {
 		path := os.Getenv("UNION_VACANCY_FIXTURE_PATH")

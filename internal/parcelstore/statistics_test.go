@@ -64,12 +64,12 @@ func TestShapeWriterUpdatesStatisticsWithoutPublishingPartialShapes(t *testing.T
 	t.Cleanup(writer.Close)
 	parcel := shapedParcel(t, "shared")
 	parcel.Sales = []models.ParcelSale{{Sequence: 1}, {Sequence: 3}}
-	if err := writer.SavePart(ctx, parcel, false); err != nil {
+	if err := writer.SavePart(ctx, parcel); err != nil {
 		t.Fatal(err)
 	}
 	for i := 1; i < 2000; i++ {
 		parcel.Identity.SourceParcelID = fmt.Sprintf("part-%d", i)
-		if err := writer.SavePart(ctx, parcel, false); err != nil {
+		if err := writer.SavePart(ctx, parcel); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,7 +84,7 @@ func TestShapeWriterUpdatesStatisticsWithoutPublishingPartialShapes(t *testing.T
 	second := square(2)
 	parcel.Geometry.Shape = &second
 	parcel.Sales = []models.ParcelSale{{Sequence: 3}}
-	if err := writer.SavePart(ctx, parcel, true); err != nil {
+	if err := writer.SavePart(ctx, parcel); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Commit(ctx); err != nil {
@@ -100,12 +100,11 @@ func TestShapeWriterUpdatesStatisticsWithoutPublishingPartialShapes(t *testing.T
 		t.Fatalf("table estimates did not include staged rows: parcels=%v sales=%v", parcelEstimate, saleEstimate)
 	}
 	var area float64
-	var vacant bool
 	var sales int
-	if err := conn.QueryRow(ctx, "SELECT ST_Area(shape), likely_vacant, (SELECT count(*) FROM "+name+".parcel_sales s WHERE s.parcel_id = p.id) FROM "+name+".parcels p WHERE source_parcel_id = 'shared'").Scan(&area, &vacant, &sales); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT ST_Area(shape), (SELECT count(*) FROM "+name+".parcel_sales s WHERE s.parcel_id = p.id) FROM "+name+".parcels p WHERE source_parcel_id = 'shared'").Scan(&area, &sales); err != nil {
 		t.Fatal(err)
 	}
-	if area != 2 || !vacant || sales != 1 {
-		t.Fatalf("multipart parcel changed across statistics update: area=%v vacant=%v sales=%d", area, vacant, sales)
+	if area != 2 || sales != 1 {
+		t.Fatalf("multipart parcel changed across statistics update: area=%v sales=%d", area, sales)
 	}
 }

@@ -14,7 +14,7 @@ func TestSoilJoinStatement(t *testing.T) {
 			t.Errorf("missing %s", part)
 		}
 	}
-	for _, part := range []string{"likely_vacant", "source_parcel_id", "INSERT INTO parcels", "INSERT INTO soil_polygon_parcels (id"} {
+	for _, part := range []string{"source_parcel_id", "INSERT INTO parcels", "INSERT INTO soil_polygon_parcels (id"} {
 		if strings.Contains(overlapInsert, part) {
 			t.Errorf("unexpected %s", part)
 		}

@@ -265,7 +265,7 @@ func TestHashVersionTransitionDoesNotWriteBusinessHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, vacant, err := union.NormalizeParcel(records[0])
+	projection, err := union.NormalizeParcel(records[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,9 +273,8 @@ func TestHashVersionTransitionDoesNotWriteBusinessHistory(t *testing.T) {
 	projection.Geometry.Shape = nil
 	legacyPayload, err := json.Marshal(struct {
 		Parcel   any    `json:"parcel"`
-		Vacant   bool   `json:"likely_vacant"`
 		Geometry string `json:"geometry_hash"`
-	}{projection, vacant, geometryHash})
+	}{projection, geometryHash})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,9 @@ package vacancyjob
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +21,25 @@ import (
 	"github.com/JustinMonty20/landman/internal/ingest"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type pausedAssessmentPublisher struct {
+	publisher
+	ready  chan struct{}
+	resume chan struct{}
+}
+
+func (p *pausedAssessmentPublisher) Apply(ctx context.Context, tx pgx.Tx, ob ingest.Observation) error {
+	close(p.ready)
+	select {
+	case <-p.resume:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return p.publisher.Apply(ctx, tx, ob)
+}
 
 func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	ctx := context.Background()
@@ -63,7 +82,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	}
 	version := 0
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.URL.Query().Get("returnCountOnly") == "true" {
 			fmt.Fprint(w, `{"count":2}`)
@@ -86,6 +105,14 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	cert := filepath.Join(dir, "fixture-cert.pem")
+	if _, err := x509.ParseCertificate(server.Certificate().Raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", cert)
 	source, err := union.NewGISSource(union.GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 100})
 	if err != nil {
 		t.Fatal(err)
@@ -118,15 +145,15 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err := run(); err != nil {
 		t.Fatal(err)
 	}
-	if query(`SELECT count(*) FROM vacancy_live_generations`) != 1 || query(`SELECT count(*) FROM ingest_captures WHERE source_name='union_assessed_value_0'`) != 2 {
-		t.Fatal("repeat rewrote evidence or lost observation")
+	if query(`SELECT count(*) FROM vacancy_live_generations`) != 2 || query(`SELECT count(*) FROM ingest_captures WHERE source_name='union_assessed_value_0'`) != 2 {
+		t.Fatal("repeat did not retain distinct generation and observation")
 	}
 	version = 3
 	if err := run(); err != nil {
 		t.Fatal(err)
 	}
-	if query(`SELECT count(*) FROM vacancy_live_generations`) != 1 {
-		t.Fatal("format-only observation published")
+	if query(`SELECT count(*) FROM vacancy_live_generations`) != 3 {
+		t.Fatal("format-only observation did not retain own generation")
 	}
 	var acceptedAfterEquivalent string
 	if err := pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0'`).Scan(&acceptedAfterEquivalent); err != nil {
@@ -136,7 +163,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err := run(); err == nil {
 		t.Fatal("partial capture accepted")
 	}
-	if query(`SELECT count(*) FROM vacancy_live_generations`) != 1 {
+	if query(`SELECT count(*) FROM vacancy_live_generations`) != 3 {
 		t.Fatal("failed capture published")
 	}
 	version = 4
@@ -184,7 +211,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 			}
 			before := requests
 			_, _, replayErr := runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, rejectedID) }})
-			if replayErr == nil || requests != before || query(`SELECT count(*) FROM vacancy_live_generations`) != 1 {
+			if replayErr == nil || requests != before || query(`SELECT count(*) FROM vacancy_live_generations`) != 3 {
 				t.Fatalf("rejected response published on replay: %v", replayErr)
 			}
 		}
@@ -202,7 +229,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	}
 	requestsBeforeEquivalentReplay := requests
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
-	if err != nil || requests != requestsBeforeEquivalentReplay || query(`SELECT count(*) FROM vacancy_live_generations`) != 1 || query(`SELECT count(*) FROM vacancy_live_generations WHERE capture_id=(SELECT capture_id FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0')`) != 0 {
+	if err != nil || requests != requestsBeforeEquivalentReplay || query(`SELECT count(*) FROM vacancy_live_generations`) != 3 || query(`SELECT count(*) FROM vacancy_live_generations WHERE capture_id=(SELECT capture_id FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0')`) != 1 {
 		t.Fatalf("stale replay outranked equivalent observation: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET normalizer_version='vacancy-rows-v1' WHERE capture_id=$1::uuid`, older); err != nil {
@@ -212,14 +239,14 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	if err := run(); err != nil {
 		t.Fatal(err)
 	}
-	if query(`SELECT count(*) FROM vacancy_live_generations`) != 2 {
+	if query(`SELECT count(*) FROM vacancy_live_generations`) != 4 {
 		t.Fatal("changed capture not published")
 	}
 	version = 0
 	if err := run(); err != nil {
 		t.Fatal(err)
 	}
-	if query(`SELECT count(*) FROM vacancy_live_generations`) != 3 {
+	if query(`SELECT count(*) FROM vacancy_live_generations`) != 5 {
 		t.Fatal("A-B-A reversion was not published")
 	}
 	if query(`SELECT count(*) FROM vacancy_live_assessments a JOIN vacancy_live_generations g ON a.generation_id=g.id WHERE g.retrieved_at=(SELECT max(retrieved_at) FROM vacancy_live_generations) AND a.market_building=0`) != 2 {
@@ -237,11 +264,93 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	}
 	requestsBefore := requests
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, current) }})
-	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations WHERE normalizer_version='vacancy-rows-v1'`) != 3 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations WHERE normalizer_version='vacancy-rows-v1'`) != 5 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
 		t.Fatalf("correction replay failed: %v", err)
 	}
+	// Simulate an upgraded retained capture whose old boolean proof was withdrawn.
+	// The same actual captured bytes must regain proof without inheriting approval.
+	if _, err := pool.Exec(ctx, `UPDATE vacancy_live_generations SET parser_admission_verified=false,parser_manifest_sha256=NULL WHERE capture_id=$1::uuid`, current); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, current) }})
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE g.capture_id='`+current+`'::uuid AND g.parser_admission_verified AND g.parser_manifest_sha256=c.manifest_sha256`) != 1 {
+		t.Fatalf("identical replay failed to reissue exact-capture proof: %v", err)
+	}
+	// Pause a real parser replay after its capture guard, while admission holds
+	// the revision lock and checks the capture FK. Both must finish without a cycle.
+	var admissionManifest []byte
+	var generation, hash string
+	if err = pool.QueryRow(ctx, `SELECT c.manifest,g.id::text,g.normalized_sha256 FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE c.id=$1::uuid`, current).Scan(&admissionManifest, &generation, &hash); err != nil {
+		t.Fatal(err)
+	}
+	var admissionReceipt struct {
+		Receipts []struct {
+			Request string `json:"request"`
+		} `json:"receipts"`
+	}
+	if err = json.Unmarshal(admissionManifest, &admissionReceipt); err != nil || len(admissionReceipt.Receipts) == 0 {
+		t.Fatalf("capture receipt: %v", err)
+	}
+	pause := make(chan struct{})
+	resume := make(chan struct{})
+	bounded, stop := context.WithTimeout(ctx, 8*time.Second)
+	defer stop()
+	replayDone := make(chan error, 1)
+	go func() {
+		_, _, e := runner.Run(bounded, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(runCtx context.Context) (jobs.Result, error) {
+			return jobs.Result{}, (ingest.Engine{Pool: pool, Store: artifacts}).Replay(runCtx, current, AssessedValueID, &pausedAssessmentPublisher{publisher: publisher{layer: union.AssessedValueLayer}, ready: pause, resume: resume})
+		}})
+		replayDone <- e
+	}()
+	select {
+	case <-pause:
+	case <-bounded.Done():
+		t.Fatal("replay did not acquire capture guard")
+	}
+	guardProbe, probeDone := context.WithTimeout(bounded, 200*time.Millisecond)
+	defer probeDone()
+	if _, e := pool.Exec(guardProbe, `SELECT id FROM ingest_captures WHERE id=$1::uuid FOR UPDATE`, current); e == nil || guardProbe.Err() == nil {
+		t.Fatalf("capture guard did not exclude manifest edits/deletion: %v", e)
+	}
+	admission, err := pool.Begin(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admission.Rollback(context.Background())
+	if _, err = admission.Exec(bounded, `SET LOCAL lock_timeout='3s'`); err != nil {
+		t.Fatal(err)
+	}
+	admitted := make(chan error, 1)
+	go func() {
+		_, e := admission.Exec(bounded, `INSERT INTO vacancy_live_validation(generation_id,capture_id,source_name,normalized_sha256,source_url,terms_evidence,coverage_evidence,count_evidence,snapshot_evidence,source_as_of,effective_av_year)
+ VALUES($1::uuid,$2::uuid,'union_assessed_value_0',$3,$4,'fixture terms reviewed','fixture coverage reviewed','fixture count checked','fixture snapshot reviewed',current_date,2026)`, generation, current, hash, strings.Split(admissionReceipt.Receipts[0].Request, "?")[0])
+		admitted <- e
+	}()
+	select {
+	case e := <-admitted:
+		if e != nil {
+			t.Fatalf("admission blocked by replay capture guard: %v", e)
+		}
+	case <-bounded.Done():
+		t.Fatal("admission timed out while capture guard held")
+	}
+	close(resume)
+	if err = admission.Commit(bounded); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-replayDone; err != nil {
+		t.Fatalf("replay after admission: %v", err)
+	}
+	if query(`SELECT count(*) FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE g.capture_id='`+current+`'::uuid AND g.parser_admission_verified AND g.parser_manifest_sha256=c.manifest_sha256`) != 1 {
+		t.Fatal("replay lost exact capture proof")
+	}
+	for _, mutation := range []string{`UPDATE ingest_captures SET manifest=manifest||decode('20','hex') WHERE id=$1::uuid`, `UPDATE ingest_captures SET manifest_sha256=decode(repeat('a',64),'hex') WHERE id=$1::uuid`} {
+		if _, err := pool.Exec(ctx, mutation, current); err == nil || !strings.Contains(err.Error(), "immutable") {
+			t.Fatalf("capture proof bytes could be rewritten: %v", err)
+		}
+	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
-	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 3 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 5 || query(`SELECT count(*) FROM vacancy_live_assessments WHERE market_building=999`) != 0 {
 		t.Fatalf("older replay changed evidence or contacted HTTP: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `ALTER TABLE vacancy_live_assessments ADD CONSTRAINT reject_test_building CHECK (market_building <> 1) NOT VALID`); err != nil {
@@ -260,7 +369,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	}
 	requestsBefore = requests
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, retryID) }})
-	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 4 {
+	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations`) != 6 {
 		t.Fatalf("offline retry did not publish: %v", err)
 	}
 	if query(`SELECT count(*) FROM vacancy_live_generations WHERE capture_id='`+retryID+`'::uuid AND validation_note='bounded numeric-range assessment observation; county snapshot, query support, coverage and effective year unverified'`) != 1 {
@@ -296,7 +405,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, older) }})
-	if err == nil || query(`SELECT count(*) FROM vacancy_live_generations`) != 4 || requests != requestsBefore {
+	if err == nil || query(`SELECT count(*) FROM vacancy_live_generations`) != 6 || requests != requestsBefore {
 		t.Fatalf("corrupt replay accepted or contacted HTTP: %v", err)
 	}
 }
@@ -398,14 +507,14 @@ func TestStructurePagesAtomicAndOfflineReplay(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT capture_id::text FROM vacancy_live_generations WHERE source_name='union_structures_171'`).Scan(&good); err != nil {
 		t.Fatal(err)
 	}
-	if err = run(); err != nil || count(`SELECT count(*) FROM vacancy_live_generations WHERE source_name='union_structures_171'`) != 1 {
-		t.Fatalf("repeat published duplicate: %v", err)
+	if err = run(); err != nil || count(`SELECT count(*) FROM vacancy_live_generations WHERE source_name='union_structures_171'`) != 2 {
+		t.Fatalf("repeat did not retain new generation: %v", err)
 	}
 	failed = true
 	if err = run(); err == nil {
 		t.Fatal("accepted failed later page")
 	}
-	if count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 || count(`SELECT count(*) FROM vacancy_live_generations WHERE source_name='union_structures_171'`) != 1 {
+	if count(`SELECT count(*) FROM vacancy_live_structures`) != 4002 || count(`SELECT count(*) FROM vacancy_live_generations WHERE source_name='union_structures_171'`) != 2 {
 		t.Fatal("failed import partially published")
 	}
 	var rejected string
@@ -414,11 +523,11 @@ func TestStructurePagesAtomicAndOfflineReplay(t *testing.T) {
 	}
 	before := requests
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: StructuresID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, rejected) }})
-	if err == nil || requests != before || count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 {
+	if err == nil || requests != before || count(`SELECT count(*) FROM vacancy_live_structures`) != 4002 {
 		t.Fatalf("failed later page replay published: %v", err)
 	}
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: StructuresID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, good) }})
-	if err != nil || requests != before || count(`SELECT count(*) FROM vacancy_live_structures`) != 2001 {
+	if err != nil || requests != before || count(`SELECT count(*) FROM vacancy_live_structures`) != 4002 {
 		t.Fatalf("offline replay changed publication: %v", err)
 	}
 }

@@ -12,30 +12,30 @@ import (
 
 func TestNormalizeParcelClassification(t *testing.T) {
 	for _, tc := range []struct {
-		name, attrs, shape     string
-		invalid, fatal, vacant bool
+		name, attrs, shape string
+		invalid, fatal     bool
 	}{
-		{"valid", `{"OBJECTID":1,"PID":"A","YEARBLT":0}`, `{"rings":[[[0,0],[0,1],[1,1],[1,0],[0,0]]]}`, false, false, true},
-		{"fallback", `{"OBJECTID":1,"PID":null,"YEARBLT":0}`, `{"rings":[[[0,0],[0,1],[1,1],[1,0],[0,0]]]}`, false, false, false},
-		{"bad shape", `{"OBJECTID":1,"PID":"A"}`, `{"rings":[]}`, true, false, false},
-		{"bad year", `{"OBJECTID":1,"PID":"A","YEARBLT":1200}`, `{}`, true, false, false},
-		{"bad amount", `{"OBJECTID":1,"PID":"A","s1_SALESAMT":-1}`, `{}`, true, false, false},
-		{"no identity", `{"PID":"A"}`, `{}`, false, true, false},
-		{"fraction oid", `{"OBJECTID":1.5,"PID":"A"}`, `{}`, false, true, false},
-		{"numeric pid", `{"OBJECTID":1,"PID":123}`, `{}`, false, true, false},
+		{"valid", `{"OBJECTID":1,"PID":"A","YEARBLT":0}`, `{"rings":[[[0,0],[0,1],[1,1],[1,0],[0,0]]]}`, false, false},
+		{"fallback", `{"OBJECTID":1,"PID":null,"YEARBLT":0}`, `{"rings":[[[0,0],[0,1],[1,1],[1,0],[0,0]]]}`, false, false},
+		{"bad shape", `{"OBJECTID":1,"PID":"A"}`, `{"rings":[]}`, true, false},
+		{"bad year", `{"OBJECTID":1,"PID":"A","YEARBLT":1200}`, `{}`, true, false},
+		{"bad amount", `{"OBJECTID":1,"PID":"A","s1_SALESAMT":-1}`, `{}`, true, false},
+		{"no identity", `{"PID":"A"}`, `{}`, false, true},
+		{"fraction oid", `{"OBJECTID":1.5,"PID":"A"}`, `{}`, false, true},
+		{"numeric pid", `{"OBJECTID":1,"PID":123}`, `{}`, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var data map[string]interface{}
 			if err := json.Unmarshal([]byte(`{"attributes":`+tc.attrs+`,"geometry":`+tc.shape+`}`), &data); err != nil {
 				t.Fatal(err)
 			}
-			parcel, vacant, err := union.NormalizeParcel(connector.RawRecord{SourceName: "union_county_gis", RawData: data})
+			parcel, err := union.NormalizeParcel(connector.RawRecord{SourceName: "union_county_gis", RawData: data})
 			var invalid *union.InvalidParcelRecord
 			if errors.As(err, &invalid) != tc.invalid || (err != nil && invalid == nil) != tc.fatal {
 				t.Fatalf("classification %T %v", err, err)
 			}
-			if err == nil && (vacant != tc.vacant || parcel.Identity.SourceParcelID == "") {
-				t.Fatalf("parcel=%+v vacant=%v", parcel.Identity, vacant)
+			if err == nil && parcel.Identity.SourceParcelID == "" {
+				t.Fatalf("missing parcel identity: %+v", parcel.Identity)
 			}
 		})
 	}
@@ -74,7 +74,7 @@ func TestNormalizeParcelNumericBoundaries(t *testing.T) {
 						t.Fatal(err)
 					}
 					data["attributes"].(map[string]interface{})[field.name] = tc.value
-					_, _, err := union.NormalizeParcel(connector.RawRecord{SourceName: "union_county_gis", RawData: data})
+					_, err := union.NormalizeParcel(connector.RawRecord{SourceName: "union_county_gis", RawData: data})
 					var invalid *union.InvalidParcelRecord
 					if tc.valid {
 						if err != nil {

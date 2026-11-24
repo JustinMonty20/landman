@@ -38,7 +38,7 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 			result.Quarantined++
 			continue
 		}
-		parcel, vacant, err := union.NormalizeParcel(record)
+		parcel, err := union.NormalizeParcel(record)
 		if err != nil {
 			var invalid *union.InvalidParcelRecord
 			if !errors.As(err, &invalid) {
@@ -64,7 +64,7 @@ func stageParcelEvidenceRecords(ctx context.Context, writer *parcelstore.ShapeWr
 		if err != nil {
 			return fmt.Errorf("encode parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 		}
-		if err = writer.StageEvidencePart(ctx, parcel, vacant, rawKey, payload); err != nil {
+		if err = writer.StageEvidencePart(ctx, parcel, rawKey, payload); err != nil {
 			return fmt.Errorf("stage parcel PID %q (OBJECTID %d): %w", id.PID, id.ObjectID, err)
 		}
 	}
@@ -104,7 +104,7 @@ func quarantineCaptureBatch(ctx context.Context, quarantine *jobs.QuarantineStor
 			}
 			continue
 		}
-		_, _, err = union.NormalizeParcel(record)
+		_, err = union.NormalizeParcel(record)
 		if err == nil {
 			continue
 		}

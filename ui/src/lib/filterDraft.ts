@@ -5,7 +5,7 @@ export type FilterDraft = {
   foreclosure: boolean;
   minAcres: number | undefined;
   maxAcres: number | undefined;
-  likelyVacant: boolean;
+  vacancyTier: '' | 'strong_candidate' | 'review' | 'conflict' | 'unknown';
   soilType: string;
   soilUse: string;
   soilRating: string;
@@ -16,7 +16,7 @@ export type FilterSelection = { key: keyof FilterDraft; group: FilterGroup; labe
 export function emptyFilterDraft(): FilterDraft {
   return {
     businessName: false, outOfState: false, delinquent: false, foreclosure: false,
-    minAcres: undefined, maxAcres: undefined, likelyVacant: false, soilType: '', soilUse: '', soilRating: ''
+    minAcres: undefined, maxAcres: undefined, vacancyTier: '', soilType: '', soilUse: '', soilRating: ''
   };
 }
 
@@ -30,13 +30,13 @@ export function filterSelections(filters: FilterDraft): FilterSelection[] {
   if (filters.maxAcres !== undefined) selections.push({ key: 'maxAcres', group: 'Parcel', label: `At most ${filters.maxAcres} acres` });
   if (filters.soilType) selections.push({ key: 'soilType', group: 'Parcel', label: `Soil unit ${filters.soilType}` });
   if (filters.soilRating) selections.push({ key: 'soilRating', group: 'Parcel', label: `${filters.soilUse}: ${filters.soilRating}` });
-  if (filters.likelyVacant) selections.push({ key: 'likelyVacant', group: 'Parcel', label: 'Likely vacant' });
+  if (filters.vacancyTier) selections.push({ key: 'vacancyTier', group: 'Parcel', label: `Vacancy: ${filters.vacancyTier.replace('_', ' ')}` });
   return selections;
 }
 
 export function removeDraftFilter(filters: FilterDraft, key: keyof FilterDraft): FilterDraft {
   if (key === 'minAcres' || key === 'maxAcres') return { ...filters, [key]: undefined };
   if (key === 'soilRating') return { ...filters, soilRating: '', soilUse: '' };
-  if (key === 'soilType' || key === 'soilUse') return { ...filters, [key]: '' };
+  if (key === 'soilType' || key === 'soilUse' || key === 'vacancyTier') return { ...filters, [key]: '' };
   return { ...filters, [key]: false };
 }

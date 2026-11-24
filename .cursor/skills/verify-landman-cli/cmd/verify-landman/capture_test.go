@@ -13,21 +13,6 @@ import (
 	"github.com/JustinMonty20/landman/internal/connector/union"
 )
 
-func TestParcelLikelyVacantEmptyPIDIsFalse(t *testing.T) {
-	empty := connector.RawRecord{RawData: map[string]any{
-		"attributes": map[string]any{"PID": "", "YEARBLT": float64(0)},
-	}}
-	if parcelLikelyVacant(empty) {
-		t.Fatal("empty PID")
-	}
-	present := connector.RawRecord{RawData: map[string]any{
-		"attributes": map[string]any{"PID": "07102010", "YEARBLT": float64(0)},
-	}}
-	if !parcelLikelyVacant(present) {
-		t.Fatal("zero year")
-	}
-}
-
 func TestPublishCapturedSeedLeavesSeedWhenIDsDiffer(t *testing.T) {
 	dir := t.TempDir()
 	seedPath := filepath.Join(dir, "seed.sql")
@@ -190,7 +175,7 @@ func TestRenderSeedAcceptsRealSeedColumns(t *testing.T) {
 	}
 	when := time.Date(2026, 11, 14, 22, 0, 0, 0, time.UTC)
 	body, err := renderSeed(previous, []renderedParcel{{
-		ID: stored.ID, Vacant: parcelLikelyVacant(connector.RawRecord{RawData: captureParcelFeature()}), Parcel: parcel,
+		ID: stored.ID, Parcel: parcel,
 	}}, soils, []renderedOverlap{{
 		ID: "55555555-5555-4555-8555-555555555555", SoilID: soils[0].ID, ParcelID: stored.ID, Acres: "0.25",
 	}}, when)
@@ -240,7 +225,7 @@ func assertCaptureSeed(t *testing.T, seed string, when time.Time) {
 		t.Fatal(err)
 	}
 	parcel, ok := snap.parcel("07102010")
-	if !ok || parcel.ID != "11111111-1111-1111-1111-111111111111" || !parcel.LikelyVacant || parcel.Situs != "105 CUPPED OAK DR" {
+	if !ok || parcel.ID != "11111111-1111-1111-1111-111111111111" || parcel.YearBuilt != "0" || parcel.Situs != "105 CUPPED OAK DR" {
 		t.Fatalf("parcel %+v", parcel)
 	}
 	known := snap.mapUnits["115330"]
@@ -363,7 +348,7 @@ const captureSoilPage = `{"features":[
 
 const capturePostgresURL = "postgres://landman:landman@localhost:5432/postgres?sslmode=disable"
 
-const captureSeedSQL = `INSERT INTO parcels (id, source_parcel_id, situs_line_1, likely_vacant) VALUES ('11111111-1111-1111-1111-111111111111'::uuid, '07102010', 'OLD SITUS', false);
+const captureSeedSQL = `INSERT INTO parcels (id, source_parcel_id, situs_line_1, year_built) VALUES ('11111111-1111-1111-1111-111111111111'::uuid, '07102010', 'OLD SITUS', 0);
 INSERT INTO soil_map_units (map_unit_key, map_unit_symbol, map_unit_name, area_symbol, area_name, fetched_at) VALUES ('115330', 'ApB', 'Appling sandy loam', 'NC179', 'Union County, North Carolina', '2026-01-01 00:00:00+00'::timestamptz);
 INSERT INTO soil_polygons (id, county_id, source_name, object_id, map_unit_key, spatial_version, survey_saved_on, shape, fetched_at) VALUES ('33333333-3333-3333-3333-333333333333'::uuid, 'union', 'union_county_gis', '1', '115330', 5, NULL, ST_GeomFromEWKT('SRID=3857;POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), '2026-01-01 00:00:00+00'::timestamptz);
 INSERT INTO soil_polygon_parcels (id, soil_polygon_id, parcel_id, overlap_acres, created_at, updated_at) VALUES ('44444444-4444-4444-4444-444444444444'::uuid, '33333333-3333-3333-3333-333333333333'::uuid, '11111111-1111-1111-1111-111111111111'::uuid, '0.25', '2026-01-01 00:00:00+00'::timestamptz, '2026-01-01 00:00:00+00'::timestamptz);

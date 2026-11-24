@@ -71,8 +71,8 @@ async function remove(key: keyof FilterDraft) {
               <label>Maximum acres<input class="input" type="number" min="0" step="any" placeholder="Any" bind:value={filters.maxAcres} /></label>
             </div>
             {#if acreageError}<p class="validation" role="alert">{acreageError}</p>{/if}
-            <label class="check"><input class="checkbox" type="checkbox" bind:checked={filters.likelyVacant} />Likely vacant</label>
-            <p class="field-help">Provisional signal, not a verified vacancy finding.</p>
+            <label class="soil-type">Vacancy tier<select class="select" bind:value={filters.vacancyTier}><option value="">Any tier</option><option value="strong_candidate">Strong candidate</option><option value="review">Review</option><option value="conflict">Conflict</option><option value="unknown">Unknown</option></select></label>
+            <p class="field-help">Unknown means no current, validated assessment. A candidate is not verified vacant.</p>
           </div>
         </Accordion.ItemContent>
       </Accordion.Item>

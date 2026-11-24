@@ -20,8 +20,8 @@ func TestPublishBillFileCompleteAndRollback(t *testing.T) {
 	_, secondMeta, _ := billingRows(t, billingHeader+"PUBLICATION-PARCEL,RE,2026,2.00,ROAD,OWNER,BOX,CITY,NC,28000\n")
 	_, emptyMeta, _ := billingRows(t, billingHeader)
 	var parcelID string
-	if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id,likely_vacant)
-VALUES ('union','179','union_county_gis','PUBLICATION-PARCEL',true) RETURNING id::text`).Scan(&parcelID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO parcels (county_id,county_code,source_name,source_parcel_id)
+VALUES ('union','179','union_county_gis','PUBLICATION-PARCEL') RETURNING id::text`).Scan(&parcelID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

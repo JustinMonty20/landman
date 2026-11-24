@@ -16,7 +16,6 @@ const overlapAcresExpr = `ST_Area(ST_Transform(ST_Intersection(p.shape, s.shape)
 
 type renderedParcel struct {
 	ID     string
-	Vacant bool
 	Parcel *models.GISParcel
 }
 
@@ -265,11 +264,6 @@ func parcelValue(col string, row renderedParcel, when time.Time) (string, error)
 		return text + "::jsonb", nil
 	case "created_at", "updated_at":
 		return sqlTimestamp(when), nil
-	case "likely_vacant":
-		if row.Vacant {
-			return "true", nil
-		}
-		return "false", nil
 	default:
 		return "", fmt.Errorf("no value for parcels.%s", col)
 	}
