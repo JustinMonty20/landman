@@ -4,7 +4,9 @@ package vacancyjob
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +21,25 @@ import (
 	"github.com/JustinMonty20/landman/internal/ingest"
 	"github.com/JustinMonty20/landman/internal/jobs"
 	"github.com/JustinMonty20/landman/internal/taxartifact"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type pausedAssessmentPublisher struct {
+	publisher
+	ready  chan struct{}
+	resume chan struct{}
+}
+
+func (p *pausedAssessmentPublisher) Apply(ctx context.Context, tx pgx.Tx, ob ingest.Observation) error {
+	close(p.ready)
+	select {
+	case <-p.resume:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return p.publisher.Apply(ctx, tx, ob)
+}
 
 func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	ctx := context.Background()
@@ -63,7 +82,7 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	}
 	version := 0
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.URL.Query().Get("returnCountOnly") == "true" {
 			fmt.Fprint(w, `{"count":2}`)
@@ -86,6 +105,14 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	cert := filepath.Join(dir, "fixture-cert.pem")
+	if _, err := x509.ParseCertificate(server.Certificate().Raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", cert)
 	source, err := union.NewGISSource(union.GISSourceConfig{BaseURL: server.URL + "/server/rest/services/OperationalLayers/MapServer/215/query", RateLimit: 100})
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +275,74 @@ func TestAssessmentCaptureReplayAndFailures(t *testing.T) {
 	_, _, err = runner.Run(ctx, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(ctx context.Context) (jobs.Result, error) { return jobs.Result{}, job.Replay(ctx, current) }})
 	if err != nil || requests != requestsBefore || query(`SELECT count(*) FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE g.capture_id='`+current+`'::uuid AND g.parser_admission_verified AND g.parser_manifest_sha256=c.manifest_sha256`) != 1 {
 		t.Fatalf("identical replay failed to reissue exact-capture proof: %v", err)
+	}
+	// Pause a real parser replay after its capture guard, while admission holds
+	// the revision lock and checks the capture FK. Both must finish without a cycle.
+	var admissionManifest []byte
+	var generation, hash string
+	if err = pool.QueryRow(ctx, `SELECT c.manifest,g.id::text,g.normalized_sha256 FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE c.id=$1::uuid`, current).Scan(&admissionManifest, &generation, &hash); err != nil {
+		t.Fatal(err)
+	}
+	var admissionReceipt struct {
+		Receipts []struct {
+			Request string `json:"request"`
+		} `json:"receipts"`
+	}
+	if err = json.Unmarshal(admissionManifest, &admissionReceipt); err != nil || len(admissionReceipt.Receipts) == 0 {
+		t.Fatalf("capture receipt: %v", err)
+	}
+	pause := make(chan struct{})
+	resume := make(chan struct{})
+	bounded, stop := context.WithTimeout(ctx, 8*time.Second)
+	defer stop()
+	replayDone := make(chan error, 1)
+	go func() {
+		_, _, e := runner.Run(bounded, jobs.Definition{ID: AssessedValueID, Kind: jobs.AttemptReplay, Run: func(runCtx context.Context) (jobs.Result, error) {
+			return jobs.Result{}, (ingest.Engine{Pool: pool, Store: artifacts}).Replay(runCtx, current, AssessedValueID, &pausedAssessmentPublisher{publisher: publisher{layer: union.AssessedValueLayer}, ready: pause, resume: resume})
+		}})
+		replayDone <- e
+	}()
+	select {
+	case <-pause:
+	case <-bounded.Done():
+		t.Fatal("replay did not acquire capture guard")
+	}
+	guardProbe, probeDone := context.WithTimeout(bounded, 200*time.Millisecond)
+	defer probeDone()
+	if _, e := pool.Exec(guardProbe, `SELECT id FROM ingest_captures WHERE id=$1::uuid FOR UPDATE`, current); e == nil || guardProbe.Err() == nil {
+		t.Fatalf("capture guard did not exclude manifest edits/deletion: %v", e)
+	}
+	admission, err := pool.Begin(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admission.Rollback(context.Background())
+	if _, err = admission.Exec(bounded, `SET LOCAL lock_timeout='3s'`); err != nil {
+		t.Fatal(err)
+	}
+	admitted := make(chan error, 1)
+	go func() {
+		_, e := admission.Exec(bounded, `INSERT INTO vacancy_live_validation(generation_id,capture_id,source_name,normalized_sha256,source_url,terms_evidence,coverage_evidence,count_evidence,snapshot_evidence,source_as_of,effective_av_year)
+ VALUES($1::uuid,$2::uuid,'union_assessed_value_0',$3,$4,'fixture terms reviewed','fixture coverage reviewed','fixture count checked','fixture snapshot reviewed',current_date,2026)`, generation, current, hash, strings.Split(admissionReceipt.Receipts[0].Request, "?")[0])
+		admitted <- e
+	}()
+	select {
+	case e := <-admitted:
+		if e != nil {
+			t.Fatalf("admission blocked by replay capture guard: %v", e)
+		}
+	case <-bounded.Done():
+		t.Fatal("admission timed out while capture guard held")
+	}
+	close(resume)
+	if err = admission.Commit(bounded); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-replayDone; err != nil {
+		t.Fatalf("replay after admission: %v", err)
+	}
+	if query(`SELECT count(*) FROM vacancy_live_generations g JOIN ingest_captures c ON c.id=g.capture_id WHERE g.capture_id='`+current+`'::uuid AND g.parser_admission_verified AND g.parser_manifest_sha256=c.manifest_sha256`) != 1 {
+		t.Fatal("replay lost exact capture proof")
 	}
 	for _, mutation := range []string{`UPDATE ingest_captures SET manifest=manifest||decode('20','hex') WHERE id=$1::uuid`, `UPDATE ingest_captures SET manifest_sha256=decode(repeat('a',64),'hex') WHERE id=$1::uuid`} {
 		if _, err := pool.Exec(ctx, mutation, current); err == nil || !strings.Contains(err.Error(), "immutable") {

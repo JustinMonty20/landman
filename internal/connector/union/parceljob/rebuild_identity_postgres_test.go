@@ -61,9 +61,14 @@ func TestEmptyRebuildReplayRetainsOBJECTIDTransition(t *testing.T) {
 	const oid = 7070707
 	attrs["OBJECTID"] = oid
 	attrs["PID"] = "rebuild-live-a"
+	var additionalFeature any
 	publish := func(expectFailure bool) string {
 		t.Helper()
-		body, e := json.Marshal(map[string]any{"spatialReference": map[string]any{"wkid": 3857}, "features": []any{source}})
+		features := []any{source}
+		if additionalFeature != nil {
+			features = append(features, additionalFeature)
+		}
+		body, e := json.Marshal(map[string]any{"spatialReference": map[string]any{"wkid": 3857}, "features": features})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -82,14 +87,14 @@ func TestEmptyRebuildReplayRetainsOBJECTIDTransition(t *testing.T) {
 				crs     int
 				body    []byte
 			}{
-				{"https://example.invalid/query?returnCountOnly=true", 0, []byte(`{"count":1}`)},
-				{"https://example.invalid/query?resultOffset=0&resultRecordCount=1", 3857, body},
+				{"https://example.invalid/query?returnCountOnly=true", 0, []byte(fmt.Sprintf(`{"count":%d}`, len(features)))},
+				{fmt.Sprintf("https://example.invalid/query?resultOffset=0&resultRecordCount=%d", len(features)), 3857, body},
 			} {
 				if e = recorder.Record(runCtx, page.request, "", page.crs, bytes.NewReader(page.body)); e != nil {
 					return jobs.Result{}, e
 				}
 			}
-			result, e := job.publishShared(runCtx, store, recorder, nil, 1)
+			result, e := job.publishShared(runCtx, store, recorder, nil, len(features))
 			if e == nil {
 				attempt, _ := jobs.AttemptID(runCtx)
 				e = pool.QueryRow(runCtx, `SELECT id::text FROM ingest_captures WHERE attempt_id=$1`, attempt).Scan(&capture)
@@ -212,5 +217,55 @@ func TestEmptyRebuildReplayRetainsOBJECTIDTransition(t *testing.T) {
 	}
 	if err = pool.QueryRow(ctx, `SELECT parcel_row_version FROM parcel_evidence_current WHERE source_parcel_id='rebuild-live-new'`).Scan(&marker); err != nil || marker != nil {
 		t.Fatalf("older B recertified after newer refusal at %s: %v %v", cutoff, marker, err)
+	}
+	// A failed B has no current row or PID cutoff. A later accepted C must
+	// still fence the retained B's OBJECTID before B can reach publication.
+	attrs["PID"] = "rebuild-live-b"
+	attrs["CURR_NAME1"] = "FAILED-B"
+	var second map[string]any
+	encoded, e := json.Marshal(source)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = json.Unmarshal(encoded, &second); e != nil {
+		t.Fatal(e)
+	}
+	second["attributes"].(map[string]any)["OBJECTID"] = oid + 1
+	additionalFeature = second
+	if _, err = pool.Exec(ctx, `ALTER TABLE parcels ADD CONSTRAINT revision_reject_b CHECK (current_name_1 IS DISTINCT FROM 'FAILED-B')`); err != nil {
+		t.Fatal(err)
+	}
+	olderB := publish(true)
+	additionalFeature = nil
+	if _, err = pool.Exec(ctx, `ALTER TABLE parcels DROP CONSTRAINT revision_reject_b`); err != nil {
+		t.Fatal(err)
+	}
+	attrs["PID"] = "rebuild-live-c"
+	attrs["CURR_NAME1"] = "ACME LLC"
+	currentC := publish(false)
+	var cID string
+	if err = pool.QueryRow(ctx, `SELECT id::text FROM parcels WHERE source_parcel_id='rebuild-live-c'`).Scan(&cID); err != nil {
+		t.Fatal(err)
+	}
+	for _, capture := range []string{olderB, currentC} {
+		outcome, _, err = runner.Run(ctx, jobs.Definition{ID: JobID, Kind: jobs.AttemptReplay, Run: func(runCtx context.Context) (jobs.Result, error) { return job.Replay(runCtx, capture) }})
+		if err != nil || outcome != jobs.OutcomeSuccess {
+			t.Fatalf("replay %s: %s %v", capture, outcome, err)
+		}
+	}
+	var publishedB int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM parcel_evidence_current WHERE source_parcel_id='rebuild-live-b'`).Scan(&publishedB); err != nil || publishedB != 0 {
+		t.Fatalf("superseded B published: %d %v", publishedB, err)
+	}
+	var mapped, serving string
+	if err = pool.QueryRow(ctx, `SELECT source_parcel_id FROM parcel_source_object_identity WHERE raw_key='7070707'`).Scan(&mapped); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT id::text FROM parcels WHERE source_parcel_id='rebuild-live-c'`).Scan(&serving); err != nil || mapped != "rebuild-live-c" || serving != cID {
+		t.Fatalf("newer C changed by B replay: map=%s id=%s err=%v", mapped, serving, err)
+	}
+	_ = publish(false)
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM parcel_evidence_current WHERE source_parcel_id='rebuild-live-b'`).Scan(&publishedB); err != nil || publishedB != 0 {
+		t.Fatalf("live C repeat laundered B: %d %v", publishedB, err)
 	}
 }

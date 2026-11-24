@@ -128,7 +128,13 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
    UNION ALL SELECT source_parcel_id,NULL,true FROM parcel_import_rejected WHERE invalid_geometry
  ) SELECT c.source_parcel_id,row_number() OVER (ORDER BY ordinal,c.source_parcel_id) first_ordinal,invalid_geometry
  FROM candidates c WHERE NOT $3::boolean OR NOT EXISTS (SELECT 1 FROM parcel_geometry_decisions d JOIN parcel_evidence_observations o USING(artifact_id)
- WHERE d.source_parcel_id=c.source_parcel_id AND d.outcome<>'repaired' AND d.artifact_id<>$2 AND o.observed_at >= $1) AND NOT EXISTS (SELECT 1 FROM parcel_evidence_rejection_cutoff f WHERE f.county_id='union' AND f.source_name='union_county_gis' AND f.source_parcel_id=c.source_parcel_id AND f.observed_at >= $1)`, manifest.CreatedAt, manifest.ID, correction); err != nil {
+ WHERE d.source_parcel_id=c.source_parcel_id AND d.outcome<>'repaired' AND d.artifact_id<>$2 AND o.observed_at >= $1) AND NOT EXISTS (SELECT 1 FROM parcel_evidence_rejection_cutoff f WHERE f.county_id='union' AND f.source_name='union_county_gis' AND f.source_parcel_id=c.source_parcel_id AND f.observed_at >= $1)
+AND (NOT $3::boolean OR NOT EXISTS (
+ SELECT 1 FROM parcel_import_identities i
+ JOIN parcel_source_object_identity retained ON retained.county_id='union'
+ AND retained.source_name='union_county_gis' AND retained.raw_key=i.raw_key
+ WHERE i.source_parcel_id=c.source_parcel_id AND retained.source_parcel_id<>i.source_parcel_id
+ AND retained.observed_at >= $1))`, manifest.CreatedAt, manifest.ID, correction); err != nil {
 		return 0, err
 	}
 	if _, err := w.tx.Exec(ctx, `CREATE UNIQUE INDEX ON parcel_evidence_groups(first_ordinal); ANALYZE parcel_evidence_groups`); err != nil {

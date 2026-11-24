@@ -269,7 +269,8 @@ func (e Engine) publish(ctx context.Context, id string, replay bool, publisher P
 	err = e.transaction(ctx, manifest.Source, func(ctx context.Context, tx pgx.Tx) error {
 		var published bool
 		var lockedData, lockedHash []byte
-		if err := tx.QueryRow(ctx, `SELECT published_at IS NOT NULL,manifest,manifest_sha256 FROM ingest_captures WHERE id=$1::uuid FOR UPDATE`, id).Scan(&published, &lockedData, &lockedHash); err != nil {
+		// Hold manifest edits and deletion while allowing admission's capture FK KEY SHARE.
+		if err := tx.QueryRow(ctx, `SELECT published_at IS NOT NULL,manifest,manifest_sha256 FROM ingest_captures WHERE id=$1::uuid FOR NO KEY UPDATE`, id).Scan(&published, &lockedData, &lockedHash); err != nil {
 			return err
 		}
 		if string(lockedData) != string(data) || string(lockedHash) != string(hash[:]) {
