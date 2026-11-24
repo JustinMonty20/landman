@@ -82,8 +82,10 @@ const publicationSQL = `WITH source_state AS MATERIALIZED (
  AND other.source_name=p.source_name AND other.source_parcel_id=p.source_parcel_id) AS duplicate_pid,
  (c.source_features IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.source_features) part
  WHERE nullif(part->'attributes'->>'PID','') IS DISTINCT FROM p.source_parcel_id
- OR (coalesce(nullif(part->'attributes'->>'YEARBLT','')::numeric,0)>0
- OR coalesce(nullif(part->'attributes'->>'SQFT','')::numeric,0)>0
+ OR nullif(btrim(part->'attributes'->>'YEARBLT'),'') IS NULL
+ OR nullif(btrim(part->'attributes'->>'SQFT'),'') IS NULL
+ OR (coalesce(nullif(btrim(part->'attributes'->>'YEARBLT'),'')::numeric,0)>0
+ OR coalesce(nullif(btrim(part->'attributes'->>'SQFT'),'')::numeric,0)>0
  OR coalesce(part->'attributes'->>'STRUCTTYPE','')<>''
  OR coalesce(part->'attributes'->>'STRUCTSTYLE','')<>'')
  <> (coalesce(p.year_built,0)>0 OR coalesce(p.sqft,0)>0

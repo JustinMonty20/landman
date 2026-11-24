@@ -119,13 +119,14 @@ type assessment struct {
 	Building, Land, Total            *string
 }
 type publisher struct {
-	layer            union.VacancyLayer
-	structures       []structure
-	assessments      []assessment
-	count            int
-	sourceURL        string
-	legacyStructures bool
-	legacyAssessment bool
+	layer                   union.VacancyLayer
+	structures              []structure
+	assessments             []assessment
+	count                   int
+	sourceURL               string
+	legacyStructures        bool
+	legacyAssessment        bool
+	parserAdmissionVerified bool
 }
 
 func (p *publisher) validationNote() string {
@@ -152,7 +153,11 @@ func (p *publisher) Prepare(ctx context.Context, capture ingest.VerifiedCapture)
 	}
 	if p.layer == union.AssessedValueLayer {
 		if m.Receipts[0].Revision == union.AssessmentProtocolRevision {
-			return p.prepareAdmittedAssessment(ctx, capture)
+			if err := p.prepareAdmittedAssessment(ctx, capture); err != nil {
+				return err
+			}
+			p.parserAdmissionVerified = true
+			return nil
 		}
 		if m.Receipts[0].Revision != "" {
 			return errors.New("unsupported assessment revision")
@@ -548,9 +553,9 @@ ON CONFLICT (source_name) DO UPDATE SET capture_id=EXCLUDED.capture_id,observed_
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4,validation_note=$5 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count, p.validationNote())
+		_, err = tx.Exec(ctx, `UPDATE vacancy_live_generations SET normalized_sha256=$2,normalizer_version=$3,observed_count=$4,validation_note=$5,parser_admission_verified=$6 WHERE id=$1`, id, fingerprint, normalizerVersion, p.count, p.validationNote(), p.parserAdmissionVerified)
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version) VALUES($1,$2::uuid,$3,$4,$5,$6,$7) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, p.validationNote(), fingerprint, normalizerVersion).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO vacancy_live_generations(source_name,capture_id,retrieved_at,observed_count,validation_note,normalized_sha256,normalizer_version,parser_admission_verified) VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8) RETURNING id::text`, ob.Manifest.Source, ob.ID, ob.Manifest.ObservedAt, p.count, p.validationNote(), fingerprint, normalizerVersion, p.parserAdmissionVerified).Scan(&id)
 	}
 	if err != nil {
 		return err

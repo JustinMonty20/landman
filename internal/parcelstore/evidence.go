@@ -123,7 +123,7 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
    UNION ALL SELECT source_parcel_id,NULL,true FROM parcel_import_rejected WHERE invalid_geometry
  ) SELECT c.source_parcel_id,row_number() OVER (ORDER BY ordinal,c.source_parcel_id) first_ordinal,invalid_geometry
  FROM candidates c WHERE NOT $3::boolean OR NOT EXISTS (SELECT 1 FROM parcel_geometry_decisions d JOIN parcel_evidence_observations o USING(artifact_id)
- WHERE d.source_parcel_id=c.source_parcel_id AND d.outcome<>'repaired' AND d.artifact_id<>$2 AND o.observed_at >= $1)`, manifest.CreatedAt, manifest.ID, correction); err != nil {
+ WHERE d.source_parcel_id=c.source_parcel_id AND d.outcome<>'repaired' AND d.artifact_id<>$2 AND o.observed_at >= $1) AND NOT EXISTS (SELECT 1 FROM parcel_evidence_rejection_cutoff f WHERE f.county_id='union' AND f.source_name='union_county_gis' AND f.source_parcel_id=c.source_parcel_id AND f.observed_at >= $1)`, manifest.CreatedAt, manifest.ID, correction); err != nil {
 		return 0, err
 	}
 	if _, err := w.tx.Exec(ctx, `CREATE UNIQUE INDEX ON parcel_evidence_groups(first_ordinal); ANALYZE parcel_evidence_groups`); err != nil {
@@ -140,7 +140,7 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 	}
 	if observationID == "" && correction && publicationKind == "offline_retry" {
 		var eligible bool
-		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_groups p LEFT JOIN parcel_evidence_current c ON c.county_id='union' AND c.source_name='union_county_gis' AND c.source_parcel_id=p.source_parcel_id LEFT JOIN parcel_evidence_observations o ON o.id=c.observation_id WHERE o.observed_at IS NULL OR o.observed_at < $1)`, manifest.CreatedAt).Scan(&eligible); err != nil {
+		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_groups p LEFT JOIN parcel_evidence_current c ON c.county_id='union' AND c.source_name='union_county_gis' AND c.source_parcel_id=p.source_parcel_id LEFT JOIN parcel_evidence_observations o ON o.id=c.observation_id WHERE (o.observed_at IS NULL OR o.observed_at < $1) AND NOT EXISTS (SELECT 1 FROM parcel_evidence_rejection_cutoff f WHERE f.county_id='union' AND f.source_name='union_county_gis' AND f.source_parcel_id=p.source_parcel_id AND f.observed_at >= $1))`, manifest.CreatedAt).Scan(&eligible); err != nil {
 			return 0, err
 		}
 		if !eligible {
@@ -153,14 +153,48 @@ func (w *ShapeWriter) ApplyEvidence(ctx context.Context, quarantine *jobs.Quaran
 			return 0, err
 		}
 	}
-	// Rejected non-geometry facts cannot refresh the serving row, but supersede
-	// its former claim of freshness. Keep the UUID, shape and retained evidence.
+	// Rejections and OBJECTID identity transitions fence older replay without losing
+	// the former parcel's UUID, geometry, or source evidence.
 	if !correction {
-		_, err := w.tx.Exec(ctx, `UPDATE parcel_evidence_current c SET parcel_row_version=NULL
-		FROM parcel_import_rejected r, parcel_evidence_observations o
-		WHERE c.county_id='union' AND c.source_name='union_county_gis'
-		AND c.source_parcel_id=r.source_parcel_id AND o.id=c.observation_id
-		AND o.observed_at < $1`, manifest.CreatedAt)
+		_, err := w.tx.Exec(ctx, `CREATE TEMP TABLE parcel_refused_pids ON COMMIT DROP AS
+      SELECT source_parcel_id FROM parcel_import_rejected
+      UNION SELECT DISTINCT old.source_parcel_id FROM parcel_import_identities i
+      JOIN parcel_source_object_identity old ON old.county_id='union'
+      AND old.source_name='union_county_gis' AND old.raw_key=i.raw_key
+      WHERE old.source_parcel_id<>i.source_parcel_id AND old.observed_at < $1`, manifest.CreatedAt)
+		if err != nil {
+			return 0, err
+		}
+		var conflictingIdentity bool
+		if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_import_identities i
+      JOIN parcel_source_object_identity old ON old.county_id='union' AND old.source_name='union_county_gis' AND old.raw_key=i.raw_key
+      WHERE old.source_parcel_id<>i.source_parcel_id AND old.observed_at >= $1)`, manifest.CreatedAt).Scan(&conflictingIdentity); err != nil {
+			return 0, err
+		}
+		if conflictingIdentity {
+			return 0, fmt.Errorf("source OBJECTID observation is not newer than retained identity")
+		}
+		_, err = w.tx.Exec(ctx, `INSERT INTO parcel_source_object_identity(county_id,source_name,raw_key,source_parcel_id,observed_at)
+      SELECT 'union','union_county_gis',raw_key,source_parcel_id,$1 FROM parcel_import_identities
+      ON CONFLICT(county_id,source_name,raw_key) DO UPDATE
+      SET source_parcel_id=EXCLUDED.source_parcel_id,observed_at=EXCLUDED.observed_at
+      WHERE parcel_source_object_identity.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt)
+		if err != nil {
+			return 0, err
+		}
+		_, err = w.tx.Exec(ctx, `INSERT INTO parcel_evidence_rejection_cutoff(county_id,source_name,source_parcel_id,observed_at,artifact_id)
+      SELECT 'union','union_county_gis',source_parcel_id,$1,$2 FROM parcel_refused_pids
+      ON CONFLICT(county_id,source_name,source_parcel_id) DO UPDATE
+      SET observed_at=EXCLUDED.observed_at,artifact_id=EXCLUDED.artifact_id
+      WHERE parcel_evidence_rejection_cutoff.observed_at < EXCLUDED.observed_at`, manifest.CreatedAt, manifest.ID)
+		if err != nil {
+			return 0, err
+		}
+		_, err = w.tx.Exec(ctx, `UPDATE parcel_evidence_current c SET parcel_row_version=NULL
+      FROM parcel_refused_pids r, parcel_evidence_observations o
+      WHERE c.county_id='union' AND c.source_name='union_county_gis'
+      AND c.source_parcel_id=r.source_parcel_id AND o.id=c.observation_id
+      AND o.observed_at < $1 AND c.parcel_row_version IS NOT NULL`, manifest.CreatedAt)
 		if err != nil {
 			return 0, err
 		}
@@ -305,6 +339,16 @@ func (w *ShapeWriter) publishEvidencePID(ctx context.Context, pid string, invali
 	err = w.tx.QueryRow(ctx, `SELECT p.shape IS NULL, observation_id::text,normalized_hash,geometry_hash,normalizer_version,source_hash,source_hash_version,normalized_hash_version,geometry_hash_version,c.parcel_row_version,p.xmin::text FROM parcel_evidence_current c JOIN parcels p USING(county_id,source_name,source_parcel_id) WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1 FOR UPDATE OF c`, pid).Scan(&shapeMissing, &previousObservation, &oldHash, &oldGeometry, &oldNormalizer, &oldSourceHash, &oldSourceVersion, &oldHashVersion, &oldGeometryVersion, &oldRowVersion, &servingRowVersion)
 	if err != nil && err != pgx.ErrNoRows {
 		return 0, err
+	}
+	var fenced bool
+	if err := w.tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM parcel_evidence_rejection_cutoff WHERE county_id='union' AND source_name='union_county_gis' AND source_parcel_id=$1 AND observed_at >= $2 AND artifact_id<>$3)`, pid, publication.observedAt, publication.artifactID).Scan(&fenced); err != nil {
+		return 0, err
+	}
+	if fenced {
+		if publication.replay {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("source observation is not newer than rejection for %s", pid)
 	}
 	if publication.replay && publication.kind == "" {
 		if previousObservation == nil || *previousObservation != publication.observationID {

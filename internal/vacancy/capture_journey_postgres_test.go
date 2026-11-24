@@ -34,6 +34,10 @@ func TestCapturedReceiptsAdmissionPublicationAndAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	var database string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil || !strings.HasPrefix(database, "landman_api_test_") {
+		t.Fatal("requires disposable PostGIS database", err)
+	}
 	defer func() {
 		for _, sql := range []string{
 			`TRUNCATE vacancy_assessments,vacancy_live_generations CASCADE`,
@@ -49,14 +53,8 @@ func TestCapturedReceiptsAdmissionPublicationAndAPI(t *testing.T) {
 			}
 		}
 	}()
-	var database string
-	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil || !strings.HasPrefix(database, "landman_api_test_") {
-		t.Fatal("requires disposable PostGIS database", err)
-	}
-	for _, table := range []string{"vacancy_assessments", "vacancy_live_validation", "vacancy_live_generations"} {
-		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := pool.Exec(ctx, `TRUNCATE vacancy_assessments,vacancy_live_generations CASCADE`); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM vacancy_latest_observations`); err != nil {
 		t.Fatal(err)

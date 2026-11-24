@@ -466,19 +466,8 @@ func (h *Handler) tx(ctx context.Context) (pgx.Tx, error) {
 
 // stamp identifies the source records visible in this transaction, not a global snapshot.
 func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
-	var parcelTime *time.Time
-	var parcelCount int64
 	var files string
-	err := tx.QueryRow(ctx, `SELECT updated_at FROM parcels WHERE county_id=$1 AND source_name=$2 ORDER BY updated_at DESC LIMIT 1`, countyID, parcelSource).Scan(&parcelTime)
-	if errors.Is(err, pgx.ErrNoRows) {
-		parcelTime = nil
-	} else if err != nil {
-		return "", err
-	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM parcels WHERE county_id=$1 AND source_name=$2`, countyID, parcelSource).Scan(&parcelCount); err != nil {
-		return "", err
-	}
-	err = tx.QueryRow(ctx, `SELECT COALESCE(string_agg(source_name||':'||encode(file_sha256,'hex')||':'||fetched_at::text,',' ORDER BY source_name),'') FROM tax_file_imports WHERE county_id=$1 AND active`, countyID).Scan(&files)
+	err := tx.QueryRow(ctx, `SELECT COALESCE(string_agg(source_name||':'||encode(file_sha256,'hex')||':'||fetched_at::text,',' ORDER BY source_name),'') FROM tax_file_imports WHERE county_id=$1 AND active`, countyID).Scan(&files)
 	if err != nil {
 		return "", err
 	}
@@ -505,18 +494,19 @@ func stamp(ctx context.Context, tx pgx.Tx) (string, error) {
 	if err := tx.QueryRow(ctx, `SELECT revision FROM parcel_owner_label_revision WHERE id`).Scan(&labelRevision); err != nil {
 		return "", err
 	}
-	var vacancyRevision, parcelFreshness string
-	if err := tx.QueryRow(ctx, `SELECT coalesce(string_agg(p.id::text||':'||p.xmin::text,',' ORDER BY p.id),'') FROM parcels p WHERE p.county_id=$1 AND p.source_name=$2`, countyID, parcelSource).Scan(&parcelFreshness); err != nil {
+	var vacancyRevision string
+	var sourceRevision int64
+	if err := tx.QueryRow(ctx, `SELECT revision FROM vacancy_source_revision WHERE county_id=$1`, countyID).Scan(&sourceRevision); err != nil {
 		return "", err
 	}
-	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT string_agg(source_name||':'||capture_id::text||':'||observed_at::text,',' ORDER BY source_name) FROM vacancy_latest_observations),'') || ':' || (SELECT count(*)::text||':'||coalesce(max(assessed_at)::text,'') FROM vacancy_assessments)`).Scan(&vacancyRevision); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT string_agg(source_name||':'||capture_id::text||':'||observed_at::text,',' ORDER BY source_name) FROM vacancy_latest_observations),'')`).Scan(&vacancyRevision); err != nil {
 		return "", err
 	}
 	var topologyRevision int64
 	if err := tx.QueryRow(ctx, `SELECT revision FROM vacancy_parcel_topology WHERE county_id=$1`, countyID).Scan(&topologyRevision); err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(fmt.Sprint(parcelTime, parcelCount, parcelFreshness, topologyRevision, files, attempts, soilHeads, labelRevision, floodRevision, zoningRevision, vacancyRevision)))
+	h := sha256.Sum256([]byte(fmt.Sprint(sourceRevision, topologyRevision, files, attempts, soilHeads, labelRevision, floodRevision, zoningRevision, vacancyRevision)))
 	return hex.EncodeToString(h[:]), nil
 }
 func (f Filters) sourcesReady(ctx context.Context, tx pgx.Tx) bool {

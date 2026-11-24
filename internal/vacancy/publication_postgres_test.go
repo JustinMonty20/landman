@@ -38,6 +38,23 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	threeReceipts := regexp.MustCompile(`"receipts":\[[^]]+\]`)
+	spans := threeReceipts.FindAllStringIndex(string(raw), -1)
+	if len(spans) != 2 {
+		t.Fatal("expected both fixture receipt tapes")
+	}
+	impossible := string(raw[:spans[1][0]]) + `"receipts":[{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&returnCountOnly=true&where=1%3D1"},{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&returnCountOnly=true&where=OBJECTID"},{"http_status":200,"response_complete":true,"revision":"assessment-count-first-v1","request":"https://example.test/0/query?f=json&outFields=%2A&where=OBJECTID"}]` + string(raw[spans[1][1]:])
+	denied, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer denied.Rollback(ctx)
+	if _, err := denied.Exec(ctx, impossible); err == nil || !strings.Contains(err.Error(), "current capture protocol") {
+		t.Fatalf("impossible count-first tape admitted: %v", err)
+	}
+	if err := denied.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
 	wrongSource := strings.Replace(string(raw), "'https://example.test/171/query','synthetic terms'", "'https://example.test/wrong/query','synthetic terms'", 1)
 	if wrongSource == string(raw) {
 		t.Fatal("source URL rejection fixture was not changed")
@@ -46,6 +63,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer refusal.Rollback(ctx)
 	if _, err = refusal.Exec(ctx, wrongSource); err == nil || !strings.Contains(err.Error(), "current capture protocol and complete live HTTP receipts") {
 		t.Fatal("wrong live source URL admitted: ", err)
 	}
@@ -60,6 +78,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer refusal.Rollback(ctx)
 	if _, err = refusal.Exec(ctx, future); err == nil || !strings.Contains(err.Error(), "future assessment year cannot be admitted") {
 		t.Fatalf("future year admitted: %v", err)
 	}
@@ -77,6 +96,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer refusal.Rollback(ctx)
 	if _, err = refusal.Exec(ctx, legacy); err == nil || !strings.Contains(err.Error(), "current capture protocol") {
 		t.Fatalf("legacy bounded capture admitted: %v", err)
 	}
@@ -87,6 +107,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback(ctx)
 	if _, err = tx.Exec(ctx, string(raw)); err != nil {
 		tx.Rollback(ctx)
 		t.Fatal("seed public synthetic source: ", err)
@@ -155,6 +176,21 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	}
 	// Neither a fallback OBJECTID nor an earlier multipart building report
 	// may be interpreted as an unambiguous empty parcel.
+	for _, sample := range []struct{ raw, tier string }{
+		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":" 0 ","SQFT":"0"}}]`, "strong_candidate"},
+		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":" ","SQFT":0}}]`, "unknown"},
+		{`[{"attributes":{"PID":"vacancy-test-a","YEARBLT":null,"SQFT":0}}]`, "unknown"},
+	} {
+		if _, err := pool.Exec(ctx, `UPDATE parcel_evidence_current SET source_features=$1::jsonb WHERE source_parcel_id='vacancy-test-a'`, sample.raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := Publish(ctx, pool); err != nil {
+			t.Fatal("accepted numeric spelling aborted publication: ", err)
+		}
+		if got := request("/api/v1/parcels/" + id + "/vacancy"); got["tier"] != sample.tier {
+			t.Fatalf("source %s tier=%v want %s", sample.raw, got["tier"], sample.tier)
+		}
+	}
 	for _, features := range []string{
 		`[{"attributes":{"OBJECTID":1,"PID":"","YEARBLT":0,"SQFT":0}}]`,
 		`[{"attributes":{"OBJECTID":1,"PID":"vacancy-test-a","YEARBLT":2001,"SQFT":100}},
@@ -208,6 +244,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rollback.Rollback(ctx)
 	if err = rollback.QueryRow(ctx, insertNeighbor).Scan(&neighborID); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +264,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rollback.Rollback(ctx)
 	if _, err = rollback.Exec(ctx, `UPDATE parcels SET shape=ST_MakeEnvelope(40,0,41,1,3857) WHERE id=$1::uuid`, neighborID); err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +289,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rollback.Rollback(ctx)
 	if _, err = rollback.Exec(ctx, `DELETE FROM parcels WHERE id=$1::uuid`, neighborID); err != nil {
 		t.Fatal(err)
 	}
@@ -353,6 +392,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback(ctx)
 	if _, err = tx.Exec(ctx, crossing); err != nil {
 		tx.Rollback(ctx)
 		t.Fatal("seed crossing fixture: ", err)
@@ -376,6 +416,7 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback(ctx)
 	if _, err = tx.Exec(ctx, statusCase); err != nil {
 		tx.Rollback(ctx)
 		t.Fatal("seed retired-status fixture: ", err)
@@ -389,5 +430,37 @@ func TestPublicationAndGenerationInvalidation(t *testing.T) {
 	var retiredTier string
 	if err = pool.QueryRow(ctx, `SELECT a.tier FROM vacancy_assessments a JOIN parcels p ON p.id=a.parcel_id WHERE p.source_parcel_id='vacancy-status-b'`).Scan(&retiredTier); err != nil || retiredTier != "unknown" {
 		t.Fatalf("unapproved structure status became %s: %v", retiredTier, err)
+	}
+	// Model the retained weak approval after migration: it remains recorded,
+	// but neither publication nor the public API may use contract version 0.
+	var formerID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM parcels WHERE source_parcel_id='vacancy-status-a'`).Scan(&formerID); err != nil {
+		t.Fatal(err)
+	}
+	if got := request("/api/v1/parcels/" + formerID + "/vacancy"); got["tier"] != "strong_candidate" {
+		t.Fatalf("fixture lacks formerly approved tier: %v", got)
+	}
+	weak, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer weak.Rollback(ctx)
+	if _, err := weak.Exec(ctx, `ALTER TABLE vacancy_live_validation DISABLE TRIGGER vacancy_admit_capture_receipts_trigger`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := weak.Exec(ctx, `UPDATE vacancy_live_validation SET capture_contract_version=0 WHERE capture_id=(SELECT capture_id FROM vacancy_latest_observations WHERE source_name='union_assessed_value_0')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := weak.Exec(ctx, `ALTER TABLE vacancy_live_validation ENABLE TRIGGER vacancy_admit_capture_receipts_trigger`); err != nil {
+		t.Fatal(err)
+	}
+	if err := weak.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := Publish(ctx, pool); err == nil {
+		t.Fatal("weak approval republished")
+	}
+	if got := request("/api/v1/parcels/" + formerID + "/vacancy"); got["tier"] != "unknown" || got["available"] != false {
+		t.Fatalf("weak approval still public: %v", got)
 	}
 }

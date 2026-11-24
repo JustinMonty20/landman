@@ -156,6 +156,64 @@ func TestHTTPPostGIS(t *testing.T) {
 	if code, _ := request("/api/v1/parcels?" + filter + "&page_size=1&cursor=" + url.QueryEscape(cursor)); code != 400 {
 		t.Fatalf("stale cursor returned %d", code)
 	}
+	// Simulate the import window after publication commits but before Runner
+	// finishes its attempt. Evidence changes must invalidate the old cursor.
+	var running string
+	if err := pool.QueryRow(ctx, `INSERT INTO job_attempts(job_id,outcome,attempt_kind) VALUES('union.gis.parcels','running','full_scan') RETURNING id::text`).Scan(&running); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(context.Background(), `DELETE FROM job_attempts WHERE id=$1::uuid`, running)
+	if code, list = request("/api/v1/parcels?" + filter + "&page_size=1"); code != 200 {
+		t.Fatal(code)
+	}
+	cursor = list["next_cursor"].(string)
+	var observation string
+	if err := pool.QueryRow(ctx, `INSERT INTO parcel_evidence_observations(artifact_id,observed_at,attempt_kind,manifest) VALUES($1,now(),'full_scan','{}') RETURNING id::text`, "api-cursor-"+running).Scan(&observation); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(context.Background(), `DELETE FROM parcel_evidence_observations WHERE id=$1::uuid`, observation)
+	if _, err := pool.Exec(ctx, `INSERT INTO parcel_evidence_current(county_id,source_name,source_parcel_id,observation_id,source_hash,source_hash_version,normalized_hash,normalizer_version,normalized_hash_version,geometry_hash,geometry_hash_version,source_features)
+      SELECT county_id,source_name,source_parcel_id,$2::uuid,repeat('a',64),'test',repeat('b',64),'test','test',repeat('c',64),'test','[]'::jsonb FROM parcels WHERE id=$1::uuid`, ids[0], observation); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(context.Background(), `DELETE FROM parcel_evidence_current WHERE observation_id=$1::uuid`, observation)
+	if code, _ := request("/api/v1/parcels?" + filter + "&page_size=1&cursor=" + url.QueryEscape(cursor)); code != 400 {
+		t.Fatalf("evidence-only commit under running attempt accepted cursor: %d", code)
+	}
+	var initialRevision, afterRevision int64
+	if err := pool.QueryRow(ctx, `SELECT revision FROM vacancy_source_revision WHERE county_id='union'`).Scan(&initialRevision); err != nil {
+		t.Fatal(err)
+	}
+	for _, commit := range []bool{false, true} {
+		change, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range ids[:2] {
+			if _, err := change.Exec(ctx, `UPDATE parcels SET valuation_improvement=coalesce(valuation_improvement,0)+1 WHERE id=$1::uuid`, id); err != nil {
+				change.Rollback(ctx)
+				t.Fatal(err)
+			}
+		}
+		if commit {
+			err = change.Commit(ctx)
+		} else {
+			err = change.Rollback(ctx)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT revision FROM vacancy_source_revision WHERE county_id='union'`).Scan(&afterRevision); err != nil {
+			t.Fatal(err)
+		}
+		expected := initialRevision
+		if commit {
+			expected++
+		}
+		if afterRevision != expected {
+			t.Fatalf("transactional source revision commit=%v: got %d want %d", commit, afterRevision, expected)
+		}
+	}
 	for _, path := range []string{"/api/v1/parcels?bbox=" + bbox + "&vacancy_tier=review&cursor=" + url.QueryEscape(cursor), "/api/v1/parcels?" + filter + "&cursor=bad", "/api/v1/parcels?likely_vacant=true", "/api/v1/parcels?zoom=14", "/api/v1/parcels/map?bbox=" + bbox + "&zoom=14&page_size=1", "/api/v1/parcels/map?bbox=" + bbox + "&zoom=23", "/api/v1/parcels/map?bbox=0,86,1,87&zoom=8"} {
 		if code, _ := request(path); code != 400 {
 			t.Errorf("invalid %s returned %d", path, code)

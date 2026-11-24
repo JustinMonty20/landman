@@ -19,15 +19,19 @@ go test -race ./internal/connector/union \
 Use [database setup](../verify-landman/database.md) in a new shell with `VERIFY_DB_NAME=landman_tax_integration`. Then run these bounded fixture groups serially:
 
 ```sh
+# A misspelled -run regex must fail before the verification lane starts.
+for name in TestSaveParcelKeepsID TestShapeWriterPreservesNumericZeroBuildingFacts TestShapeWriterRejectsMissingShapeAndRollsBack TestShapeWriterReplacesSales TestShapeWriterSaleFailureRollsBack; do
+  go test -tags postgres ./internal/parcelstore -list "^${name}$" | grep -Fx "$name" || exit 1
+done
 DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./cmd/landman \
   -run '^(TestParcelQuarantineWholePIDAcrossPages|TestParcelQuarantineSurvivesFailureAndStorageFailureRollsBack|TestParcelReprocessCurrentMultipartAndRecurrence|TestParcelNumericStorageBoundaries|TestParcelContradictoryObjectIdentityFailsAtomically|TestParcelRepeatedObjectSamePIDPreservesLastPart|TestParcelEvidenceObservationAndOfflineReplay)$' \
   -count=1 -v
 DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./internal/parcelstore \
-  -run '^(TestSaveParcelKeepsID|TestShapeWriterPersistsNumericZeroVacancy|TestShapeWriterRejectsMissingShapeAndRollsBack|TestShapeWriterReplacesSales|TestShapeWriterSaleFailureRollsBack)$' \
+  -run '^(TestSaveParcelKeepsID|TestShapeWriterPreservesNumericZeroBuildingFacts|TestShapeWriterRejectsMissingShapeAndRollsBack|TestShapeWriterReplacesSales|TestShapeWriterSaleFailureRollsBack)$' \
   -count=1 -v
 ```
 
-Require the named tests to execute. An unset database URL can cause skips and is not a pass. Save verbose logs and exit codes. Exit the setup shell to remove its container.
+Require the named tests to execute. Check each required name appears as a `--- PASS:` line in the verbose log; fail the lane when any name is missing or skipped. An unset database URL can cause skips and is not a pass. Save verbose logs and exit codes. Exit the setup shell to remove its container.
 
 ## Parcel cases and expected results
 
