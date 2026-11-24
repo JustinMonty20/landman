@@ -11,7 +11,7 @@ import (
 
 func TestFilters(t *testing.T) {
 	for _, tc := range []string{
-		"unknown=x", "zoom=14", "likely_vacant=true&likely_vacant=false", "min_acres=NaN", "max_acres=+Inf", "min_acres=-1", "min_acres=3&max_acres=2", "bbox=1,2,1,3", "bbox=181,0,182,1", "bbox=-180,-90,180,90", "bbox=0,85.051129,1,86", "bbox=0,-86,1,-85.051129", "bbox=0,0,1", "bbox=0,0,1,NaN", "page_size=101", "page_size=0", "likely_vacant=1", "cursor=" + strings.Repeat("x", 2049),
+		"unknown=x", "zoom=14", "likely_vacant=true&likely_vacant=false", "min_acres=NaN", "max_acres=+Inf", "min_acres=-1", "min_acres=3&max_acres=2", "bbox=1,2,1,3", "bbox=181,0,182,1", "bbox=-180,-90,180,90", "bbox=0,85.051129,1,86", "bbox=0,-86,1,-85.051129", "bbox=0,0,1", "bbox=0,0,1,NaN", "viewport_bbox=0,0,1,NaN", "viewport_bbox=1,2,1,3", "page_size=101", "page_size=0", "likely_vacant=1", "cursor=" + strings.Repeat("x", 2049),
 	} {
 		q, e := url.ParseQuery(tc)
 		if e != nil {
@@ -40,7 +40,7 @@ func TestMalformedQuery(t *testing.T) {
 	}
 }
 func TestCursor(t *testing.T) {
-	c := cursor{"00000000-0000-0000-0000-000000000001", strings.Repeat("a", 64), strings.Repeat("b", 64)}
+	c := cursor{After: "00000000-0000-0000-0000-000000000001", Filter: strings.Repeat("a", 64), Stamp: strings.Repeat("b", 64)}
 	got, e := decodeCursor(encodeCursor(c))
 	if e != nil || got != c {
 		t.Fatalf("cursor: %+v %v", got, e)
@@ -54,6 +54,17 @@ func TestCursor(t *testing.T) {
 	g, _ := parseFilters(url.Values{"min_acres": {"2"}})
 	if f.digest() == g.digest() {
 		t.Fatal("filter digest collision")
+	}
+	view, err := parseFilters(url.Values{"discovery": {"browse"}, "viewport_bbox": {"-81,34,-80,35"}})
+	if err != nil || view.ViewportBounds == nil || view.Bounds != nil {
+		t.Fatalf("viewport hint changed list filter: %+v %v", view, err)
+	}
+	moved, err := parseFilters(url.Values{"discovery": {"browse"}, "viewport_bbox": {"-80,34,-79,35"}})
+	if err != nil || view.digest() == moved.digest() {
+		t.Fatal("pan retained cursor identity")
+	}
+	if _, err := parseFilterValues(url.Values{"bbox": {"-81,34,-80,35"}, "viewport_bbox": {"-81,34,-80,35"}}, true); err == nil {
+		t.Fatal("map accepted list priority")
 	}
 }
 

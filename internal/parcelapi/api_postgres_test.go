@@ -79,6 +79,55 @@ func TestHTTPPostGIS(t *testing.T) {
 	if code != 200 || later["count"] != float64(2) || later["items"].([]any)[0].(map[string]any)["id"] == list["items"].([]any)[0].(map[string]any)["id"] {
 		t.Fatalf("later page %d %v", code, later)
 	}
+	priorityFilter := "discovery=browse&bbox=" + bbox + "&viewport_bbox=-79.8985,33.099,-79.8965,33.102&page_size=1"
+	seen := map[string]bool{}
+	priorityCursor := ""
+	for i := 0; i < 3; i++ {
+		path := "/api/v1/parcels?" + priorityFilter
+		if priorityCursor != "" {
+			path += "&cursor=" + url.QueryEscape(priorityCursor)
+		}
+		status, page := request(path)
+		if status != 200 || page["count"] != float64(3) || len(page["items"].([]any)) != 1 {
+			t.Fatalf("viewport page %d: %d %v", i, status, page)
+		}
+		id := page["items"].([]any)[0].(map[string]any)["id"].(string)
+		if (i == 0 && id != ids[1]) || seen[id] {
+			t.Fatalf("viewport priority or duplicate on page %d: %s", i, id)
+		}
+		seen[id] = true
+		if i < 2 {
+			priorityCursor = page["next_cursor"].(string)
+		} else if page["next_cursor"] != nil {
+			t.Fatalf("extra viewport page: %v", page)
+		}
+	}
+	if len(seen) != 3 {
+		t.Fatalf("county results lost: %v", seen)
+	}
+	status, first := request("/api/v1/parcels?discovery=browse&bbox=" + bbox + "&viewport_bbox=-79.901,33.099,-79.8965,33.102&page_size=1")
+	if status != 200 {
+		t.Fatalf("multi-view first page: %d", status)
+	}
+	firstID := first["items"].([]any)[0].(map[string]any)["id"].(string)
+	if firstID != ids[0] && firstID != ids[1] {
+		t.Fatalf("out-of-view parcel first: %s", firstID)
+	}
+	status, second := request("/api/v1/parcels?discovery=browse&bbox=" + bbox + "&viewport_bbox=-79.901,33.099,-79.8965,33.102&page_size=1&cursor=" + url.QueryEscape(first["next_cursor"].(string)))
+	if status != 200 {
+		t.Fatalf("multi-view second page: %d", status)
+	}
+	secondID := second["items"].([]any)[0].(map[string]any)["id"].(string)
+	if secondID == firstID || (secondID != ids[0] && secondID != ids[1]) {
+		t.Fatalf("view parcel omitted across pages: %s then %s", firstID, secondID)
+	}
+	status, third := request("/api/v1/parcels?discovery=browse&bbox=" + bbox + "&viewport_bbox=-79.901,33.099,-79.8965,33.102&page_size=1&cursor=" + url.QueryEscape(second["next_cursor"].(string)))
+	if status != 200 || third["items"].([]any)[0].(map[string]any)["id"] != ids[2] {
+		t.Fatalf("county tail after view pages: %d %v", status, third)
+	}
+	if code, _ := request("/api/v1/parcels?discovery=browse&bbox=" + bbox + "&viewport_bbox=-79.901,33.099,-79.899,33.102&page_size=1&cursor=" + url.QueryEscape(priorityCursor)); code != 400 {
+		t.Fatalf("old viewport cursor accepted after pan: %d", code)
+	}
 	if _, err = pool.Exec(ctx, `UPDATE parcels SET updated_at=now()+interval '1 hour' WHERE id=$1`, ids[0]); err != nil {
 		t.Fatal(err)
 	}
