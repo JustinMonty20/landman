@@ -69,3 +69,22 @@ await select.selectOption(target);await expect(page.getByText(/Another tab chang
 await select.selectOption(target);await expect(page.getByText(/Could not change state/)).toBeVisible();await expect(select).toHaveValue(old);
 expect(attempts).toBe(3);
 });
+test('state 51 is selected and conflict resolves a newly created state by name', async ({page}, info) => {
+await page.emulateMedia({reducedMotion:'reduce'});
+await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin!=='http://127.0.0.1:5174'||/^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
+await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
+await page.route('**/api/me/parcel-detail-fields',route=>route.fulfill({json:{fields:[]}}));
+const states=Array.from({length:52},(_,i)=>({id:`${String(i+1).padStart(8,'0')}-1111-4111-8111-111111111111`,name:`State ${i+1}`}));
+let state=states[50],revision=1,attempt=0;
+await page.route(`**/api/me/favorites/${parcel}`,route=>route.fulfill({json:{parcel_id:parcel,favorite:true,state_id:state.id,revision,excluded:false,exclusion_reason:''}}));
+await page.route('**/api/me/crm/board*',route=>{const cursor=new URL(route.request().url()).searchParams.get('cursor');return route.fulfill({json:{states:cursor?states.slice(50):states.slice(0,50),next:cursor?'':'next',default_state_id:states[0].id,revision:1}})});
+await page.route('**/api/me/crm/states/*',route=>route.fulfill({json:state}));
+await page.route(`**/api/me/favorites/${parcel}/state`,route=>{attempt++;expect(route.request().postDataJSON()).toEqual({state_id:states[0].id,revision:attempt});if(attempt===1){state=states[51];revision=2;return route.fulfill({status:409})}state=states[0];revision=3;return route.fulfill({json:{parcel_id:parcel,favorite:true,state_id:state.id,revision}})});
+await page.goto(`/?parcel=${parcel}`);
+const select=page.getByRole('combobox',{name:'Change saved parcel state'});
+await expect(select).toHaveValue(states[50].id);await expect(select.locator('option:checked')).toHaveText('State 51');
+await page.getByRole('button',{name:'Load more states'}).click();await expect(select.locator('option')).toHaveCount(52);
+await select.selectOption(states[0].id);await expect(page.getByText(/Another tab changed/)).toBeVisible();await expect(select).toHaveValue(states[51].id);await expect(select.locator('option:checked')).toHaveText('State 52');
+await page.screenshot({path:info.outputPath('state-conflict.png'),fullPage:true});
+await select.selectOption(states[0].id);await expect(select.locator('option:checked')).toHaveText('State 1');expect(attempt).toBe(2);
+});

@@ -51,6 +51,28 @@ func fixture(t *testing.T) (Store, AccountID, AccountID, string) {
 	})
 	return Store{db}, AccountID(a), AccountID(b), id
 }
+func TestFocusedStateRead(t *testing.T) {
+	s, a, b, _ := fixture(t)
+	ctx := context.Background()
+	board, e := s.board(ctx, a)
+	if e != nil {
+		t.Fatal(e)
+	}
+	id := board.DefaultStateID
+	st, e := s.readState(ctx, a, id)
+	if e != nil || st.Name != "New" || st.ID != id {
+		t.Fatalf("own state: %+v %v", st, e)
+	}
+	if _, e = s.readState(ctx, b, id); !errors.Is(e, pgx.ErrNoRows) {
+		t.Fatalf("foreign state: %v", e)
+	}
+	if _, e = s.readState(ctx, a, "00000000-0000-4000-8000-000000000000"); !errors.Is(e, pgx.ErrNoRows) {
+		t.Fatalf("missing state: %v", e)
+	}
+	if _, e = s.readState(ctx, a, "bad"); !errors.Is(e, errInvalid) {
+		t.Fatalf("invalid state: %v", e)
+	}
+}
 func TestBoardIsolationAndRevision(t *testing.T) {
 	s, a, b, id := fixture(t)
 	ctx := context.Background()

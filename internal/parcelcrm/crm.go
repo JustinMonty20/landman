@@ -133,6 +133,14 @@ func (s Store) boardPage(ctx context.Context, user AccountID, cursor string) (Bo
 	}
 	return b, rows.Err()
 }
+func (s Store) readState(ctx context.Context, user AccountID, id string) (State, error) {
+	var st State
+	if !uuid(id) {
+		return st, errInvalid
+	}
+	e := s.DB.QueryRow(ctx, `SELECT st.id::text,st.name,st.position,st.revision,count(p.parcel_id)::int FROM user_lead_states st LEFT JOIN user_parcels p ON p.user_id=st.user_id AND p.state_id=st.id AND p.favorite WHERE st.user_id=$1 AND st.id=$2 GROUP BY st.user_id,st.id`, string(user), id).Scan(&st.ID, &st.Name, &st.Position, &st.Revision, &st.Count)
+	return st, e
+}
 func (s Store) cards(ctx context.Context, user AccountID, state, cursor string, limit int, hide bool) ([]Card, error) {
 	out := []Card{}
 	if !uuid(state) {
@@ -473,6 +481,12 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 		b, e = s.boardPage(ctx, user, q.Get("cursor"))
 		if e == nil {
 			send(w, b)
+		}
+	} else if len(parts) == 3 && parts[0] == "crm" && parts[1] == "states" && r.Method == "GET" && uuid(parts[2]) {
+		var st State
+		st, e = s.readState(ctx, user, parts[2])
+		if e == nil {
+			send(w, st)
 		}
 	} else if len(parts) == 3 && parts[0] == "crm" && parts[1] == "board" && r.Method == "GET" {
 		limit := 20

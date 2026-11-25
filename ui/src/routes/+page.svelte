@@ -57,9 +57,18 @@ let favoriteStatus = $state('');
 type Favorite = {revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string};
 let favoriteRequest = 0;
 let favoritePending = $state(false);
-let favoriteStates = $state<{id:string;name:string}[]>([]);
+type LeadState = {id:string;name:string};
+let favoriteStates = $state<LeadState[]>([]);
+let favoriteStatesNext = $state('');
+let favoriteStatesPending = $state(false);
+let favoriteStatesError = $state('');
+async function resolveFavoriteState(id:string,request:number,stateId:string){
+if(!stateId || favoriteStates.some(s=>s.id===stateId))return;
+try {const res=await fetch(`/api/me/crm/states/${stateId}`);if(!res.ok)throw Error();const state:LeadState=await res.json();if(parcelID===id && favoriteRequest===request && favorite?.state_id===stateId && !favoriteStates.some(s=>s.id===stateId))favoriteStates=[...favoriteStates,state];}
+catch {if(parcelID===id && favoriteRequest===request)favoriteStatesError='Confirmed lead state unavailable. Retry loading states.'}
+}
 async function readFavorite(id:string){
-const request=++favoriteRequest;favorite=null;favoriteStatus='';favoriteStates=[];favoritePending=false;
+const request=++favoriteRequest;favorite=null;favoriteStatus='';favoriteStates=[];favoriteStatesNext='';favoriteStatesError='';favoritePending=false;
 try {
 const res=await fetch(`/api/me/favorites/${id}`);
 if(res.status===404)return;
@@ -67,17 +76,25 @@ if(!res.ok)throw Error();
 const data:Favorite=await res.json();
 if(parcelID!==id || favoriteRequest!==request)return;
 favorite=data;
-if(data.favorite)await readFavoriteStates(id,request);
+if(data.favorite)await readFavoriteStates(id,request,data.state_id);
 } catch {if(parcelID===id && favoriteRequest===request)favoriteStatus='Favorite status unavailable.'}
 }
-async function readFavoriteStates(id:string,request:number){
-try {const res=await fetch('/api/me/crm/board');if(!res.ok)throw Error();const data:{states:{id:string;name:string}[]} = await res.json();if(parcelID===id && favoriteRequest===request)favoriteStates=data.states;}
-catch {if(parcelID===id && favoriteRequest===request)favoriteStatus='Lead states unavailable.'}
+async function readFavoriteStates(id:string,request:number,currentState:string){
+try {const res=await fetch('/api/me/crm/board');if(!res.ok)throw Error();const data:{states:LeadState[];next:string} = await res.json();if(parcelID!==id || favoriteRequest!==request)return;favoriteStates=data.states;favoriteStatesNext=data.next || '';favoriteStatesError='';await resolveFavoriteState(id,request,currentState);}
+catch {if(parcelID===id && favoriteRequest===request){favoriteStatesError='Lead states unavailable. Retry loading states.';await resolveFavoriteState(id,request,currentState)}}
+}
+async function loadMoreFavoriteStates(){
+const id=parcelID,request=favoriteRequest,cursor=favoriteStatesNext;
+if(!cursor || favoriteStatesPending)return;
+favoriteStatesPending=true;favoriteStatesError='';
+try {const res=await fetch(`/api/me/crm/board?cursor=${encodeURIComponent(cursor)}`);if(!res.ok)throw Error();const data:{states:LeadState[];next:string}=await res.json();if(parcelID!==id || request!==favoriteRequest || favoriteStatesNext!==cursor)return;favoriteStates=[...favoriteStates.filter(s=>!data.states.some(p=>p.id===s.id)),...data.states];favoriteStatesNext=data.next || '';}
+catch {if(parcelID===id && request===favoriteRequest && favoriteStatesNext===cursor)favoriteStatesError='Could not load more states. Retry.'}
+finally {if(parcelID===id && request===favoriteRequest)favoriteStatesPending=false}
 }
 async function saveFavorite(){
 const id=parcelID,request=++favoriteRequest,revision=favorite?.revision;
 favoritePending=true;favoriteStatus='Saving favorite…';
-try {const res=await fetch(`/api/me/favorites/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(revision ? {revision} : {})});if(!res.ok)throw Error(res.status===409?'Favorite changed. Reload and retry.':'Could not save favorite.');const data:Favorite=await res.json();if(parcelID!==id || favoriteRequest!==request)return;favorite=data;favoriteStatus='Favorite saved.';await readFavoriteStates(id,request)}
+try {const res=await fetch(`/api/me/favorites/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(revision ? {revision} : {})});if(!res.ok)throw Error(res.status===409?'Favorite changed. Reload and retry.':'Could not save favorite.');const data:Favorite=await res.json();if(parcelID!==id || favoriteRequest!==request)return;favorite=data;favoriteStatus='Favorite saved.';await readFavoriteStates(id,request,data.state_id)}
 catch(e){if(parcelID===id && favoriteRequest===request)favoriteStatus=String(e)}
 finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
 }
@@ -87,10 +104,10 @@ if(!revision || !state_id || state_id===favorite?.state_id)return;
 const request=++favoriteRequest;favoritePending=true;favoriteStatus='Changing state…';
 try {const res=await fetch(`/api/me/favorites/${id}/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state_id,revision})});
 if(!res.ok){
-if(res.status===409){const current=await fetch(`/api/me/favorites/${id}`);if(current.ok){const data:Favorite=await current.json();if(parcelID===id && favoriteRequest===request){favorite=data;select.value=data.state_id}}}
+if(res.status===409){const current=await fetch(`/api/me/favorites/${id}`);if(current.ok){const data:Favorite=await current.json();if(parcelID===id && favoriteRequest===request){favorite=data;await readFavoriteStates(id,request,data.state_id);await tick();select.value=data.state_id}}}
 throw Error(res.status===409?'Another tab changed this parcel. Reload and retry.':'Could not change state.');
 }
-const data:Favorite=await res.json();if(parcelID===id && favoriteRequest===request){favorite=data;favoriteStatus='State changed.'}}
+const data:Favorite=await res.json();if(parcelID===id && favoriteRequest===request){favorite=data;await resolveFavoriteState(id,request,data.state_id);favoriteStatus='State changed.'}}
 catch(e){if(parcelID===id && favoriteRequest===request){select.value=favorite?.state_id ?? '';favoriteStatus=String(e)}}
 finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
 }
@@ -510,7 +527,7 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <div class="detail-editor favorite-actions"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite || favoritePending}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a>{#if favorite?.favorite}<label class="favorite-state">Change state <select aria-label="Change saved parcel state" value={favorite.state_id} disabled={favoritePending || !favoriteStates.length} onchange={(e)=>void moveFavoriteState(e.currentTarget.value,e.currentTarget)}>{#each favoriteStates as state}<option value={state.id}>{state.name}</option>{/each}</select></label>{/if}<p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
+            <div class="detail-editor favorite-actions"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite || favoritePending}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a>{#if favorite?.favorite}<label class="favorite-state">Change state <select aria-label="Change saved parcel state" value={favorite.state_id} disabled={favoritePending || !favoriteStates.some(s=>s.id===favorite?.state_id)} onchange={(e)=>void moveFavoriteState(e.currentTarget.value,e.currentTarget)}>{#each favoriteStates as state}<option value={state.id}>{state.name}</option>{/each}</select></label>{#if favoriteStatesNext}<button class="btn btn-sm" disabled={favoriteStatesPending} onclick={loadMoreFavoriteStates}>Load more states</button>{/if}{#if favoriteStatesError}<p role="alert">{favoriteStatesError}</p>{/if}{/if}<p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>

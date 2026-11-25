@@ -8,7 +8,9 @@ let board = $state<Board>();
 let cards = $state<Record<string,Card[]>>({});
 let next = $state<Record<string,string>>({});
 let busy = $state(false);
-let error = $state('');
+type LoadErrors = {board?:string; states?:string; columns:Record<string,string|undefined>};
+let loadErrors = $state<LoadErrors>({columns:{}});
+let mutationError = $state('');
 let loading = $state(true);
 let name = $state('');
 let hideExcluded = $state(false);
@@ -21,30 +23,30 @@ let generation = 0;
 let pendingCards = $state<Record<string,boolean>>({});
 let pendingStates = $state(false);
 async function load() {
-const request=++generation;loading=true;error='';pendingCards={};next={};cards={};
+const request=++generation;loading=true;loadErrors={columns:{}};pendingStates=false;pendingCards={};next={};cards={};board=undefined;
 try {const data=await api<Board>('/api/me/crm/board');if(request!==generation)return;board=data;await Promise.all(data.states.map(s=>loadCards(s.id,false,request)))}
-catch(e){if(request===generation)error=String(e)}finally{if(request===generation)loading=false}
+catch(e){if(request===generation)loadErrors.board=String(e)}finally{if(request===generation)loading=false}
 }
 async function loadMoreStates(){
 if(!board?.next || pendingStates)return;
-const request=generation,cursor=board.next;pendingStates=true;
+const request=generation,cursor=board.next;pendingStates=true;loadErrors.states=undefined;
 try{const page=await api<Board>(`/api/me/crm/board?cursor=${encodeURIComponent(cursor)}`);if(request!==generation || board?.next!==cursor)return;board={...board,states:[...board.states,...page.states],next:page.next};await Promise.all(page.states.map(s=>loadCards(s.id,false,request)))}
-catch(e){if(request===generation)error=String(e)}finally{pendingStates=false}
+catch(e){if(request===generation && board?.next===cursor)loadErrors.states=String(e)}finally{if(request===generation)pendingStates=false}
 }
 async function loadCards(id:string,more:boolean,request=generation) {
 if(pendingCards[id])return;
 const cursor=more?next[id]:'';
 if(more && !cursor)return;
 const hide=hideExcluded;
-pendingCards[id]=true;
+pendingCards[id]=true;loadErrors.columns[id]=undefined;
 try {const params=new URLSearchParams({limit:'20',hide_excluded:String(hide)});if(cursor)params.set('cursor',cursor);
 const data=await api<{items:Card[];next:string}>(`/api/me/crm/board/${id}?${params}`);
 if(request!==generation || hide!==hideExcluded || (more && next[id]!==cursor))return;
-cards[id]=more?[...(cards[id]??[]),...data.items]:data.items;next[id]=data.next;if(more)error='';
-}catch(e){if(request===generation && hide===hideExcluded && (!more || next[id]===cursor))error=String(e)}
+cards[id]=more?[...(cards[id]??[]),...data.items]:data.items;next[id]=data.next;loadErrors.columns[id]=undefined;
+}catch(e){if(request===generation && hide===hideExcluded && (!more || next[id]===cursor))loadErrors.columns[id]=String(e)}
 finally{if(request===generation)pendingCards[id]=false}
 }
-async function change(url:string,method:string,payload:object) {busy=true;error='';try {await api(url,method,payload);await load()}catch(e){error=String(e);await load().catch(()=>{});error=String(e)}finally{busy=false}}
+async function change(url:string,method:string,payload:object) {busy=true;mutationError='';try {await api(url,method,payload);await load()}catch(e){mutationError=String(e);await load();mutationError=String(e)}finally{busy=false}}
 function move(card:Card,id:string) {if(id!==card.state_id)void change(`/api/me/favorites/${card.parcel_id}/state`,'PUT',{state_id:id,revision:card.revision})}
 function drop(event:DragEvent,id:string) {event.preventDefault();const parcel=event.dataTransfer?.getData('text/plain');const card=Object.values(cards).flat().find(c=>c.parcel_id===parcel);if(card)move(card,id)}
 function addState(){const value=name.trim();if(value){void change('/api/me/crm/states','POST',{name:value}).then(()=>name='')}}
@@ -59,7 +61,8 @@ onMount(()=>{void load()});
 <label><input type="checkbox" bind:checked={hideExcluded} onchange={() => void load()} /> Hide excluded</label>
 <button onclick={() => void load()} disabled={busy}>Reload board</button>
 {#if loading}<p role="status">Loading favorites…</p>{/if}
-{#if error}<p role="alert">{error}</p>{/if}
+{#if loadErrors.board}<p role="alert">{loadErrors.board} <button onclick={load}>Retry board load</button></p>{/if}
+{#if mutationError}<p role="alert">{mutationError}</p>{/if}
 {#if board}
 <div class="states" aria-label="Lead states">
 {#each board.states as s (s.id)}
@@ -68,7 +71,7 @@ onMount(()=>{void load()});
 <div class="tools"><button onclick={() => rename(s)} disabled={busy}>Rename {s.name}</button><button onclick={() => remove(s)} disabled={busy || board?.states.length<2}>Delete {s.name}</button>
 <button onclick={() => void change('/api/me/crm/settings','PUT',{state_id:s.id,revision:board?.revision})} disabled={busy || board.default_state_id===s.id}>{board.default_state_id===s.id?'Default':'Set default'}</button>
 <button onclick={() => void change(`/api/me/crm/states/${s.id}`,'PATCH',{position:Math.max(0,s.position-1),revision:s.revision})} disabled={busy || s.position===0}>Move {s.name} left</button></div>
-{#if !cards[s.id]?.length}<p>No {hideExcluded?'visible ':''}favorites in this state.</p>{/if}
+{#if loadErrors.columns[s.id]}<p role="alert">{loadErrors.columns[s.id]} <button onclick={() => void loadCards(s.id,cards[s.id] !== undefined)} disabled={pendingCards[s.id]}>Retry {s.name} cards</button></p>{:else if !pendingCards[s.id] && !cards[s.id]?.length}<p>No {hideExcluded?'visible ':''}favorites in this state.</p>{/if}
 {#each cards[s.id]??[] as card (card.parcel_id)}
 <article class="card" draggable="true" ondragstart={(e)=>e.dataTransfer?.setData('text/plain',card.parcel_id)}>
 <strong>{card.parcel_number || card.parcel_id}</strong><p>{card.address || 'Address unavailable'}</p>
@@ -83,7 +86,8 @@ onMount(()=>{void load()});
 </section>
 {/each}
 </div>
-{#if board.next}<button disabled={busy} onclick={loadMoreStates}>Load more states</button>{/if}
+{#if loadErrors.states}<p role="alert">{loadErrors.states}</p>{/if}
+{#if board.next}<button disabled={busy || pendingStates} onclick={loadMoreStates}>Load more states</button>{/if}
 <form onsubmit={(e)=>{e.preventDefault();addState()}}><label>New state <input bind:value={name} maxlength="80" required /></label><button disabled={busy}>Add state</button></form>
 {/if}
 </main>
