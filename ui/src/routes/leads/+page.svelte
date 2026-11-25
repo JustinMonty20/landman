@@ -3,7 +3,7 @@ import { onMount } from 'svelte';
 import { Dialog, Menu } from '@skeletonlabs/skeleton-svelte';
 import '../../style.css';
 type State = { id:string; name:string; position:number; revision:number; count:number };
-type Card = { parcel_id:string; parcel_number:string|null; address:string|null; state_id:string; revision:number; excluded:boolean; exclusion_reason:string; favorited_at:string };
+type Card = { favorite?:boolean; parcel_id:string; parcel_number:string|null; address:string|null; state_id:string; revision:number; excluded:boolean; exclusion_reason:string; favorited_at:string };
 type Board = { states:State[]; default_state_id:string; revision:number; next:string };
 let board = $state<Board>();
 let cards = $state<Record<string,Card[]>>({});
@@ -52,6 +52,7 @@ let action = $state<Action | null>(null);
 let dialogOpen = $state(false);
 let destination = $state('');
 let reason = $state('');
+const reasonBytes = $derived(new TextEncoder().encode(reason.trim()).length);
 let dragged = $state('');
 let dropTarget = $state('');
 function openAction(nextAction:Action) {
@@ -62,8 +63,20 @@ function openAction(nextAction:Action) {
 async function change(url:string,method:string,payload:object):Promise<boolean> {
  busy=true;mutationError='';
  try {await api(url,method,payload);await load();return true}
- catch(e){const message=String(e);await load();const pendingAction=action;if(pendingAction && 'state' in pendingAction){const current=board?.states.find(s=>s.id===pendingAction.state.id);if(current)action={...pendingAction,state:current}}if(pendingAction && 'card' in pendingAction){const current=Object.values(cards).flat().find(c=>c.parcel_id===pendingAction.card.parcel_id);if(current)action={...pendingAction,card:current}}mutationError=message;return false}
- finally{busy=false}
+ catch(e){
+  const pendingAction=action;
+  await load();
+  if(pendingAction && 'state' in pendingAction){
+   try {const current=await api<State>(`/api/me/crm/states/${pendingAction.state.id}`);action={...pendingAction,state:current}}
+   catch(readError){mutationError=`${String(e)} Target state could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
+  } else if(pendingAction && 'card' in pendingAction){
+   try {const current=await api<Card>(`/api/me/favorites/${pendingAction.card.parcel_id}`);
+    if(!current.favorite){mutationError=`${String(e)} This parcel is no longer a favorite. Cancel and reopen the action.`;return false}
+    action={...pendingAction,card:current};
+   }catch(readError){mutationError=`${String(e)} Target parcel could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
+  }
+  mutationError=String(e);return false;
+ }finally{busy=false}
 }
 function move(card:Card,id:string) {if(id!==card.state_id)void change(`/api/me/favorites/${card.parcel_id}/state`,'PUT',{state_id:id,revision:card.revision})}
 function drop(event:DragEvent,id:string) {event.preventDefault();dropTarget='';const parcel=event.dataTransfer?.getData('text/plain');const card=Object.values(cards).flat().find(c=>c.parcel_id===parcel);if(card)move(card,id);dragged=''}
@@ -78,7 +91,7 @@ async function submitAction() {
   if(action.kind==='left'||action.kind==='right') ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{position:Math.max(0,s.position+(action.kind==='left'?-1:1)),revision:s.revision});
  }
  if('card' in action){const c=action.card;
-  if(action.kind==='exclude' && reason.trim()) ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'PUT',{reason:reason.trim(),revision:c.revision});
+  if(action.kind==='exclude' && reason.trim() && reasonBytes<=500) ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'PUT',{reason:reason.trim(),revision:c.revision});
   if(action.kind==='restore') ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'DELETE',{revision:c.revision});
   if(action.kind==='remove') ok=await change(`/api/me/favorites/${c.parcel_id}`,'DELETE',{revision:c.revision});
  }
@@ -131,10 +144,10 @@ onMount(()=>{void load()});
 <Dialog.Description class="dialog-description">{action?.kind==='delete' ? `Move all parcels from ${'state' in (action ?? {}) ? (action as {state:State}).state.name : ''} to another state before deleting. This cannot be undone.` : action?.kind==='remove' ? 'Remove this favorite? Its state and exclusion remain saved if you add it again.' : action?.kind==='exclude' ? 'The parcel stays in its current state. Give a reason for excluding this lead.' : action?.kind==='restore' ? 'Clear this lead’s exclusion and reason?' : action?.kind==='default' ? 'New favorites will start in this state.' : action?.kind==='left'||action?.kind==='right' ? 'Change the order of your board columns?' : 'Use a short name that distinguishes this state.'}</Dialog.Description>
 <form onsubmit={(e)=>{e.preventDefault();void submitAction()}}>
 {#if action?.kind==='create'||action?.kind==='rename'}<label class="field">State name<input class="input" bind:value={name} required maxlength="80" disabled={busy}/></label>{/if}
-{#if action?.kind==='exclude'}<label class="field">Exclusion reason<textarea class="textarea" bind:value={reason} required maxlength="1000" disabled={busy}></textarea></label>{/if}
+{#if action?.kind==='exclude'}<label class="field">Exclusion reason<textarea class="textarea" bind:value={reason} required disabled={busy} aria-describedby="reason-limit"></textarea><span id="reason-limit" class:error={reasonBytes>500}>{reasonBytes} / 500 UTF-8 bytes{reasonBytes>500 ? ' · Shorten the reason before saving.' : ''}</span></label>{/if}
 {#if action?.kind==='delete'}<label class="field">Move parcels to<select class="select" bind:value={destination} required disabled={busy}>{#each board?.states.filter(s=>s.id!==(action && "state" in action ? action.state.id : "")) ?? [] as target}<option value={target.id}>{target.name}</option>{/each}</select></label>{/if}
 {#if mutationError}<p class="error" role="alert">{mutationError}</p>{/if}
-<div class="dialog-actions"><Dialog.CloseTrigger class="btn preset-outlined-surface-300-700" type="button" disabled={busy}>Cancel</Dialog.CloseTrigger><button class="btn preset-filled-primary-500" type="submit" disabled={busy}>{busy?'Saving…':action?.kind==='delete'?'Delete state':action?.kind==='remove'?'Remove favorite':action?.kind==='exclude'?'Exclude lead':'Save changes'}</button></div>
+<div class="dialog-actions"><Dialog.CloseTrigger class="btn preset-outlined-surface-300-700" type="button" disabled={busy}>Cancel</Dialog.CloseTrigger><button class="btn preset-filled-primary-500" type="submit" disabled={busy || (action?.kind==='exclude' && reasonBytes>500) || mutationError.includes('Cancel and reopen the action.')}>{busy?'Saving…':action?.kind==='delete'?'Delete state':action?.kind==='remove'?'Remove favorite':action?.kind==='exclude'?'Exclude lead':'Save changes'}</button></div>
 </form></Dialog.Content></Dialog.Positioner></Dialog>
 <style>
 .favorites{min-height:100dvh;padding:68px clamp(20px,4vw,64px) 48px;background:var(--color-surface-950);color:var(--color-surface-50)}
