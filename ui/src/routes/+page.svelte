@@ -59,16 +59,20 @@ let favoriteRequest = 0;
 let favoriteRead = $state<'loading'|'ready'|'failed'>('loading');
 let favoritePending = $state(false);
 const toaster = createToaster({placement:'bottom-end',overlap:true});
+async function fetchFavorite(id:string):Promise<Favorite|null>{
+ const res=await fetch(`/api/me/favorites/${id}`);
+ if(res.status===404)return null;
+ if(!res.ok)throw Error('Favorite status unavailable.');
+ const data:Favorite=await res.json();
+ if(typeof data?.favorite!=='boolean' || !Number.isSafeInteger(data.revision) || data.revision<1)throw Error('Invalid favorite status.');
+ return data;
+}
 async function readFavorite(id:string){
  const request=++favoriteRequest;
  favorite=null;favoriteStatus='';favoriteRead='loading';favoritePending=false;
  const owned=()=>parcelID===id && favoriteRequest===request;
  try {
-  const res=await fetch(`/api/me/favorites/${id}`);
-  if(!owned())return;
-  if(res.status===404){favoriteRead='ready';return;}
-  if(!res.ok)throw Error();
-  const data:Favorite=await res.json();
+  const data=await fetchFavorite(id);
   if(!owned())return;
   favorite=data;favoriteRead='ready';
  }catch {if(owned()){favoriteRead='failed';favoriteStatus='Favorite status unavailable.'}}
@@ -84,11 +88,9 @@ async function toggleFavorite(){
   if(!owned())return;
   if(!res.ok){
    if(res.status===409){
-    const current=await fetch(`/api/me/favorites/${id}`);
-    if(!owned())return;
-    if(current.ok){const data:Favorite=await current.json();if(!owned())return;favorite=data}
-    else if(current.status===404)favorite=null;
-    else {favoriteRead='failed';throw Error('Favorite changed in another tab. Status unavailable. Retry favorite status.');}
+    favoriteRead='loading';
+    try {const current=await fetchFavorite(id);if(!owned())return;favorite=current;favoriteRead='ready';}
+    catch {if(!owned())return;favoriteRead='failed';throw Error('Favorite changed in another tab. Status unavailable. Retry favorite status.');}
    }
    throw Error(res.status===409?'Favorite changed in another tab. Retry.':removing?'Could not remove favorite.':'Could not save favorite.');
   }
@@ -516,7 +518,7 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <div class="favorite-star-row"><button class="favorite-star" class:active={favorite?.favorite} aria-label={favoriteRead==='failed'?'Retry favorite status':favorite?.favorite ? 'Remove favorite' : 'Favorite parcel'} aria-pressed={!!favorite?.favorite} onclick={toggleFavorite} disabled={favoritePending || favoriteRead==='loading'} title={favorite?.favorite?'Remove favorite':'Favorite parcel'}>★</button>{#if favoriteStatus}<p role={favoriteStatus.startsWith('Error') || favoriteStatus.includes('unavailable') ? 'alert':'status'}>{favoriteStatus}</p>{/if}</div>
+            <div class="favorite-star-row"><button class="favorite-star" class:active={favorite?.favorite} aria-label={favoriteRead==='failed'?'Retry favorite status':favorite?.favorite ? 'Remove favorite' : 'Favorite parcel'} aria-pressed={!!favorite?.favorite} onclick={toggleFavorite} disabled={favoritePending || favoriteRead==='loading'} title={favoriteRead==='failed'?'Retry favorite status':favorite?.favorite?'Remove favorite':'Favorite parcel'}>★</button>{#if favoriteStatus}<p role={favoriteStatus.startsWith('Error') || favoriteStatus.includes('unavailable') ? 'alert':'status'}>{favoriteStatus}</p>{/if}</div>
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>

@@ -50,52 +50,86 @@ finally{if(request===generation)pendingCards[id]=false}
 type Action = {kind:'create'} | {kind:'rename'|'delete'|'default'|'left'|'right'; state:State} | {kind:'exclude'|'remove'|'restore'; card:Card};
 let action = $state<Action | null>(null);
 let dialogOpen = $state(false);
+let dialogGeneration=0;
+let recovering = $state(false);
+function closeAction(){dialogGeneration++;dialogOpen=false;action=null;busy=false;recovering=false;mutationError='';}
 let destination = $state('');
+let selectedTarget = $state<State|null>(null);
+let targetValid = $state(true);
+const destinationOptions = $derived(board?.states.filter(s=>s.id!==(action && 'state' in action ? action.state.id : '')) ?? []);
+const visibleDestinations = $derived(selectedTarget && !destinationOptions.some(s=>s.id===selectedTarget?.id) ? [...destinationOptions,selectedTarget] : destinationOptions);
 let reason = $state('');
 const reasonBytes = $derived(new TextEncoder().encode(reason.trim()).length);
 let dragged = $state('');
 let dropTarget = $state('');
 function openAction(nextAction:Action) {
+ dialogGeneration++;
  action=nextAction; name=nextAction.kind==='rename'?nextAction.state.name:'';reason='';
- destination=board?.states.find(s=>s.id!==('state' in nextAction?nextAction.state.id:''))?.id ?? '';
+ selectedTarget=board?.states.find(s=>s.id!==('state' in nextAction?nextAction.state.id:'')) ?? null;
+ destination=selectedTarget?.id ?? '';targetValid=true;
  mutationError='';dialogOpen=true;
 }
 async function change(url:string,method:string,payload:object):Promise<boolean> {
- busy=true;mutationError='';
- try {await api(url,method,payload);await load();return true}
+ const owner=dialogGeneration;
+ const owned=()=>dialogGeneration===owner;
+ const pendingAction=action, selectedDestination=destination;
+ busy=true;recovering=false;mutationError='';
+ try {await api(url,method,payload);if(!owned())return false;await load();return owned()}
  catch(e){
-  const pendingAction=action;
+  if(!owned())return false;
+  recovering=true;
   await load();
+  if(!owned() || (pendingAction && (!dialogOpen || action!==pendingAction)))return false;
   if(pendingAction && 'state' in pendingAction){
-   try {const current=await api<State>(`/api/me/crm/states/${pendingAction.state.id}`);action={...pendingAction,state:current}}
-   catch(readError){mutationError=`${String(e)} Target state could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
+   try {
+    const current=await api<State>(`/api/me/crm/states/${pendingAction.state.id}`);
+    if(!owned() || !dialogOpen || action!==pendingAction)return false;
+    if(current.id!==pendingAction.state.id || !Number.isSafeInteger(current.revision))throw Error('Invalid source state.');
+    action={...pendingAction,state:current};
+    if(pendingAction.kind==='delete' && selectedDestination && String(e).includes('Another tab changed')){
+     targetValid=false;
+     try {
+      const target=await api<State>(`/api/me/crm/states/${selectedDestination}`);
+      if(!owned() || !dialogOpen || action?.kind!=='delete' || action.state.id!==current.id)return false;
+      if(target.id!==selectedDestination || target.id===current.id)throw Error('Invalid destination state.');
+      selectedTarget=target;destination=selectedDestination;targetValid=true;
+     }catch(targetError){
+      if(!owned() || !dialogOpen || action?.kind!=='delete')return false;
+      if(String(targetError).includes('404')){selectedTarget=null;destination='';mutationError='Destination state was deleted. Select another state.'}
+      else mutationError=`Destination state could not be refreshed (${String(targetError)}). Cancel and reopen the action.`;
+      return false;
+     }
+    }
+   }catch(readError){if(!owned() || !dialogOpen)return false;mutationError=`${String(e)} Target state could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
   } else if(pendingAction && 'card' in pendingAction){
    try {const current=await api<Card>(`/api/me/favorites/${pendingAction.card.parcel_id}`);
+    if(!owned())return false;
     if(!current.favorite){mutationError=`${String(e)} This parcel is no longer a favorite. Cancel and reopen the action.`;return false}
     action={...pendingAction,card:current};
-   }catch(readError){mutationError=`${String(e)} Target parcel could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
+   }catch(readError){if(!owned())return false;mutationError=`${String(e)} Target parcel could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
   }
   mutationError=String(e);return false;
- }finally{busy=false}
+ }finally{if(owned()){busy=false;recovering=false}}
 }
 function move(card:Card,id:string) {if(id!==card.state_id)void change(`/api/me/favorites/${card.parcel_id}/state`,'PUT',{state_id:id,revision:card.revision})}
 function drop(event:DragEvent,id:string) {event.preventDefault();dropTarget='';const parcel=event.dataTransfer?.getData('text/plain');const card=Object.values(cards).flat().find(c=>c.parcel_id===parcel);if(card)move(card,id);dragged=''}
 async function submitAction() {
  if (!action || busy || !board) return;
+ const submitted=action, owner=dialogGeneration;
  let ok=false;
- if(action.kind==='create' && name.trim()) ok=await change('/api/me/crm/states','POST',{name:name.trim()});
- if('state' in action){const s=action.state;
-  if(action.kind==='rename' && name.trim()) ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{name:name.trim(),revision:s.revision});
-  if(action.kind==='delete' && destination) ok=await change(`/api/me/crm/states/${s.id}`,'DELETE',{destination_id:destination,revision:s.revision});
-  if(action.kind==='default') ok=await change('/api/me/crm/settings','PUT',{state_id:s.id,revision:board.revision});
-  if(action.kind==='left'||action.kind==='right') ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{position:Math.max(0,s.position+(action.kind==='left'?-1:1)),revision:s.revision});
+ if(submitted.kind==='create' && name.trim()) ok=await change('/api/me/crm/states','POST',{name:name.trim()});
+ if('state' in submitted){const s=submitted.state;
+  if(submitted.kind==='rename' && name.trim()) ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{name:name.trim(),revision:s.revision});
+  if(submitted.kind==='delete' && destination && targetValid) ok=await change(`/api/me/crm/states/${s.id}`,'DELETE',{destination_id:destination,revision:s.revision});
+  if(submitted.kind==='default') ok=await change('/api/me/crm/settings','PUT',{state_id:s.id,revision:board.revision});
+  if(submitted.kind==='left'||submitted.kind==='right') ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{position:Math.max(0,s.position+(submitted.kind==='left'?-1:1)),revision:s.revision});
  }
- if('card' in action){const c=action.card;
-  if(action.kind==='exclude' && reason.trim() && reasonBytes<=500) ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'PUT',{reason:reason.trim(),revision:c.revision});
-  if(action.kind==='restore') ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'DELETE',{revision:c.revision});
-  if(action.kind==='remove') ok=await change(`/api/me/favorites/${c.parcel_id}`,'DELETE',{revision:c.revision});
+ if('card' in submitted){const c=submitted.card;
+  if(submitted.kind==='exclude' && reason.trim() && reasonBytes<=500) ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'PUT',{reason:reason.trim(),revision:c.revision});
+  if(submitted.kind==='restore') ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'DELETE',{revision:c.revision});
+  if(submitted.kind==='remove') ok=await change(`/api/me/favorites/${c.parcel_id}`,'DELETE',{revision:c.revision});
  }
- if(ok){dialogOpen=false;action=null;name='';reason=''}
+ if(ok && owner===dialogGeneration){closeAction();name='';reason=''}
 }
 onMount(()=>{void load()});
 </script>
@@ -138,16 +172,16 @@ onMount(()=>{void load()});
 {#if board.next}<button class="btn preset-outlined-surface-300-700 state-more" disabled={busy || pendingStates} onclick={loadMoreStates}>Load more states</button>{/if}
 {/if}
 </main>
-<Dialog open={dialogOpen} onOpenChange={(details)=>{if(!details.open && !busy){dialogOpen=false;action=null}}}>
+<Dialog open={dialogOpen} onOpenChange={(details)=>{if(!details.open && (!busy || recovering))closeAction()}}>
 <Dialog.Backdrop class="dialog-backdrop"/><Dialog.Positioner class="dialog-positioner"><Dialog.Content class="dialog-panel">
 <Dialog.Title class="dialog-title">{action?.kind==='create'?'Add state':action?.kind==='rename'?'Rename state':action?.kind==='delete'?'Delete state':action?.kind==='default'?'Change default state':action?.kind==='left'||action?.kind==='right'?'Reorder state':action?.kind==='exclude'?'Exclude lead':action?.kind==='restore'?'Restore lead':'Remove favorite'}</Dialog.Title>
 <Dialog.Description class="dialog-description">{action?.kind==='delete' ? `Move all parcels from ${'state' in (action ?? {}) ? (action as {state:State}).state.name : ''} to another state before deleting. This cannot be undone.` : action?.kind==='remove' ? 'Remove this favorite? Its state and exclusion remain saved if you add it again.' : action?.kind==='exclude' ? 'The parcel stays in its current state. Give a reason for excluding this lead.' : action?.kind==='restore' ? 'Clear this lead’s exclusion and reason?' : action?.kind==='default' ? 'New favorites will start in this state.' : action?.kind==='left'||action?.kind==='right' ? 'Change the order of your board columns?' : 'Use a short name that distinguishes this state.'}</Dialog.Description>
 <form onsubmit={(e)=>{e.preventDefault();void submitAction()}}>
 {#if action?.kind==='create'||action?.kind==='rename'}<label class="field">State name<input class="input" bind:value={name} required maxlength="80" disabled={busy}/></label>{/if}
 {#if action?.kind==='exclude'}<label class="field">Exclusion reason<textarea class="textarea" bind:value={reason} required disabled={busy} aria-describedby="reason-limit"></textarea><span id="reason-limit" class:error={reasonBytes>500}>{reasonBytes} / 500 UTF-8 bytes{reasonBytes>500 ? ' · Shorten the reason before saving.' : ''}</span></label>{/if}
-{#if action?.kind==='delete'}<label class="field">Move parcels to<select class="select" bind:value={destination} required disabled={busy}>{#each board?.states.filter(s=>s.id!==(action && "state" in action ? action.state.id : "")) ?? [] as target}<option value={target.id}>{target.name}</option>{/each}</select></label>{/if}
+{#if action?.kind==='delete'}<label class="field">Move parcels to<select class="select" bind:value={destination} onchange={() => {selectedTarget=destinationOptions.find(s=>s.id===destination) ?? null;targetValid=!!selectedTarget;mutationError=''}} required disabled={busy}>{#if !destination}<option value="" disabled>Select a state</option>{/if}{#each visibleDestinations as target}<option value={target.id}>{target.name}</option>{/each}</select></label>{/if}
 {#if mutationError}<p class="error" role="alert">{mutationError}</p>{/if}
-<div class="dialog-actions"><Dialog.CloseTrigger class="btn preset-outlined-surface-300-700" type="button" disabled={busy}>Cancel</Dialog.CloseTrigger><button class="btn preset-filled-primary-500" type="submit" disabled={busy || (action?.kind==='exclude' && reasonBytes>500) || mutationError.includes('Cancel and reopen the action.')}>{busy?'Saving…':action?.kind==='delete'?'Delete state':action?.kind==='remove'?'Remove favorite':action?.kind==='exclude'?'Exclude lead':'Save changes'}</button></div>
+<div class="dialog-actions"><Dialog.CloseTrigger class="btn preset-outlined-surface-300-700" type="button" disabled={busy && !recovering}>Cancel</Dialog.CloseTrigger><button class="btn preset-filled-primary-500" type="submit" disabled={busy || (action?.kind==='delete' && (!destination || !targetValid)) || (action?.kind==='exclude' && reasonBytes>500) || mutationError.includes('Cancel and reopen the action.')}>{busy?'Saving…':action?.kind==='delete'?'Delete state':action?.kind==='remove'?'Remove favorite':action?.kind==='exclude'?'Exclude lead':'Save changes'}</button></div>
 </form></Dialog.Content></Dialog.Positioner></Dialog>
 <style>
 .favorites{min-height:100dvh;padding:68px clamp(20px,4vw,64px) 48px;background:var(--color-surface-950);color:var(--color-surface-50)}
