@@ -65,14 +65,14 @@
   <header class="operator-header">
     <Brand />
     <nav aria-label="Main navigation"><a href={page.url.pathname === '/leads' ? '/' : '/leads'}>{page.url.pathname === '/leads' ? 'Parcels' : 'Leads'}</a></nav>
-    <Menu open={menuOpen} onOpenChange={(details) => menuOpen = details.open}>
+    <Menu open={menuOpen} onOpenChange={(details) => menuOpen = details.open} onSelect={(details) => { if (details.value === 'signout') void logout(); }}>
       <Menu.Trigger class="account-trigger" aria-label="Account menu" aria-expanded={menuOpen}>
         <Avatar class="account-avatar"><Avatar.Image src={access.user.profile_image_url || undefined} alt="" referrerpolicy="no-referrer" /><Avatar.Fallback>{initials(access.user.name)}</Avatar.Fallback></Avatar>
       </Menu.Trigger>
       <Menu.Positioner><Menu.Content class="account-menu">
         <div class="account-identity"><strong>{access.user.name}</strong><span>{access.user.email}</span></div>
         <Menu.Separator />
-        <Menu.Item value="signout" disabled={busy} onclick={logout}>{busy ? 'Signing out…' : 'Sign out'}</Menu.Item>
+        <Menu.Item value="signout" closeOnSelect={false} disabled={busy}>{busy ? 'Signing out…' : 'Sign out'}</Menu.Item>
         {#if message}<p role="alert" class="account-error">{message}</p>{/if}
       </Menu.Content></Menu.Positioner>
     </Menu>
@@ -81,7 +81,7 @@
 {:else}
   <main class="login-screen">
     <section class="login-card" aria-label="Application access">
-      <p class="login-brand">landman</p>
+      <Brand />
       <h1>Private alpha</h1>
       {#if access.kind === 'loading'}
         <p role="status">Checking your session…</p>
@@ -101,11 +101,10 @@
 <style>
   .login-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
   .login-card { width: min(410px, 100%); padding: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
-  .login-brand { color: #93c5fd; font-size: 25px; font-weight: 700; margin: 0 0 28px; }
   h1 { font-size: 24px; font-weight: 600; margin: 0; }
   p { line-height: 1.6; }
   .login-card > p { margin: 16px 0; }
-  .login-card > .login-brand { margin: 0 0 28px; }
+  .login-card > :global(.brand) { width: fit-content; margin: 0 0 28px; }
   .google-signin { display: inline-flex; margin: 24px 0; border-radius: 4px; }
   .google-signin img { display: block; width: 180px; height: 40px; }
   .operator-header { gap: 24px; }

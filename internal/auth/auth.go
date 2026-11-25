@@ -229,12 +229,12 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var claims struct {
-		Email           string `json:"email"`
-		Verified        bool   `json:"email_verified"`
-		Name            string `json:"name"`
-		Picture         string `json:"picture"`
-		Nonce           string `json:"nonce"`
-		AuthorizedParty string `json:"azp"`
+		Email           string          `json:"email"`
+		Verified        bool            `json:"email_verified"`
+		Name            string          `json:"name"`
+		Picture         json.RawMessage `json:"picture"`
+		Nonce           string          `json:"nonce"`
+		AuthorizedParty string          `json:"azp"`
 	}
 	if err := identity.Claims(&claims); err != nil || identity.Subject == "" || !claims.Verified || subtle.ConstantTimeCompare(digest(claims.Nonce), nonceHash) != 1 || (claims.AuthorizedParty != "" && claims.AuthorizedParty != s.oauth.ClientID) {
 		s.fail(w, r, "invalid_login")
@@ -254,7 +254,7 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	var id string
 	err = tx.QueryRow(r.Context(), `INSERT INTO app_users(google_subject,email,display_name,profile_image_url) VALUES($1,$2,$3,$4)
- ON CONFLICT(google_subject) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,profile_image_url=excluded.profile_image_url,last_login_at=now() RETURNING id`, identity.Subject, email, claims.Name, profileImageURL(claims.Picture)).Scan(&id)
+ ON CONFLICT(google_subject) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,profile_image_url=excluded.profile_image_url,last_login_at=now() RETURNING id`, identity.Subject, email, claims.Name, profileImageURL(pictureString(claims.Picture))).Scan(&id)
 	if err == nil {
 		_, err = tx.Exec(r.Context(), "INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')", digest(session), id)
 	}
@@ -455,8 +455,11 @@ func CheckSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 	var column bool
-	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='app_users' AND column_name='parcel_detail_fields')").Scan(&column); err != nil || !column {
+	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('app_users') AND attname='parcel_detail_fields' AND NOT attisdropped)").Scan(&column); err != nil || !column {
 		return errors.New("missing parcel detail preferences migration")
+	}
+	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('app_users') AND attname='profile_image_url' AND NOT attisdropped)").Scan(&column); err != nil || !column {
+		return errors.New("missing profile_image_url on app_users; apply migration 49 before starting the API")
 	}
 	return nil
 }
@@ -468,6 +471,12 @@ func (s *server) crm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	(parcelcrm.Store{DB: s.pool}).Serve(w, r, parcelcrm.AccountID(user.ID), s.origin)
+}
+
+func pictureString(raw json.RawMessage) string {
+	var picture string
+	_ = json.Unmarshal(raw, &picture)
+	return picture
 }
 
 // Only Google-hosted HTTPS profile images from verified ID-token claims may reach the browser.

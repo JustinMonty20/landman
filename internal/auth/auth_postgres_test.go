@@ -218,6 +218,52 @@ func TestProfilePhotoClaimAndSession(t *testing.T) {
 		t.Fatal("current session did not see profile update")
 	}
 }
+func TestCheckSchemaResolvedUsersColumn(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	schema := fmt.Sprintf("auth_photo_check_%d", time.Now().UnixNano())
+	if _, err := f.pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
+	if _, err := f.pool.Exec(ctx, "CREATE TABLE "+schema+".app_users AS SELECT id, google_subject, email, display_name, parcel_detail_fields FROM public.app_users WITH NO DATA"); err != nil {
+		t.Fatal(err)
+	}
+	config := f.pool.Config()
+	config.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
+	shadow, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shadow.Close()
+	if err := CheckSchema(ctx, shadow); err == nil || !strings.Contains(err.Error(), "migration 49") {
+		t.Fatalf("migration 48 shadow should fail before serving auth: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, "ALTER TABLE "+schema+".app_users ADD COLUMN profile_image_url text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSchema(ctx, shadow); err != nil {
+		t.Fatalf("restored migration 49 column rejected: %v", err)
+	}
+}
+
+func TestOptionalPictureMetadata(t *testing.T) {
+	f := setup(t)
+	for _, picture := range []any{nil, 42, true, map[string]any{"url": "https://lh3.googleusercontent.com/a/fixture"}, []string{"https://lh3.googleusercontent.com/a/fixture"}} {
+		session := f.login(t, map[string]any{"picture": picture})
+		var user User
+		if err := json.Unmarshal(f.request("GET", "/api/me", session).Body.Bytes(), &user); err != nil || user.ProfileImageURL != "" {
+			t.Fatalf("optional picture %v blocked login or leaked: %+v %v", picture, user, err)
+		}
+	}
+	f.login(t, map[string]any{"picture": "https://lh3.googleusercontent.com/a/fixture"})
+	state, cookie, code := f.attempt(t, map[string]any{"email": 42, "picture": nil})
+	callback := f.request("GET", "/auth/google/callback?state="+state+"&code="+code, cookie)
+	if callback.Header().Get("Location") != "/?auth_error=invalid_login" {
+		t.Fatalf("non-string identity accepted: %s", callback.Header().Get("Location"))
+	}
+}
+
 func TestProfileImageURL(t *testing.T) {
 	for _, raw := range []string{"", "http://lh3.googleusercontent.com/a", "https://lh3.googleusercontent.com.evil.test/a", "https://user@lh3.googleusercontent.com/a", "https://lh3.googleusercontent.com:443/a", "https://lh3.googleusercontent.com/a#secret", "https://lh3.googleusercontent.com/a?token=secret", "data:image/png;base64,foo", strings.Repeat("a", 2049)} {
 		if got := profileImageURL(raw); got != "" {
