@@ -400,7 +400,6 @@ return () => task.abort();
   <meta name="description" content="Select a county, then inspect its parcels at closer map levels." />
 </svelte:head>
 <div class="app">
-  <header><a class="brand" href="/">▧ <span>landman</span></a><a href="/leads" class="leads-nav">Leads</a></header>
   <main aria-label="Parcel discovery">
     <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} {parcelFocus} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={(jurisdiction ? jurisdictionMap : overlays.zoning) ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if !parcelView && filterCount > 0 && selected.status === 'configured'}{@render countySummary()}{/if}
@@ -626,7 +625,7 @@ h1 { font-size: 19px; font-weight: 650; }
 @media (max-width: 900px) { .map-controls { right: 65px; max-width: 440px; } }
 
 
-.favorite-star-row{display:flex;align-items:center;gap:10px;padding:4px 8px}.favorite-star{min-width:42px;min-height:42px;font-size:25px;color:var(--muted);border:0;background:transparent;cursor:pointer}.favorite-star.active{color:#f5bd4f}.favorite-star-row p{font-size:11px;color:var(--muted)}.leads-nav{color:var(--color-primary-300);font-size:13px;font-weight:650}:global(.favorite-toasts){position:fixed;bottom:76px;right:350px;z-index:20;max-width:min(360px,calc(100vw - 40px))}:global(.favorite-toast){background:var(--color-surface-900);border:1px solid var(--border);padding:16px;border-radius:9px;box-shadow:0 12px 35px #0009;animation:none!important;transition:none!important;display:grid;gap:8px;font-size:13px;color:#f2f4f6!important}:global(.favorite-toast [data-part=title]),:global(.favorite-toast [data-part=description]){color:#e0e5e9!important}:global(.favorite-toast button){min-height:40px;color:var(--color-primary-300);background:#304052;border-radius:5px;text-align:center}
+.favorite-star-row{display:flex;align-items:center;gap:10px;padding:4px 8px}.favorite-star{min-width:42px;min-height:42px;font-size:25px;color:var(--muted);border:0;background:transparent;cursor:pointer}.favorite-star.active{color:#f5bd4f}.favorite-star-row p{font-size:11px;color:var(--muted)}:global(.favorite-toasts){position:fixed;bottom:76px;right:350px;z-index:20;max-width:min(360px,calc(100vw - 40px))}:global(.favorite-toast){background:var(--color-surface-900);border:1px solid var(--border);padding:16px;border-radius:9px;box-shadow:0 12px 35px #0009;animation:none!important;transition:none!important;display:grid;gap:8px;font-size:13px;color:#f2f4f6!important}:global(.favorite-toast [data-part=title]),:global(.favorite-toast [data-part=description]){color:#e0e5e9!important}:global(.favorite-toast button){min-height:40px;color:var(--color-primary-300);background:#304052;border-radius:5px;text-align:center}
 
 
 @media(max-width:800px){:global(.favorite-toasts){right:16px;bottom:72px}}

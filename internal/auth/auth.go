@@ -28,9 +28,10 @@ const sessionAge = 7 * 24 * time.Hour
 const loginAge = 10 * time.Minute
 
 type User struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
+	ID              string `json:"id"`
+	Email           string `json:"email"`
+	Name            string `json:"name"`
+	ProfileImageURL string `json:"profile_image_url,omitempty"`
 }
 
 type server struct {
@@ -231,6 +232,7 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 		Email           string `json:"email"`
 		Verified        bool   `json:"email_verified"`
 		Name            string `json:"name"`
+		Picture         string `json:"picture"`
 		Nonce           string `json:"nonce"`
 		AuthorizedParty string `json:"azp"`
 	}
@@ -251,8 +253,8 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var id string
-	err = tx.QueryRow(r.Context(), `INSERT INTO app_users(google_subject,email,display_name) VALUES($1,$2,$3)
- ON CONFLICT(google_subject) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,last_login_at=now() RETURNING id`, identity.Subject, email, claims.Name).Scan(&id)
+	err = tx.QueryRow(r.Context(), `INSERT INTO app_users(google_subject,email,display_name,profile_image_url) VALUES($1,$2,$3,$4)
+ ON CONFLICT(google_subject) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,profile_image_url=excluded.profile_image_url,last_login_at=now() RETURNING id`, identity.Subject, email, claims.Name, profileImageURL(claims.Picture)).Scan(&id)
 	if err == nil {
 		_, err = tx.Exec(r.Context(), "INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')", digest(session), id)
 	}
@@ -281,8 +283,8 @@ func (s *server) currentUser(r *http.Request) (User, error) {
 	if err != nil || !validToken(cookie.Value) {
 		return user, pgx.ErrNoRows
 	}
-	err = s.pool.QueryRow(r.Context(), `SELECT u.id,u.email,u.display_name FROM auth_sessions s
- JOIN app_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, digest(cookie.Value)).Scan(&user.ID, &user.Email, &user.Name)
+	err = s.pool.QueryRow(r.Context(), `SELECT u.id,u.email,u.display_name,u.profile_image_url FROM auth_sessions s
+ JOIN app_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, digest(cookie.Value)).Scan(&user.ID, &user.Email, &user.Name, &user.ProfileImageURL)
 	if err != nil {
 		return User{}, err
 	}
@@ -466,4 +468,17 @@ func (s *server) crm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	(parcelcrm.Store{DB: s.pool}).Serve(w, r, parcelcrm.AccountID(user.ID), s.origin)
+}
+
+// Only Google-hosted HTTPS profile images from verified ID-token claims may reach the browser.
+// Missing or malformed pictures are optional and never block authentication.
+func profileImageURL(raw string) string {
+	if len(raw) == 0 || len(raw) > 2048 {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || u.Port() != "" || u.Opaque != "" || u.Hostname() != "lh3.googleusercontent.com" {
+		return ""
+	}
+	return u.String()
 }

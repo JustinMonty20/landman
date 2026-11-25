@@ -144,7 +144,6 @@ onMount(()=>{void load()});
 </script>
 <svelte:head><title>Leads | Landman</title></svelte:head>
 <main class="favorites">
-<nav class="crumb" aria-label="Breadcrumb"><a href="/">landman</a><span aria-hidden="true">/</span><span>Leads</span></nav>
 <div class="intro"><div><p class="eyebrow">YOUR WORKSPACE</p><h1>Leads</h1><p class="subtitle">Your private board for saved parcels and lead states.</p></div></div>
 <div class="toolbar"><div class="board-name"><span class="board-mark" aria-hidden="true">▦</span><div><strong>Board</strong><small>One private board · {board?.states.length ?? 0}{board?.next ? '+' : ''} states</small></div></div>
 <div class="toolbar-actions"><label class="filter"><input type="checkbox" bind:checked={hideExcluded} onchange={() => void load()} /> Hide excluded</label><button class="btn btn-sm preset-outlined-surface-300-700" onclick={() => void load()} disabled={busy}>↻ <span>Reload board</span></button><button class="btn btn-sm preset-filled-primary-500" onclick={() => openAction({kind:'create'})} disabled={!board || busy}>+ Add state</button></div></div>
@@ -193,9 +192,7 @@ onMount(()=>{void load()});
 <div class="dialog-actions"><Dialog.CloseTrigger class="btn preset-outlined-surface-300-700" type="button" disabled={busy && !recovering}>Cancel</Dialog.CloseTrigger><button class="btn preset-filled-primary-500" type="submit" disabled={busy || sourceFreshness!=='valid' || (action?.kind==='delete' && (!destination || destinationFreshness!=='valid' || deletedDestinations.has(destination) || destination===action.state.id)) || (action?.kind==='exclude' && reasonBytes>500)}>{busy?'Saving…':action?.kind==='delete'?'Delete state':action?.kind==='remove'?'Remove favorite':action?.kind==='exclude'?'Exclude lead':'Save changes'}</button></div>
 </form></Dialog.Content></Dialog.Positioner></Dialog>
 <style>
-.favorites{min-height:100dvh;padding:68px clamp(20px,4vw,64px) 48px;background:var(--color-surface-950);color:var(--color-surface-50)}
-.crumb{display:flex;gap:10px;align-items:center;color:var(--muted);font-size:12px;margin-bottom:30px}
-.crumb a{color:var(--color-primary-300);font-weight:750;text-decoration:none;letter-spacing:-.04em}
+.favorites{min-height:100dvh;padding:24px clamp(20px,4vw,64px) 48px;background:var(--color-surface-950);color:var(--color-surface-50)}
 .intro{margin-bottom:28px}
 .eyebrow{color:var(--color-primary-300);font-size:10px;font-weight:800;letter-spacing:.17em;margin:0 0 8px}
 .intro h1{font-size:clamp(28px,3vw,38px);font-weight:720;letter-spacing:-.04em;line-height:1.15}

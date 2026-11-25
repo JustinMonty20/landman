@@ -190,6 +190,44 @@ func (f *fixture) login(t *testing.T, overrides map[string]any) *http.Cookie {
 	return session
 }
 
+func TestProfilePhotoClaimAndSession(t *testing.T) {
+	f := setup(t)
+	first := f.login(t, map[string]any{"picture": "https://lh3.googleusercontent.com/a/fixture"})
+	var user User
+	if err := json.Unmarshal(f.request("GET", "/api/me", first).Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	if user.ProfileImageURL != "https://lh3.googleusercontent.com/a/fixture" {
+		t.Fatalf("verified picture missing: %+v", user)
+	}
+	other := f.login(t, map[string]any{"sub": "other-subject", "email": "second@example.test"})
+	var isolated User
+	json.Unmarshal(f.request("GET", "/api/me", other).Body.Bytes(), &isolated)
+	if isolated.ProfileImageURL != "" {
+		t.Fatal("another user's photo leaked")
+	}
+	updated := f.login(t, map[string]any{"picture": "javascript:alert(1)"})
+	user = User{}
+	json.Unmarshal(f.request("GET", "/api/me", updated).Body.Bytes(), &user)
+	if user.ProfileImageURL != "" {
+		t.Fatal("invalid updated photo persisted")
+	}
+	user = User{}
+	json.Unmarshal(f.request("GET", "/api/me", first).Body.Bytes(), &user)
+	if user.ProfileImageURL != "" {
+		t.Fatal("current session did not see profile update")
+	}
+}
+func TestProfileImageURL(t *testing.T) {
+	for _, raw := range []string{"", "http://lh3.googleusercontent.com/a", "https://lh3.googleusercontent.com.evil.test/a", "https://user@lh3.googleusercontent.com/a", "https://lh3.googleusercontent.com:443/a", "https://lh3.googleusercontent.com/a#secret", "https://lh3.googleusercontent.com/a?token=secret", "data:image/png;base64,foo", strings.Repeat("a", 2049)} {
+		if got := profileImageURL(raw); got != "" {
+			t.Errorf("accepted unsafe photo URL %q", raw)
+		}
+	}
+	if got := profileImageURL("https://lh3.googleusercontent.com/a/fixture"); got == "" {
+		t.Fatal("Google photo rejected")
+	}
+}
 func TestLoginSessions(t *testing.T) {
 	f := setup(t)
 	first := f.login(t, nil)
