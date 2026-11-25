@@ -15,9 +15,13 @@ let mutationError = $state('');
 let loading = $state(true);
 let name = $state('');
 let hideExcluded = $state(false);
+class RequestError extends Error {
+ status:number;
+ constructor(status:number){super(status===409 ? 'Another tab changed this record. Reload and retry.' : `Request failed (${status}).`);this.status=status}
+}
 async function api<T>(url:string, method='GET', payload?:object):Promise<T> {
  const response = await fetch(url,{ method, headers:payload ? {'Content-Type':'application/json'} : undefined, body:payload ? JSON.stringify(payload) : undefined });
- if (!response.ok) throw new Error(response.status===409 ? 'Another tab changed this record. Reload and retry.' : `Request failed (${response.status}).`);
+ if (!response.ok) throw new RequestError(response.status);
  return response.json();
 }
 let generation = 0;
@@ -55,9 +59,13 @@ let recovering = $state(false);
 function closeAction(){dialogGeneration++;dialogOpen=false;action=null;busy=false;recovering=false;mutationError='';}
 let destination = $state('');
 let selectedTarget = $state<State|null>(null);
-let targetValid = $state(true);
-const destinationOptions = $derived(board?.states.filter(s=>s.id!==(action && 'state' in action ? action.state.id : '')) ?? []);
-const visibleDestinations = $derived(selectedTarget && !destinationOptions.some(s=>s.id===selectedTarget?.id) ? [...destinationOptions,selectedTarget] : destinationOptions);
+type Freshness = 'valid' | 'refreshing' | 'failed' | 'missing';
+let sourceFreshness = $state<Freshness>('valid');
+let destinationFreshness = $state<Freshness>('valid');
+let deletedDestinations = $state<Set<string>>(new Set());
+let unverifiedDestination = $state('');
+const destinationOptions = $derived(board?.states.filter(s=>s.id!==(action && 'state' in action ? action.state.id : '') && !deletedDestinations.has(s.id)) ?? []);
+const visibleDestinations = $derived(selectedTarget && !deletedDestinations.has(selectedTarget.id) && !destinationOptions.some(s=>s.id===selectedTarget?.id) ? [...destinationOptions,selectedTarget] : destinationOptions);
 let reason = $state('');
 const reasonBytes = $derived(new TextEncoder().encode(reason.trim()).length);
 let dragged = $state('');
@@ -66,7 +74,7 @@ function openAction(nextAction:Action) {
  dialogGeneration++;
  action=nextAction; name=nextAction.kind==='rename'?nextAction.state.name:'';reason='';
  selectedTarget=board?.states.find(s=>s.id!==('state' in nextAction?nextAction.state.id:'')) ?? null;
- destination=selectedTarget?.id ?? '';targetValid=true;
+ destination=selectedTarget?.id ?? '';sourceFreshness='valid';destinationFreshness=selectedTarget?'valid':'missing';deletedDestinations=new Set();unverifiedDestination='';
  mutationError='';dialogOpen=true;
 }
 async function change(url:string,method:string,payload:object):Promise<boolean> {
@@ -78,6 +86,8 @@ async function change(url:string,method:string,payload:object):Promise<boolean> 
  catch(e){
   if(!owned())return false;
   recovering=true;
+  if(pendingAction && ('state' in pendingAction || 'card' in pendingAction))sourceFreshness='refreshing';
+  if(pendingAction?.kind==='delete' && e instanceof RequestError && e.status===409)destinationFreshness='refreshing';
   await load();
   if(!owned() || (pendingAction && (!dialogOpen || action!==pendingAction)))return false;
   if(pendingAction && 'state' in pendingAction){
@@ -85,28 +95,27 @@ async function change(url:string,method:string,payload:object):Promise<boolean> 
     const current=await api<State>(`/api/me/crm/states/${pendingAction.state.id}`);
     if(!owned() || !dialogOpen || action!==pendingAction)return false;
     if(current.id!==pendingAction.state.id || !Number.isSafeInteger(current.revision))throw Error('Invalid source state.');
-    action={...pendingAction,state:current};
-    if(pendingAction.kind==='delete' && selectedDestination && String(e).includes('Another tab changed')){
-     targetValid=false;
+    action={...pendingAction,state:current};sourceFreshness='valid';
+    if(pendingAction.kind==='delete' && selectedDestination && e instanceof RequestError && e.status===409){
      try {
       const target=await api<State>(`/api/me/crm/states/${selectedDestination}`);
       if(!owned() || !dialogOpen || action?.kind!=='delete' || action.state.id!==current.id)return false;
       if(target.id!==selectedDestination || target.id===current.id)throw Error('Invalid destination state.');
-      selectedTarget=target;destination=selectedDestination;targetValid=true;
+      selectedTarget=target;destination=selectedDestination;destinationFreshness='valid';unverifiedDestination='';
      }catch(targetError){
       if(!owned() || !dialogOpen || action?.kind!=='delete')return false;
-      if(String(targetError).includes('404')){selectedTarget=null;destination='';mutationError='Destination state was deleted. Select another state.'}
-      else mutationError=`Destination state could not be refreshed (${String(targetError)}). Cancel and reopen the action.`;
+      if(targetError instanceof RequestError && targetError.status===404){deletedDestinations=new Set([...deletedDestinations,selectedDestination]);selectedTarget=null;destination='';destinationFreshness='missing';mutationError='Destination state was deleted. Select another state.'}
+      else {destinationFreshness='failed';unverifiedDestination=selectedDestination;mutationError=`Destination state could not be refreshed (${String(targetError)}). Select another state or cancel and reopen the action.`}
       return false;
      }
     }
-   }catch(readError){if(!owned() || !dialogOpen)return false;mutationError=`${String(e)} Target state could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
+   }catch(readError){if(!owned() || !dialogOpen)return false;sourceFreshness=readError instanceof RequestError && readError.status===404?'missing':'failed';mutationError=`${String(e)} Target state could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
   } else if(pendingAction && 'card' in pendingAction){
    try {const current=await api<Card>(`/api/me/favorites/${pendingAction.card.parcel_id}`);
     if(!owned())return false;
-    if(!current.favorite){mutationError=`${String(e)} This parcel is no longer a favorite. Cancel and reopen the action.`;return false}
-    action={...pendingAction,card:current};
-   }catch(readError){if(!owned())return false;mutationError=`${String(e)} Target parcel could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
+    if(!current.favorite){sourceFreshness='missing';mutationError=`${String(e)} This parcel is no longer a favorite. Cancel and reopen the action.`;return false}
+    action={...pendingAction,card:current};sourceFreshness='valid';
+   }catch(readError){if(!owned())return false;sourceFreshness=readError instanceof RequestError && readError.status===404?'missing':'failed';mutationError=`${String(e)} Target parcel could not be refreshed (${String(readError)}). Cancel and reopen the action.`;return false}
   }
   mutationError=String(e);return false;
  }finally{if(owned()){busy=false;recovering=false}}
@@ -114,13 +123,13 @@ async function change(url:string,method:string,payload:object):Promise<boolean> 
 function move(card:Card,id:string) {if(id!==card.state_id)void change(`/api/me/favorites/${card.parcel_id}/state`,'PUT',{state_id:id,revision:card.revision})}
 function drop(event:DragEvent,id:string) {event.preventDefault();dropTarget='';const parcel=event.dataTransfer?.getData('text/plain');const card=Object.values(cards).flat().find(c=>c.parcel_id===parcel);if(card)move(card,id);dragged=''}
 async function submitAction() {
- if (!action || busy || !board) return;
+ if (!action || busy || !board || sourceFreshness!=='valid') return;
  const submitted=action, owner=dialogGeneration;
  let ok=false;
  if(submitted.kind==='create' && name.trim()) ok=await change('/api/me/crm/states','POST',{name:name.trim()});
  if('state' in submitted){const s=submitted.state;
   if(submitted.kind==='rename' && name.trim()) ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{name:name.trim(),revision:s.revision});
-  if(submitted.kind==='delete' && destination && targetValid) ok=await change(`/api/me/crm/states/${s.id}`,'DELETE',{destination_id:destination,revision:s.revision});
+  if(submitted.kind==='delete' && destination && destinationFreshness==='valid' && !deletedDestinations.has(destination) && destination!==s.id) ok=await change(`/api/me/crm/states/${s.id}`,'DELETE',{destination_id:destination,revision:s.revision});
   if(submitted.kind==='default') ok=await change('/api/me/crm/settings','PUT',{state_id:s.id,revision:board.revision});
   if(submitted.kind==='left'||submitted.kind==='right') ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{position:Math.max(0,s.position+(submitted.kind==='left'?-1:1)),revision:s.revision});
  }
@@ -179,9 +188,9 @@ onMount(()=>{void load()});
 <form onsubmit={(e)=>{e.preventDefault();void submitAction()}}>
 {#if action?.kind==='create'||action?.kind==='rename'}<label class="field">State name<input class="input" bind:value={name} required maxlength="80" disabled={busy}/></label>{/if}
 {#if action?.kind==='exclude'}<label class="field">Exclusion reason<textarea class="textarea" bind:value={reason} required disabled={busy} aria-describedby="reason-limit"></textarea><span id="reason-limit" class:error={reasonBytes>500}>{reasonBytes} / 500 UTF-8 bytes{reasonBytes>500 ? ' · Shorten the reason before saving.' : ''}</span></label>{/if}
-{#if action?.kind==='delete'}<label class="field">Move parcels to<select class="select" bind:value={destination} onchange={() => {selectedTarget=destinationOptions.find(s=>s.id===destination) ?? null;targetValid=!!selectedTarget;mutationError=''}} required disabled={busy}>{#if !destination}<option value="" disabled>Select a state</option>{/if}{#each visibleDestinations as target}<option value={target.id}>{target.name}</option>{/each}</select></label>{/if}
+{#if action?.kind==='delete'}<label class="field">Move parcels to<select class="select" bind:value={destination} onchange={() => {selectedTarget=visibleDestinations.find(s=>s.id===destination) ?? null;destinationFreshness=selectedTarget && !deletedDestinations.has(destination) && destination!==unverifiedDestination ? 'valid':'missing';if(sourceFreshness==='valid')mutationError=destination===unverifiedDestination?'Destination state could not be verified. Select another state or cancel and reopen the action.':''}} required disabled={busy}>{#if !destination}<option value="" disabled>Select a state</option>{/if}{#each visibleDestinations as target}<option value={target.id}>{target.name}</option>{/each}</select></label>{/if}
 {#if mutationError}<p class="error" role="alert">{mutationError}</p>{/if}
-<div class="dialog-actions"><Dialog.CloseTrigger class="btn preset-outlined-surface-300-700" type="button" disabled={busy && !recovering}>Cancel</Dialog.CloseTrigger><button class="btn preset-filled-primary-500" type="submit" disabled={busy || (action?.kind==='delete' && (!destination || !targetValid)) || (action?.kind==='exclude' && reasonBytes>500) || mutationError.includes('Cancel and reopen the action.')}>{busy?'Saving…':action?.kind==='delete'?'Delete state':action?.kind==='remove'?'Remove favorite':action?.kind==='exclude'?'Exclude lead':'Save changes'}</button></div>
+<div class="dialog-actions"><Dialog.CloseTrigger class="btn preset-outlined-surface-300-700" type="button" disabled={busy && !recovering}>Cancel</Dialog.CloseTrigger><button class="btn preset-filled-primary-500" type="submit" disabled={busy || sourceFreshness!=='valid' || (action?.kind==='delete' && (!destination || destinationFreshness!=='valid' || deletedDestinations.has(destination) || destination===action.state.id)) || (action?.kind==='exclude' && reasonBytes>500)}>{busy?'Saving…':action?.kind==='delete'?'Delete state':action?.kind==='remove'?'Remove favorite':action?.kind==='exclude'?'Exclude lead':'Save changes'}</button></div>
 </form></Dialog.Content></Dialog.Positioner></Dialog>
 <style>
 .favorites{min-height:100dvh;padding:68px clamp(20px,4vw,64px) 48px;background:var(--color-surface-950);color:var(--color-surface-50)}
