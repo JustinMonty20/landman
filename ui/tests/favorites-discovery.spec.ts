@@ -88,3 +88,86 @@ await select.selectOption(states[0].id);await expect(page.getByText(/Another tab
 await page.screenshot({path:info.outputPath('state-conflict.png'),fullPage:true});
 await select.selectOption(states[0].id);await expect(select.locator('option:checked')).toHaveText('State 1');expect(attempt).toBe(2);
 });
+
+const recoveryStates = Array.from({length:3},(_,i)=>({id:`${String(i+61).padStart(8,'0')}-6666-4666-8666-666666666666`,name:`Recovery ${i+1}`}));
+async function recoveryPage(page:import('@playwright/test').Page, parcels:string[]){
+await page.emulateMedia({reducedMotion:'reduce'});
+await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin!=='http://127.0.0.1:5174'||/^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
+await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
+await page.route('**/api/me/parcel-detail-fields',route=>route.fulfill({json:{fields:[]}}));
+await page.route('**/api/v1/parcels/lookup*',route=>route.fulfill({json:{items:parcels.map((id,i)=>({id,parcel_number:`RECOVERY-${i}`,address:`Recovery address ${i}`}))}}));
+}
+const recoveryCard=(id:string,state=recoveryStates[0].id,revision=1)=>({parcel_id:id,favorite:true,state_id:state,revision,excluded:false,exclusion_reason:''});
+const recoverySelect=(page:import('@playwright/test').Page)=>page.getByRole('combobox',{name:'Change saved parcel state'});
+
+test('old page 2 success and error cannot lock or alter another parcel pagination',async ({page},info)=>{
+const a='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',b='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+await recoveryPage(page,[b]);
+await page.route(`**/api/me/favorites/${a}`,route=>route.fulfill({json:recoveryCard(a)}));
+await page.route(`**/api/me/favorites/${b}`,route=>route.fulfill({json:recoveryCard(b)}));
+let release:(()=>void)|undefined,started:(()=>void)|undefined;const requested=new Promise<void>(r=>started=r);let page2=0;
+await page.route('**/api/me/crm/board*',async route=>{
+const cursor=new URL(route.request().url()).searchParams.get('cursor');
+if(cursor){page2++;if(page2===1){started?.();await new Promise<void>(r=>release=r);return route.fulfill({status:503})}return route.fulfill({json:{states:[recoveryStates[2]],next:''}})}
+return route.fulfill({json:{states:recoveryStates.slice(0,2),next:'next'}});
+});
+await page.goto(`/?parcel=${a}`);const more=page.getByRole('button',{name:'Load more states'});
+await expect(more).toBeEnabled();await more.click();await requested;
+await page.getByRole('combobox',{name:'Find parcel ID or address'}).fill('RECOVERY');await page.getByRole('option',{name:/Recovery address 0/}).click();
+await expect(recoverySelect(page)).toHaveValue(recoveryStates[0].id);await expect(more).toBeEnabled();release?.();
+await expect(more).toBeEnabled();await expect(page.getByText('Could not load more states. Retry.')).toHaveCount(0);
+await more.click();await expect(recoverySelect(page).locator('option')).toHaveCount(3);await expect(recoverySelect(page).locator('option').last()).toHaveText('Recovery 3');expect(page2).toBe(2);
+await page.screenshot({path:info.outputPath('recovered-parcel-pagination.png'),fullPage:true});
+});
+
+test('pending page 2 superseded by move to loaded state leaves pagination usable',async ({page},info)=>{
+const id='cccccccc-cccc-4ccc-8ccc-cccccccccccc';await recoveryPage(page,[]);
+let state=recoveryStates[0].id,revision=1,release:(()=>void)|undefined,started:(()=>void)|undefined,page2=0;
+const requested=new Promise<void>(r=>started=r);
+await page.route(`**/api/me/favorites/${id}`,route=>route.fulfill({json:recoveryCard(id,state,revision)}));
+await page.route(`**/api/me/favorites/${id}/state`,route=>{state=recoveryStates[1].id;revision++;return route.fulfill({json:recoveryCard(id,state,revision)})});
+await page.route('**/api/me/crm/board*',async route=>{
+if(new URL(route.request().url()).searchParams.has('cursor')){page2++;if(page2===1){started?.();await new Promise<void>(r=>release=r);return route.fulfill({json:{states:[{...recoveryStates[2],name:'STALE'}],next:''}})}return route.fulfill({json:{states:[recoveryStates[2]],next:''}})}
+return route.fulfill({json:{states:recoveryStates.slice(0,2),next:'next'}});
+});
+await page.goto(`/?parcel=${id}`);const more=page.getByRole('button',{name:'Load more states'}),select=recoverySelect(page);
+await expect(more).toBeEnabled();await more.click();await requested;await select.selectOption(recoveryStates[1].id);
+await expect(select).toHaveValue(recoveryStates[1].id);await expect(more).toBeEnabled();release?.();await expect(more).toBeEnabled();
+await more.click();await expect(select.locator('option').last()).toHaveText('Recovery 3');expect(page2).toBe(2);
+await page.screenshot({path:info.outputPath('recovered-move-pagination.png'),fullPage:true});
+});
+
+test('first page failure with confirmed state lookup retries all options',async ({page},info)=>{
+const id='dddddddd-dddd-4ddd-8ddd-dddddddddddd';await recoveryPage(page,[]);
+await page.route(`**/api/me/favorites/${id}`,route=>route.fulfill({json:recoveryCard(id)}));
+let calls=0;await page.route('**/api/me/crm/board',route=>{calls++;return calls===1?route.fulfill({status:503}):route.fulfill({json:{states:recoveryStates,next:''}})});
+await page.route(`**/api/me/crm/states/${recoveryStates[0].id}`,route=>route.fulfill({json:recoveryStates[0]}));
+await page.goto(`/?parcel=${id}`);const select=recoverySelect(page),retry=page.getByRole('button',{name:'Retry loading states'});
+await expect(select).toHaveValue(recoveryStates[0].id);await expect(select.locator('option')).toHaveCount(1);await expect(retry).toBeEnabled();await expect(page.getByRole('alert')).toContainText('Lead states unavailable');
+await page.screenshot({path:info.outputPath('first-page-failed.png'),fullPage:true});
+await retry.click();await expect(select.locator('option')).toHaveCount(3);await expect(select.locator('option').last()).toHaveText('Recovery 3');await expect(retry).toHaveCount(0);await expect(page.getByRole('alert')).toHaveCount(0);
+await page.screenshot({path:info.outputPath('first-page-recovered.png'),fullPage:true});
+});
+
+test('board and confirmed state failures keep retry available until both recover',async ({page},info)=>{
+const id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';await recoveryPage(page,[]);
+await page.route(`**/api/me/favorites/${id}`,route=>route.fulfill({json:recoveryCard(id,recoveryStates[2].id)}));
+let board=0,target=0;
+await page.route('**/api/me/crm/board',route=>{board++;return board===1?route.fulfill({status:503}):route.fulfill({json:{states:recoveryStates.slice(0,2),next:''}})});
+await page.route(`**/api/me/crm/states/${recoveryStates[2].id}`,route=>{target++;return target===1?route.fulfill({status:503}):route.fulfill({json:recoveryStates[2]})});
+await page.goto(`/?parcel=${id}`);const select=recoverySelect(page),retry=page.getByRole('button',{name:'Retry loading states'});
+await expect(retry).toBeEnabled();await expect(select).toBeDisabled();await expect(page.getByRole('alert')).toHaveCount(2);
+await retry.click();await expect(select).toHaveValue(recoveryStates[2].id);await expect(select.locator('option')).toHaveCount(3);await expect(select.locator('option').last()).toHaveText('Recovery 3');await expect(retry).toHaveCount(0);await expect(page.getByRole('alert')).toHaveCount(0);
+await page.screenshot({path:info.outputPath('both-recovered.png'),fullPage:true});
+});
+
+test('targeted current-state lookup owns initial loading until it resolves',async ({page})=>{
+const id='ffffffff-ffff-4fff-8fff-ffffffffffff';await recoveryPage(page,[]);
+await page.route(`**/api/me/favorites/${id}`,route=>route.fulfill({json:recoveryCard(id,recoveryStates[2].id)}));
+let release:(()=>void)|undefined,started:(()=>void)|undefined, pages=0;const requested=new Promise<void>(r=>started=r);
+await page.route('**/api/me/crm/board*',route=>{if(new URL(route.request().url()).searchParams.has('cursor'))pages++;return route.fulfill({json:{states:recoveryStates.slice(0,2),next:'next'}})});
+await page.route(`**/api/me/crm/states/${recoveryStates[2].id}`,async route=>{started?.();await new Promise<void>(r=>release=r);return route.fulfill({json:recoveryStates[2]})});
+await page.goto(`/?parcel=${id}`);await requested;
+const more=page.getByRole('button',{name:'Load more states'});await expect(more).toBeDisabled();release?.();
+await expect(recoverySelect(page)).toHaveValue(recoveryStates[2].id);await expect(more).toBeEnabled();await more.click();expect(pages).toBe(1);
+});
