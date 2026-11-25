@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -362,31 +363,64 @@ func TestAuthMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := strings.Split(string(migration), "-- +goose Down")
-	tx, err := f.pool.Begin(context.Background())
+	if len(parts) != 2 {
+		t.Fatal("auth migration must have one Up and one Down section")
+	}
+	ctx := context.Background()
+	var referencesBefore int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE contype='f' AND confrelid='public.app_users'::regclass`).Scan(&referencesBefore); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
-	if _, err := tx.Exec(context.Background(), parts[1]); err != nil {
+	defer tx.Rollback(ctx)
+	schema := fmt.Sprintf("auth_migration_%d", time.Now().UnixNano())
+	if _, err := tx.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), strings.TrimPrefix(parts[0], "-- +goose Up")); err != nil {
+	if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+schema+", pg_catalog"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), "INSERT INTO app_users(google_subject,email,display_name) VALUES('subject','buyer@example.test','Buyer')"); err != nil {
+	up := strings.TrimPrefix(parts[0], "-- +goose Up")
+	if _, err := tx.Exec(ctx, up); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), "INSERT INTO auth_sessions(token_hash,user_id,expires_at) SELECT decode(repeat('ab',32),'hex'),id,now()+interval '1 day' FROM app_users"); err != nil {
+	if _, err := tx.Exec(ctx, parts[1]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), "DELETE FROM app_users"); err != nil {
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO app_users(google_subject,email,display_name) VALUES('subject','buyer@example.test','Buyer')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO auth_sessions(token_hash,user_id,expires_at) SELECT decode(repeat('ab',32),'hex'),id,now()+interval '1 day' FROM app_users"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM app_users"); err != nil {
 		t.Fatal(err)
 	}
 	var count int
-	if err := tx.QueryRow(context.Background(), "SELECT count(*) FROM auth_sessions").Scan(&count); err != nil || count != 0 {
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM auth_sessions").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
 		t.Fatal("user delete did not revoke sessions")
 	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var referencesAfter int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE contype='f' AND confrelid='public.app_users'::regclass`).Scan(&referencesAfter); err != nil {
+		t.Fatal(err)
+	}
+	if referencesAfter != referencesBefore {
+		t.Fatalf("public account references changed: before %d, after %d", referencesBefore, referencesAfter)
+	}
 }
+
 func TestProtectedParcelRoutes(t *testing.T) {
 	f := setup(t)
 	called := 0
