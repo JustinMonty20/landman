@@ -94,7 +94,7 @@ async function loadMoreFavoriteStates(){
 const id=parcelID,cursor=favoriteStatesNext;
 if(!cursor || favoriteStatesPending || favoritePending)return;
 const request=++stateListRequest;favoriteStatesPending=true;favoriteStatesError='';
-try {const res=await fetch(`/api/me/crm/board?cursor=${encodeURIComponent(cursor)}`);if(!res.ok)throw Error();const data:{states:LeadState[];next:string}=await res.json();if(parcelID!==id || request!==stateListRequest || favoriteStatesNext!==cursor)return;favoriteStates=[...favoriteStates.filter(s=>!data.states.some(p=>p.id===s.id)),...data.states];favoriteStatesNext=data.next || '';}
+try {const res=await fetch(`/api/me/crm/board?cursor=${encodeURIComponent(cursor)}`);if(!res.ok)throw Error();const data:{states:LeadState[];next:string}=await res.json();if(parcelID!==id || request!==stateListRequest || favoriteStatesNext!==cursor)return;favoriteStates=[...favoriteStates.filter(s=>!data.states.some(p=>p.id===s.id)),...data.states];favoriteStatesNext=data.next || '';if(data.states.some(s=>s.id===favorite?.state_id))favoriteStateError='';}
 catch {if(parcelID===id && request===stateListRequest && favoriteStatesNext===cursor)favoriteStatesError='Could not load more states. Retry.'}
 finally {if(parcelID===id && request===stateListRequest)favoriteStatesPending=false}
 }

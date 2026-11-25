@@ -161,6 +161,26 @@ await retry.click();await expect(select).toHaveValue(recoveryStates[2].id);await
 await page.screenshot({path:info.outputPath('both-recovered.png'),fullPage:true});
 });
 
+test('paged confirmed state clears only its recovered lookup error',async ({page},info)=>{
+const id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';await recoveryPage(page,[]);
+await page.route(`**/api/me/favorites/${id}`,route=>route.fulfill({json:recoveryCard(id,recoveryStates[2].id)}));
+await page.route(`**/api/me/crm/states/${recoveryStates[2].id}`,route=>route.fulfill({status:503}));
+await page.route('**/api/me/crm/board*',route=>{
+const cursor=new URL(route.request().url()).searchParams.get('cursor');
+const states=cursor==='last'?recoveryStates.slice(2):cursor?recoveryStates.slice(1,2):recoveryStates.slice(0,1);
+return route.fulfill({json:{states,next:cursor==='last'?'':cursor?'last':'middle'}});
+});
+await page.goto(`/?parcel=${id}`);
+const more=page.getByRole('button',{name:'Load more states'}),retry=page.getByRole('button',{name:'Retry loading states'});
+await expect(retry).toBeEnabled();await expect(page.getByRole('alert')).toContainText('Confirmed lead state unavailable');
+await more.click();await expect(recoverySelect(page).locator('option')).toHaveCount(2);
+await expect(retry).toBeEnabled();await expect(page.getByRole('alert')).toContainText('Confirmed lead state unavailable');
+await more.click();await expect(recoverySelect(page)).toHaveValue(recoveryStates[2].id);
+await expect(recoverySelect(page).locator('option:checked')).toHaveText('Recovery 3');
+await expect(page.getByRole('alert')).toHaveCount(0);await expect(retry).toHaveCount(0);
+await page.screenshot({path:info.outputPath('paged-lookup-recovered.png'),fullPage:true});
+});
+
 test('targeted current-state lookup owns initial loading until it resolves',async ({page})=>{
 const id='ffffffff-ffff-4fff-8fff-ffffffffffff';await recoveryPage(page,[]);
 await page.route(`**/api/me/favorites/${id}`,route=>route.fulfill({json:recoveryCard(id,recoveryStates[2].id)}));
