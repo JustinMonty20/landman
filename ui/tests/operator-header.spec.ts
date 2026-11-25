@@ -13,7 +13,7 @@ for (const photo of ['', 'https://lh3.googleusercontent.com/a/fixture']) {
   await page.route('**/api/me/crm/**', route => route.fulfill({ json: { states: [], default_state_id: '', revision: 1, next: '' } }));
   await page.goto('/leads');
   await expect(page.getByRole('heading', { name: 'Leads', exact: true })).toHaveCount(1);
-  const brand = page.getByRole('link', { name: 'Landman home' });
+  const brand = page.getByRole('banner').getByRole('link', { name: 'Landman home' });
   await expect(brand).toBeVisible();
   const bounds = await brand.boundingBox();
   await expect(page.getByRole('link', { name: 'Parcels', exact: true })).toBeVisible();
@@ -30,11 +30,45 @@ for (const photo of ['', 'https://lh3.googleusercontent.com/a/fixture']) {
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await page.goto('/');
   await expect(brand).toBeVisible();
-  expect(await brand.boundingBox()).toMatchObject({ width: bounds!.width, height: bounds!.height });
+  await expect.poll(async () => {
+   const current = await brand.boundingBox();
+   return current && { width: current.width, height: current.height };
+  }).toEqual({ width: bounds!.width, height: bounds!.height });
   await expect(page.getByRole('link', { name: 'Leads', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('parcels.png') });
  });
 }
+test('header measurement waits for the signed-in brand after a delayed session', async ({ page }) => {
+ await page.route('**/*', route => {
+  const url = new URL(route.request().url());
+  if (url.origin !== 'http://127.0.0.1:5174' || /^\/(api|auth)(\/|$)/.test(url.pathname)) return route.abort();
+  return route.continue();
+ });
+ let reads = 0;
+ let releaseSession: (() => void) | undefined;
+ await page.route('**/api/me', async route => {
+  if (++reads === 2) await new Promise<void>(resolve => { releaseSession = resolve; });
+  await route.fulfill({ json: user });
+ });
+ await page.route('**/api/me/crm/**', route => route.fulfill({ json: { states: [], default_state_id: '', revision: 1, next: '' } }));
+ const brand = page.getByRole('banner').getByRole('link', { name: 'Landman home' });
+ await page.goto('/leads');
+ await expect(brand).toBeVisible();
+ const bounds = await brand.boundingBox();
+ expect(bounds).not.toBeNull();
+ await page.goto('/');
+ await expect(page.getByRole('status')).toHaveText('Checking your session…');
+ await expect(page.getByRole('link', { name: 'Landman home' })).toBeVisible();
+ await expect(brand).toHaveCount(0);
+ await expect.poll(() => !!releaseSession).toBe(true);
+ releaseSession?.();
+ await expect(brand).toBeVisible();
+ await expect.poll(async () => {
+  const current = await brand.boundingBox();
+  return current && { width: current.width, height: current.height };
+ }).toEqual({ width: bounds!.width, height: bounds!.height });
+});
+
 test('fixture photo loads without external network and coverage shares brand', async ({ page }, info) => {
  await page.route('**/api/me', route => route.fulfill({ json: { ...user, profile_image_url: 'https://lh3.googleusercontent.com/a/fixture' } }));
  await page.route('https://lh3.googleusercontent.com/**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/4eUAAAAASUVORK5CYII=', 'base64') }));
