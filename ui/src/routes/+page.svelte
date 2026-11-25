@@ -1,6 +1,6 @@
 <script lang="ts">
 import { onMount, tick } from 'svelte';
-import { Tabs } from '@skeletonlabs/skeleton-svelte';
+import { Tabs, Toast, createToaster } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import { detailGroups, detailFields, defaultDetailFields, parseDetailFields, type DetailField } from '../lib/detailGroups';
 import ParcelMap, { jurisdictionColor, zoningColor } from '../lib/ParcelMap.svelte';
@@ -52,75 +52,31 @@ const layerQuery = $derived(parcelView && viewport ? mapLayerQuery(viewport) : '
 let parcels = $state<ParcelShape[]>([]);
 let parcelError = $state('');
 let parcelID = $state('');
-let favorite = $state<{revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string}|null>(null);
-let favoriteStatus = $state('');
 type Favorite = {revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string};
+let favorite = $state<Favorite|null>(null);
+let favoriteStatus = $state('');
 let favoriteRequest = 0;
 let favoritePending = $state(false);
-type LeadState = {id:string;name:string};
-let favoriteStates = $state<LeadState[]>([]);
-let favoriteStatesNext = $state('');
-let favoriteStatesPending = $state(false);
-let favoriteStatesError = $state('');
-let favoriteStateError = $state('');
-let favoriteFirstPageFailed = $state(false);
-let stateListRequest = 0;
-function invalidateStateList(){stateListRequest++;favoriteStatesPending=false;}
-async function resolveFavoriteState(id:string,request:number,stateId:string){
-if(!stateId || favoriteStates.some(s=>s.id===stateId)){favoriteStateError='';return;}
-try {const res=await fetch(`/api/me/crm/states/${stateId}`);if(!res.ok)throw Error();const state:LeadState=await res.json();if(parcelID===id && stateListRequest===request && favorite?.state_id===stateId){favoriteStates=[...favoriteStates.filter(s=>s.id!==stateId),state];favoriteStateError='';}}
-catch {if(parcelID===id && stateListRequest===request && favorite?.state_id===stateId)favoriteStateError='Confirmed lead state unavailable. Retry loading states.'}
-}
+const toaster = createToaster({placement:'bottom-end',overlap:true});
 async function readFavorite(id:string){
-const request=++favoriteRequest;invalidateStateList();favorite=null;favoriteStatus='';favoriteStates=[];favoriteStatesNext='';favoriteStatesError='';favoriteStateError='';favoriteFirstPageFailed=false;favoritePending=false;
-try {
-const res=await fetch(`/api/me/favorites/${id}`);
-if(res.status===404)return;
-if(!res.ok)throw Error();
-const data:Favorite=await res.json();
-if(parcelID!==id || favoriteRequest!==request)return;
-favorite=data;
-if(data.favorite)await readFavoriteStates(id,data.state_id);
-} catch {if(parcelID===id && favoriteRequest===request)favoriteStatus='Favorite status unavailable.'}
+ const request=++favoriteRequest;favorite=null;favoriteStatus='';favoritePending=false;
+ try {const res=await fetch(`/api/me/favorites/${id}`);if(res.status===404)return;if(!res.ok)throw Error();const data:Favorite=await res.json();if(parcelID===id && favoriteRequest===request)favorite=data}
+ catch {if(parcelID===id && favoriteRequest===request)favoriteStatus='Favorite status unavailable.'}
 }
-async function readFavoriteStates(id:string,currentState:string){
-const request=++stateListRequest;favoriteStatesPending=true;favoriteStatesError='';favoriteStateError='';favoriteFirstPageFailed=false;
-try {const res=await fetch('/api/me/crm/board');if(!res.ok)throw Error();const data:{states:LeadState[];next:string} = await res.json();if(parcelID!==id || stateListRequest!==request)return;favoriteStates=data.states;favoriteStatesNext=data.next || '';}
-catch {if(parcelID===id && stateListRequest===request){favoriteFirstPageFailed=true;favoriteStatesError='Lead states unavailable. Retry loading states.';}}
-if(parcelID===id && stateListRequest===request)await resolveFavoriteState(id,request,currentState);
-if(parcelID===id && stateListRequest===request)favoriteStatesPending=false;
-}
-async function loadMoreFavoriteStates(){
-const id=parcelID,cursor=favoriteStatesNext;
-if(!cursor || favoriteStatesPending || favoritePending)return;
-const request=++stateListRequest;favoriteStatesPending=true;favoriteStatesError='';
-try {const res=await fetch(`/api/me/crm/board?cursor=${encodeURIComponent(cursor)}`);if(!res.ok)throw Error();const data:{states:LeadState[];next:string}=await res.json();if(parcelID!==id || request!==stateListRequest || favoriteStatesNext!==cursor)return;favoriteStates=[...favoriteStates.filter(s=>!data.states.some(p=>p.id===s.id)),...data.states];favoriteStatesNext=data.next || '';if(data.states.some(s=>s.id===favorite?.state_id))favoriteStateError='';}
-catch {if(parcelID===id && request===stateListRequest && favoriteStatesNext===cursor)favoriteStatesError='Could not load more states. Retry.'}
-finally {if(parcelID===id && request===stateListRequest)favoriteStatesPending=false}
-}
-async function retryFavoriteStates(){
-if(favoriteStatesPending || favoritePending || !favorite || (!favoriteFirstPageFailed && !favoriteStateError))return;
-await readFavoriteStates(parcelID,favorite.state_id);
-}
-async function saveFavorite(){
-const id=parcelID,request=++favoriteRequest,revision=favorite?.revision;
-invalidateStateList();favoritePending=true;favoriteStatus='Saving favorite…';
-try {const res=await fetch(`/api/me/favorites/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(revision ? {revision} : {})});if(!res.ok)throw Error(res.status===409?'Favorite changed. Reload and retry.':'Could not save favorite.');const data:Favorite=await res.json();if(parcelID!==id || favoriteRequest!==request)return;favorite=data;favoriteStatus='Favorite saved.';await readFavoriteStates(id,data.state_id)}
-catch(e){if(parcelID===id && favoriteRequest===request)favoriteStatus=String(e)}
-finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
-}
-async function moveFavoriteState(state_id:string,select:HTMLSelectElement){
-const id=parcelID,revision=favorite?.revision;
-if(!revision || !state_id || state_id===favorite?.state_id)return;
-const request=++favoriteRequest;invalidateStateList();favoritePending=true;favoriteStatus='Changing state…';
-try {const res=await fetch(`/api/me/favorites/${id}/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state_id,revision})});
-if(!res.ok){
-if(res.status===409){const current=await fetch(`/api/me/favorites/${id}`);if(current.ok){const data:Favorite=await current.json();if(parcelID===id && favoriteRequest===request){favorite=data;await readFavoriteStates(id,data.state_id);await tick();select.value=data.state_id}}}
-throw Error(res.status===409?'Another tab changed this parcel. Reload and retry.':'Could not change state.');
-}
-const data:Favorite=await res.json();if(parcelID===id && favoriteRequest===request){favorite=data;await resolveFavoriteState(id,stateListRequest,data.state_id);favoriteStatus='State changed.'}}
-catch(e){if(parcelID===id && favoriteRequest===request){select.value=favorite?.state_id ?? '';favoriteStatus=String(e)}}
-finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
+async function toggleFavorite(){
+ if(favoritePending)return;
+ if(favoriteStatus==='Favorite status unavailable.'){void readFavorite(parcelID);return;}
+ const id=parcelID,request=++favoriteRequest,revision=favorite?.revision,removing=!!favorite?.favorite;
+ favoritePending=true;favoriteStatus='';
+ try {
+  const res=await fetch(`/api/me/favorites/${id}`,{method:removing?'DELETE':'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(revision ? {revision} : {})});
+  if(!res.ok){if(res.status===409){const current=await fetch(`/api/me/favorites/${id}`);if(current.ok){const data:Favorite=await current.json();if(parcelID===id && favoriteRequest===request)favorite=data}}
+   throw Error(res.status===409?'Favorite changed in another tab. Retry.':removing?'Could not remove favorite.':'Could not save favorite.');}
+  if(parcelID!==id || favoriteRequest!==request)return;
+  if(removing){toaster.dismiss();favorite=await res.json();favoriteStatus='Favorite removed. Your lead state and history are retained.'}
+  else {favorite=await res.json();toaster.dismiss();toaster.create({title:'Parcel saved',description:'Added to your leads board.',type:'success',duration:8000})}
+ }catch(e){if(parcelID===id && favoriteRequest===request)favoriteStatus=String(e)}
+ finally{if(parcelID===id && favoriteRequest===request)favoritePending=false}
 }
 const currentResearch = $derived(research?.id === parcelID ? research : undefined);
 type ParcelSuggestion = { id: string; parcel_number: string | null; address: string | null };
@@ -312,7 +268,7 @@ const releaseDate = (value: string) => value.slice(0, 10);
 function inspectParcel(id: string, focus = false) {
   pendingParcelFocus = focus ? id : '';
   parcelFocusError = false;
-  if (parcelID !== id) research = undefined;
+  if (parcelID !== id) { research = undefined; toaster.dismiss(); }
   parcelID = id;
   void readFavorite(id);
   panelOpen = true;
@@ -420,7 +376,7 @@ return () => task.abort();
   <meta name="description" content="Select a county, then inspect its parcels at closer map levels." />
 </svelte:head>
 <div class="app">
-  <header><a class="brand" href="/">▧ <span>landman</span></a><a href="/favorites" style="margin-left:24px;color:#93c5fd">Favorites</a></header>
+  <header><a class="brand" href="/">▧ <span>landman</span></a><a href="/leads" class="leads-nav">Leads</a></header>
   <main aria-label="Parcel discovery">
     <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} {parcelFocus} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={(jurisdiction ? jurisdictionMap : overlays.zoning) ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if !parcelView && filterCount > 0 && selected.status === 'configured'}{@render countySummary()}{/if}
@@ -538,7 +494,7 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <div class="detail-editor favorite-actions"><button class="btn btn-sm" onclick={saveFavorite} disabled={favorite?.favorite || favoritePending}>{favorite?.favorite ? 'Saved to favorites' : 'Save favorite'}</button><a href="/favorites">Open favorites board</a>{#if favorite?.favorite}<label class="favorite-state">Change state <select aria-label="Change saved parcel state" value={favorite.state_id} disabled={favoritePending || !favoriteStates.some(s=>s.id===favorite?.state_id)} onchange={(e)=>void moveFavoriteState(e.currentTarget.value,e.currentTarget)}>{#each favoriteStates as state}<option value={state.id}>{state.name}</option>{/each}</select></label>{#if favoriteStatesNext}<button class="btn btn-sm" disabled={favoriteStatesPending || favoritePending} onclick={loadMoreFavoriteStates}>Load more states</button>{/if}{#if favoriteFirstPageFailed || favoriteStateError}<button class="btn btn-sm" disabled={favoriteStatesPending || favoritePending} onclick={retryFavoriteStates}>Retry loading states</button>{/if}{#if favoriteStatesError}<p role="alert">{favoriteStatesError}</p>{/if}{#if favoriteStateError}<p role="alert">{favoriteStateError}</p>{/if}{/if}<p role="status">{favoriteStatus}</p>{#if favorite?.excluded}<p>Excluded: {favorite.exclusion_reason}</p>{/if}</div>
+            <div class="favorite-star-row"><button class="favorite-star" class:active={favorite?.favorite} aria-label={favoriteStatus==='Favorite status unavailable.'?'Retry favorite status':favorite?.favorite ? 'Remove favorite' : 'Favorite parcel'} aria-pressed={!!favorite?.favorite} onclick={toggleFavorite} disabled={favoritePending} title={favorite?.favorite?'Remove favorite':'Favorite parcel'}>★</button>{#if favoriteStatus}<p role={favoriteStatus.startsWith('Error') || favoriteStatus.includes('unavailable') ? 'alert':'status'}>{favoriteStatus}</p>{/if}</div>
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
@@ -601,6 +557,7 @@ return () => task.abort();
     <a class="coverage-link" href={`/coverage?county=${selectedId}`}>County coverage</a>
   </main>
 </div>
+<Toast.Group {toaster} class="favorite-toasts">{#snippet children(toast)}<Toast toast={toast} class="favorite-toast"><Toast.Title>Parcel saved</Toast.Title><Toast.Description>Added to your leads board.</Toast.Description><Toast.ActionTrigger onclick={() => {window.location.href='/leads'}}>View board</Toast.ActionTrigger><Toast.CloseTrigger aria-label="Dismiss notification">×</Toast.CloseTrigger></Toast>{/snippet}</Toast.Group>
 <style>
 h1 { font-size: 19px; font-weight: 650; }
 .results .pagination { margin-top: auto; }
@@ -645,7 +602,8 @@ h1 { font-size: 19px; font-weight: 650; }
 @media (max-width: 900px) { .map-controls { right: 65px; max-width: 440px; } }
 
 
-.favorite-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.favorite-state { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.favorite-state select { background: #303438; color: #eee; border: 1px solid #88939c; min-height: 36px; max-width: 100%; }
+.favorite-star-row{display:flex;align-items:center;gap:10px;padding:4px 8px}.favorite-star{min-width:42px;min-height:42px;font-size:25px;color:var(--muted);border:0;background:transparent;cursor:pointer}.favorite-star.active{color:#f5bd4f}.favorite-star-row p{font-size:11px;color:var(--muted)}.leads-nav{color:var(--color-primary-300);font-size:13px;font-weight:650}:global(.favorite-toasts){position:fixed;bottom:76px;right:350px;z-index:20;max-width:min(360px,calc(100vw - 40px))}:global(.favorite-toast){background:var(--color-surface-900);border:1px solid var(--border);padding:16px;border-radius:9px;box-shadow:0 12px 35px #0009;animation:none!important;transition:none!important;display:grid;gap:8px;font-size:13px;color:#f2f4f6!important}:global(.favorite-toast [data-part=title]),:global(.favorite-toast [data-part=description]){color:#e0e5e9!important}:global(.favorite-toast button){min-height:40px;color:var(--color-primary-300);background:#304052;border-radius:5px;text-align:center}
+
+
+@media(max-width:800px){:global(.favorite-toasts){right:16px;bottom:72px}}
 </style>
