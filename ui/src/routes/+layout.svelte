@@ -1,13 +1,18 @@
 <script lang="ts">
   import { onMount, type Snippet } from 'svelte';
+  import { Avatar, Menu } from '@skeletonlabs/skeleton-svelte';
+  import Brand from '../lib/Brand.svelte';
+  import { page } from '$app/state';
   import '../style.css';
 
   let { children }: { children: Snippet } = $props();
-  type User = { id: string; email: string; name: string };
+  type User = { id: string; email: string; name: string; profile_image_url?: string };
   type Access = { kind: 'loading' } | { kind: 'signed-out' } | { kind: 'unavailable' } | { kind: 'signed-in'; user: User };
   let access = $state<Access>({ kind: 'loading' });
   let busy = $state(false);
   let message = $state('');
+  let menuOpen = $state(false);
+  const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() ?? '').join('') || '?';
   const loginErrors: Record<string, string> = {
     not_allowed: 'This Google account is not approved for the private alpha.',
     invalid_login: 'The login could not be verified. Start again.',
@@ -23,21 +28,24 @@
       if (!response.ok) throw new Error('Session unavailable');
       const user = await response.json();
       if (typeof user.id !== 'string' || typeof user.email !== 'string' || typeof user.name !== 'string') throw new Error('Invalid session');
-      access = { kind: 'signed-in', user };
+      access = { kind: 'signed-in', user: { ...user, profile_image_url: typeof user.profile_image_url === 'string' ? user.profile_image_url : '' } };
     } catch {
       access = { kind: 'unavailable' };
     }
   }
 
   async function logout() {
+    if (busy) return;
     busy = true;
     message = '';
     try {
       const response = await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
       if (!response.ok) throw new Error('Logout failed');
+      menuOpen = false;
       access = { kind: 'signed-out' };
     } catch {
       message = 'Sign-out failed. Try again.';
+      menuOpen = true;
     } finally { busy = false; }
   }
 
@@ -54,13 +62,26 @@
 </script>
 
 {#if access.kind === 'signed-in'}
+  <header class="operator-header">
+    <Brand />
+    <nav aria-label="Main navigation"><a href={page.url.pathname === '/leads' ? '/' : '/leads'}>{page.url.pathname === '/leads' ? 'Parcels' : 'Leads'}</a></nav>
+    <Menu open={menuOpen} onOpenChange={(details) => menuOpen = details.open} onSelect={(details) => { if (details.value === 'signout') void logout(); }}>
+      <Menu.Trigger class="account-trigger" aria-label="Account menu" aria-expanded={menuOpen}>
+        <Avatar class="account-avatar"><Avatar.Image src={access.user.profile_image_url || undefined} alt="" referrerpolicy="no-referrer" /><Avatar.Fallback>{initials(access.user.name)}</Avatar.Fallback></Avatar>
+      </Menu.Trigger>
+      <Menu.Positioner><Menu.Content class="account-menu">
+        <div class="account-identity"><strong>{access.user.name}</strong><span>{access.user.email}</span></div>
+        <Menu.Separator />
+        <Menu.Item value="signout" closeOnSelect={false} disabled={busy}>{busy ? 'Signing out…' : 'Sign out'}</Menu.Item>
+        {#if message}<p role="alert" class="account-error">{message}</p>{/if}
+      </Menu.Content></Menu.Positioner>
+    </Menu>
+  </header>
   {@render children()}
-  <div class="account-controls" aria-label="Signed-in account"><span>{access.user.email}</span><button class="btn btn-sm preset-outlined-surface-300-700 bg-surface-900" onclick={logout} disabled={busy}>{busy ? 'Signing out…' : 'Sign out'}</button></div>
-  {#if message}<p class="account-error" role="alert">{message}</p>{/if}
 {:else}
   <main class="login-screen">
     <section class="login-card" aria-label="Application access">
-      <p class="login-brand">landman</p>
+      <Brand />
       <h1>Private alpha</h1>
       {#if access.kind === 'loading'}
         <p role="status">Checking your session…</p>
@@ -80,16 +101,20 @@
 <style>
   .login-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
   .login-card { width: min(410px, 100%); padding: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
-  .login-brand { color: #93c5fd; font-size: 25px; font-weight: 700; margin: 0 0 28px; }
   h1 { font-size: 24px; font-weight: 600; margin: 0; }
   p { line-height: 1.6; }
   .login-card > p { margin: 16px 0; }
-  .login-card > .login-brand { margin: 0 0 28px; }
+  .login-card > :global(.brand) { width: fit-content; margin: 0 0 28px; }
   .google-signin { display: inline-flex; margin: 24px 0; border-radius: 4px; }
   .google-signin img { display: block; width: 180px; height: 40px; }
-  .account-controls { position: fixed; top: 6px; right: 12px; height: 40px; z-index: 8; display: flex; align-items: center; gap: 12px; background: var(--app-header); font-size: 12px; }
-  .account-controls span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-  .account-controls button { min-height: 36px; }
-  .account-error { position: fixed; top: 55px; right: 12px; padding: 12px; z-index: 8; background: var(--surface); border: 1px solid #edba71; }
-  @media (max-width: 900px) { .account-controls span { max-width: 150px; } }
+  .operator-header { gap: 24px; }
+  .operator-header nav { margin-right: auto; font-size: 13px; }
+  .operator-header nav a { color: var(--color-surface-100); text-decoration: none; }
+  :global(.account-trigger) { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+  :global(.account-avatar) { display: grid; place-items: center; width: 36px; height: 36px; overflow: hidden; border-radius: 50%; background: var(--color-primary-700); color: white; font-size: 12px; font-weight: 700; }
+  :global(.account-avatar img) { width: 100%; height: 100%; object-fit: cover; }
+  :global(.account-menu) { min-width: 210px; max-width: min(300px, calc(100vw - 24px)); padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px #0008; z-index: 20; }
+  .account-identity { display: flex; flex-direction: column; gap: 2px; padding: 8px; font-size: 13px; overflow-wrap: anywhere; }
+  .account-identity span { font-size: 11px; color: var(--muted); }
+  .account-error { padding: 8px; color: #fbbf74; font-size: 12px; }
 </style>

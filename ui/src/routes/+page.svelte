@@ -1,6 +1,6 @@
 <script lang="ts">
 import { onMount, tick } from 'svelte';
-import { Tabs } from '@skeletonlabs/skeleton-svelte';
+import { Tabs, Toast, createToaster } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import { detailGroups, detailFields, defaultDetailFields, parseDetailFields, type DetailField } from '../lib/detailGroups';
 import ParcelMap, { jurisdictionColor, zoningColor } from '../lib/ParcelMap.svelte';
@@ -52,6 +52,56 @@ const layerQuery = $derived(parcelView && viewport ? mapLayerQuery(viewport) : '
 let parcels = $state<ParcelShape[]>([]);
 let parcelError = $state('');
 let parcelID = $state('');
+type Favorite = {revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string};
+let favorite = $state<Favorite|null>(null);
+let favoriteStatus = $state('');
+let favoriteRequest = 0;
+let favoriteRead = $state<'loading'|'ready'|'failed'>('loading');
+let favoritePending = $state(false);
+const toaster = createToaster({placement:'bottom-end',overlap:true});
+async function fetchFavorite(id:string):Promise<Favorite|null>{
+ const res=await fetch(`/api/me/favorites/${id}`);
+ if(res.status===404)return null;
+ if(!res.ok)throw Error('Favorite status unavailable.');
+ const data:Favorite=await res.json();
+ if(typeof data?.favorite!=='boolean' || !Number.isSafeInteger(data.revision) || data.revision<1)throw Error('Invalid favorite status.');
+ return data;
+}
+async function readFavorite(id:string){
+ const request=++favoriteRequest;
+ favorite=null;favoriteStatus='';favoriteRead='loading';favoritePending=false;
+ const owned=()=>parcelID===id && favoriteRequest===request;
+ try {
+  const data=await fetchFavorite(id);
+  if(!owned())return;
+  favorite=data;favoriteRead='ready';
+ }catch {if(owned()){favoriteRead='failed';favoriteStatus='Favorite status unavailable.'}}
+}
+async function toggleFavorite(){
+ if(favoritePending || favoriteRead==='loading')return;
+ if(favoriteRead==='failed'){void readFavorite(parcelID);return;}
+ const id=parcelID,request=++favoriteRequest,revision=favorite?.revision,removing=!!favorite?.favorite;
+ const owned=()=>parcelID===id && favoriteRequest===request;
+ favoritePending=true;favoriteStatus='';
+ try {
+  const res=await fetch(`/api/me/favorites/${id}`,{method:removing?'DELETE':'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(revision ? {revision} : {})});
+  if(!owned())return;
+  if(!res.ok){
+   if(res.status===409){
+    favoriteRead='loading';
+    try {const current=await fetchFavorite(id);if(!owned())return;favorite=current;favoriteRead='ready';}
+    catch {if(!owned())return;favoriteRead='failed';throw Error('Favorite changed in another tab. Status unavailable. Retry favorite status.');}
+   }
+   throw Error(res.status===409?'Favorite changed in another tab. Retry.':removing?'Could not remove favorite.':'Could not save favorite.');
+  }
+  const data:Favorite=await res.json();
+  if(!owned())return;
+  favorite=data;toaster.dismiss();
+  if(removing)favoriteStatus='Favorite removed. Your lead state and history are retained.';
+  else toaster.create({title:'Parcel saved',description:'Added to your leads board.',type:'success',duration:8000});
+ }catch(e){if(owned())favoriteStatus=String(e)}
+ finally{if(owned())favoritePending=false}
+}
 const currentResearch = $derived(research?.id === parcelID ? research : undefined);
 type ParcelSuggestion = { id: string; parcel_number: string | null; address: string | null };
 let finderText = $state('');
@@ -242,8 +292,9 @@ const releaseDate = (value: string) => value.slice(0, 10);
 function inspectParcel(id: string, focus = false) {
   pendingParcelFocus = focus ? id : '';
   parcelFocusError = false;
-  if (parcelID !== id) research = undefined;
+  if (parcelID !== id) { research = undefined; toaster.dismiss(); }
   parcelID = id;
+  void readFavorite(id);
   panelOpen = true;
 }
 
@@ -335,6 +386,8 @@ onMount(() => {
   }).catch(() => { if (!task.signal.aborted) { groups = [...defaultDetailFields]; draftFields = [...groups]; preferenceStatus = 'Saved details unavailable. Showing default fields; changes cannot be saved until reconnected.'; } });
   const county = counties.find((county) => county.id === new URL(window.location.href).searchParams.get('county'));
   if (county) selectCounty(county.id);
+  const linkedParcel = new URL(window.location.href).searchParams.get('parcel');
+  if (linkedParcel && /^[0-9a-f-]{36}$/i.test(linkedParcel)) { selectCounty('37179'); inspectParcel(linkedParcel, true); }
 return () => task.abort();
 });
 </script>
@@ -347,7 +400,6 @@ return () => task.abort();
   <meta name="description" content="Select a county, then inspect its parcels at closer map levels." />
 </svelte:head>
 <div class="app">
-  <header><a class="brand" href="/">▧ <span>landman</span></a></header>
   <main aria-label="Parcel discovery">
     <section class="map-area" aria-label="County map"><ParcelMap selected={selectedId} {focusRequest} {parcelFocus} onselect={selectCounty} ondetail={(value) => detail = value} onviewport={(value) => viewport = value} onparcel={inspectParcel} onzoning={inspectZoning} parcels={parcelGeometry} flood={floodGeometry} zoning={(jurisdiction ? jurisdictionMap : overlays.zoning) ?? emptyShapes} roads={overlays.roads ?? emptyShapes} {parcelID} /></section>
     {#if !parcelView && filterCount > 0 && selected.status === 'configured'}{@render countySummary()}{/if}
@@ -465,7 +517,8 @@ return () => task.abort();
           {#if parcelID}
           <section class="results" id="parcel-panel" aria-label="Parcel evidence">
             <div class="results-heading"><button class="btn btn-sm" aria-label="Close parcel details" onclick={() => parcelID = ''}>×</button><h1>Parcel evidence</h1></div>
-            <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
+            <div class="favorite-star-row"><button class="favorite-star" class:active={favorite?.favorite} aria-label={favoriteRead==='failed'?'Retry favorite status':favorite?.favorite ? 'Remove favorite' : 'Favorite parcel'} aria-pressed={!!favorite?.favorite} onclick={toggleFavorite} disabled={favoritePending || favoriteRead==='loading'} title={favoriteRead==='failed'?'Retry favorite status':favorite?.favorite?'Remove favorite':'Favorite parcel'}>★</button>{#if favoriteStatus}<p role={favoriteStatus.startsWith('Error') || favoriteStatus.includes('unavailable') ? 'alert':'status'}>{favoriteStatus}</p>{/if}</div>
+<Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
                 <Tabs.Trigger class="btn" value="research">Research links</Tabs.Trigger>
@@ -527,6 +580,7 @@ return () => task.abort();
     <a class="coverage-link" href={`/coverage?county=${selectedId}`}>County coverage</a>
   </main>
 </div>
+<Toast.Group {toaster} class="favorite-toasts">{#snippet children(toast)}<Toast toast={toast} class="favorite-toast"><Toast.Title>Parcel saved</Toast.Title><Toast.Description>Added to your leads board.</Toast.Description><Toast.ActionTrigger onclick={() => {window.location.href='/leads'}}>View board</Toast.ActionTrigger><Toast.CloseTrigger aria-label="Dismiss notification">×</Toast.CloseTrigger></Toast>{/snippet}</Toast.Group>
 <style>
 h1 { font-size: 19px; font-weight: 650; }
 .results .pagination { margin-top: auto; }
@@ -569,4 +623,10 @@ h1 { font-size: 19px; font-weight: 650; }
 .coverage-link { position: absolute; bottom: 12px; right: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; color: #93c5fd; }
 :global(input:disabled), :global(select:disabled), :global(button:disabled) { opacity: .6; cursor: not-allowed; }
 @media (max-width: 900px) { .map-controls { right: 65px; max-width: 440px; } }
+
+
+.favorite-star-row{display:flex;align-items:center;gap:10px;padding:4px 8px}.favorite-star{min-width:42px;min-height:42px;font-size:25px;color:var(--muted);border:0;background:transparent;cursor:pointer}.favorite-star.active{color:#f5bd4f}.favorite-star-row p{font-size:11px;color:var(--muted)}:global(.favorite-toasts){position:fixed;bottom:76px;right:350px;z-index:20;max-width:min(360px,calc(100vw - 40px))}:global(.favorite-toast){background:var(--color-surface-900);border:1px solid var(--border);padding:16px;border-radius:9px;box-shadow:0 12px 35px #0009;animation:none!important;transition:none!important;display:grid;gap:8px;font-size:13px;color:#f2f4f6!important}:global(.favorite-toast [data-part=title]),:global(.favorite-toast [data-part=description]){color:#e0e5e9!important}:global(.favorite-toast button){min-height:40px;color:var(--color-primary-300);background:#304052;border-radius:5px;text-align:center}
+
+
+@media(max-width:800px){:global(.favorite-toasts){right:16px;bottom:72px}}
 </style>

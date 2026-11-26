@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -189,6 +190,90 @@ func (f *fixture) login(t *testing.T, overrides map[string]any) *http.Cookie {
 	return session
 }
 
+func TestProfilePhotoClaimAndSession(t *testing.T) {
+	f := setup(t)
+	first := f.login(t, map[string]any{"picture": "https://lh3.googleusercontent.com/a/fixture"})
+	var user User
+	if err := json.Unmarshal(f.request("GET", "/api/me", first).Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	if user.ProfileImageURL != "https://lh3.googleusercontent.com/a/fixture" {
+		t.Fatalf("verified picture missing: %+v", user)
+	}
+	other := f.login(t, map[string]any{"sub": "other-subject", "email": "second@example.test"})
+	var isolated User
+	json.Unmarshal(f.request("GET", "/api/me", other).Body.Bytes(), &isolated)
+	if isolated.ProfileImageURL != "" {
+		t.Fatal("another user's photo leaked")
+	}
+	updated := f.login(t, map[string]any{"picture": "javascript:alert(1)"})
+	user = User{}
+	json.Unmarshal(f.request("GET", "/api/me", updated).Body.Bytes(), &user)
+	if user.ProfileImageURL != "" {
+		t.Fatal("invalid updated photo persisted")
+	}
+	user = User{}
+	json.Unmarshal(f.request("GET", "/api/me", first).Body.Bytes(), &user)
+	if user.ProfileImageURL != "" {
+		t.Fatal("current session did not see profile update")
+	}
+}
+func TestCheckSchemaResolvedUsersColumn(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	schema := fmt.Sprintf("auth_photo_check_%d", time.Now().UnixNano())
+	if _, err := f.pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
+	if _, err := f.pool.Exec(ctx, "CREATE TABLE "+schema+".app_users AS SELECT id, google_subject, email, display_name, parcel_detail_fields FROM public.app_users WITH NO DATA"); err != nil {
+		t.Fatal(err)
+	}
+	config := f.pool.Config()
+	config.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
+	shadow, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shadow.Close()
+	if err := CheckSchema(ctx, shadow); err == nil || !strings.Contains(err.Error(), "migration 49") {
+		t.Fatalf("migration 48 shadow should fail before serving auth: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, "ALTER TABLE "+schema+".app_users ADD COLUMN profile_image_url text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSchema(ctx, shadow); err != nil {
+		t.Fatalf("restored migration 49 column rejected: %v", err)
+	}
+}
+
+func TestOptionalPictureMetadata(t *testing.T) {
+	f := setup(t)
+	for _, picture := range []any{nil, 42, true, map[string]any{"url": "https://lh3.googleusercontent.com/a/fixture"}, []string{"https://lh3.googleusercontent.com/a/fixture"}} {
+		session := f.login(t, map[string]any{"picture": picture})
+		var user User
+		if err := json.Unmarshal(f.request("GET", "/api/me", session).Body.Bytes(), &user); err != nil || user.ProfileImageURL != "" {
+			t.Fatalf("optional picture %v blocked login or leaked: %+v %v", picture, user, err)
+		}
+	}
+	f.login(t, map[string]any{"picture": "https://lh3.googleusercontent.com/a/fixture"})
+	state, cookie, code := f.attempt(t, map[string]any{"email": 42, "picture": nil})
+	callback := f.request("GET", "/auth/google/callback?state="+state+"&code="+code, cookie)
+	if callback.Header().Get("Location") != "/?auth_error=invalid_login" {
+		t.Fatalf("non-string identity accepted: %s", callback.Header().Get("Location"))
+	}
+}
+
+func TestProfileImageURL(t *testing.T) {
+	for _, raw := range []string{"", "http://lh3.googleusercontent.com/a", "https://lh3.googleusercontent.com.evil.test/a", "https://user@lh3.googleusercontent.com/a", "https://lh3.googleusercontent.com:443/a", "https://lh3.googleusercontent.com/a#secret", "https://lh3.googleusercontent.com/a?token=secret", "data:image/png;base64,foo", strings.Repeat("a", 2049)} {
+		if got := profileImageURL(raw); got != "" {
+			t.Errorf("accepted unsafe photo URL %q", raw)
+		}
+	}
+	if got := profileImageURL("https://lh3.googleusercontent.com/a/fixture"); got == "" {
+		t.Fatal("Google photo rejected")
+	}
+}
 func TestLoginSessions(t *testing.T) {
 	f := setup(t)
 	first := f.login(t, nil)
@@ -362,31 +447,64 @@ func TestAuthMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := strings.Split(string(migration), "-- +goose Down")
-	tx, err := f.pool.Begin(context.Background())
+	if len(parts) != 2 {
+		t.Fatal("auth migration must have one Up and one Down section")
+	}
+	ctx := context.Background()
+	var referencesBefore int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE contype='f' AND confrelid='public.app_users'::regclass`).Scan(&referencesBefore); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
-	if _, err := tx.Exec(context.Background(), parts[1]); err != nil {
+	defer tx.Rollback(ctx)
+	schema := fmt.Sprintf("auth_migration_%d", time.Now().UnixNano())
+	if _, err := tx.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), strings.TrimPrefix(parts[0], "-- +goose Up")); err != nil {
+	if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+schema+", pg_catalog"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), "INSERT INTO app_users(google_subject,email,display_name) VALUES('subject','buyer@example.test','Buyer')"); err != nil {
+	up := strings.TrimPrefix(parts[0], "-- +goose Up")
+	if _, err := tx.Exec(ctx, up); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), "INSERT INTO auth_sessions(token_hash,user_id,expires_at) SELECT decode(repeat('ab',32),'hex'),id,now()+interval '1 day' FROM app_users"); err != nil {
+	if _, err := tx.Exec(ctx, parts[1]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), "DELETE FROM app_users"); err != nil {
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO app_users(google_subject,email,display_name) VALUES('subject','buyer@example.test','Buyer')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO auth_sessions(token_hash,user_id,expires_at) SELECT decode(repeat('ab',32),'hex'),id,now()+interval '1 day' FROM app_users"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM app_users"); err != nil {
 		t.Fatal(err)
 	}
 	var count int
-	if err := tx.QueryRow(context.Background(), "SELECT count(*) FROM auth_sessions").Scan(&count); err != nil || count != 0 {
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM auth_sessions").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
 		t.Fatal("user delete did not revoke sessions")
 	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var referencesAfter int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE contype='f' AND confrelid='public.app_users'::regclass`).Scan(&referencesAfter); err != nil {
+		t.Fatal(err)
+	}
+	if referencesAfter != referencesBefore {
+		t.Fatalf("public account references changed: before %d, after %d", referencesBefore, referencesAfter)
+	}
 }
+
 func TestProtectedParcelRoutes(t *testing.T) {
 	f := setup(t)
 	called := 0

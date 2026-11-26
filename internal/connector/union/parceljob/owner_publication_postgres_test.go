@@ -109,6 +109,18 @@ func TestOwnerLabelsCanonicalPublicationReplayAndConcurrentBackfill(t *testing.T
 	if name != "ACME LLC" || state != "SC" || mailing != "yes" || entity != "matched" {
 		t.Fatalf("canonical labels: %s %s %s %s", name, state, mailing, entity)
 	}
+	// A canonical source refresh must preserve private favorite identity.
+	var account, stateID string
+	if err := pool.QueryRow(ctx, `INSERT INTO app_users(google_subject,email,display_name) VALUES($1,$2,'Fixture') RETURNING id::text`, pid, pid+"@example.test").Scan(&account); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(context.Background(), `DELETE FROM app_users WHERE id=$1`, account)
+	if err := pool.QueryRow(ctx, `INSERT INTO user_lead_states(user_id,name,position) VALUES($1,'New',0) RETURNING id::text`, account).Scan(&stateID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_parcels(user_id,parcel_id,state_id) VALUES($1,$2,$3)`, account, parcelID, stateID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM parcel_owner_labels WHERE parcel_id=$1`, parcelID); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +189,20 @@ func TestOwnerLabelsCanonicalPublicationReplayAndConcurrentBackfill(t *testing.T
 		t.Fatal("backfill timed out waiting for parcel lock", ctx.Err())
 	}
 	read()
+	var retainedID string
+	var favorite bool
+	if err := pool.QueryRow(ctx, `SELECT parcel_id::text,favorite FROM user_parcels WHERE user_id=$1`, account).Scan(&retainedID, &favorite); err != nil || retainedID != parcelID || !favorite {
+		t.Fatalf("canonical refresh lost private favorite %s %v %v", retainedID, favorite, err)
+	}
 	if name != "PERSON" || state != "NC" || mailing != "no" || entity != "not_detected" {
 		t.Fatalf("backfill and refresh diverged: %s %s %s %s", name, state, mailing, entity)
 	}
+	// Losing the current source-evidence link must not erase the user's private record.
+	if _, err := pool.Exec(ctx, `DELETE FROM parcel_evidence_current WHERE source_parcel_id=$1`, pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT parcel_id::text FROM user_parcels WHERE user_id=$1`, account).Scan(&retainedID); err != nil || retainedID != parcelID {
+		t.Fatalf("missing source evidence lost private favorite %s %v", retainedID, err)
+	}
+
 }

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustinMonty20/landman/internal/parcelcrm"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,9 +28,10 @@ const sessionAge = 7 * 24 * time.Hour
 const loginAge = 10 * time.Minute
 
 type User struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
+	ID              string `json:"id"`
+	Email           string `json:"email"`
+	Name            string `json:"name"`
+	ProfileImageURL string `json:"profile_image_url,omitempty"`
 }
 
 type server struct {
@@ -103,6 +105,8 @@ func newServer(ctx context.Context, pool *pgxpool.Pool, c Config, issuer string)
 	s.mux.HandleFunc("GET /auth/google/callback", s.callback)
 	s.mux.HandleFunc("POST /auth/logout", s.logout)
 	s.mux.HandleFunc("GET /api/me", s.me)
+	s.mux.HandleFunc("/api/me/crm/", s.crm)
+	s.mux.HandleFunc("/api/me/favorites/", s.crm)
 	s.mux.HandleFunc("GET /api/me/parcel-detail-fields", s.getParcelDetailFields)
 	s.mux.HandleFunc("PUT /api/me/parcel-detail-fields", s.putParcelDetailFields)
 	s.mux.HandleFunc("GET /api/me/parcel-owner/{id}", s.getParcelOwner)
@@ -225,11 +229,12 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var claims struct {
-		Email           string `json:"email"`
-		Verified        bool   `json:"email_verified"`
-		Name            string `json:"name"`
-		Nonce           string `json:"nonce"`
-		AuthorizedParty string `json:"azp"`
+		Email           string          `json:"email"`
+		Verified        bool            `json:"email_verified"`
+		Name            string          `json:"name"`
+		Picture         json.RawMessage `json:"picture"`
+		Nonce           string          `json:"nonce"`
+		AuthorizedParty string          `json:"azp"`
 	}
 	if err := identity.Claims(&claims); err != nil || identity.Subject == "" || !claims.Verified || subtle.ConstantTimeCompare(digest(claims.Nonce), nonceHash) != 1 || (claims.AuthorizedParty != "" && claims.AuthorizedParty != s.oauth.ClientID) {
 		s.fail(w, r, "invalid_login")
@@ -248,8 +253,8 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var id string
-	err = tx.QueryRow(r.Context(), `INSERT INTO app_users(google_subject,email,display_name) VALUES($1,$2,$3)
- ON CONFLICT(google_subject) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,last_login_at=now() RETURNING id`, identity.Subject, email, claims.Name).Scan(&id)
+	err = tx.QueryRow(r.Context(), `INSERT INTO app_users(google_subject,email,display_name,profile_image_url) VALUES($1,$2,$3,$4)
+ ON CONFLICT(google_subject) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,profile_image_url=excluded.profile_image_url,last_login_at=now() RETURNING id`, identity.Subject, email, claims.Name, profileImageURL(pictureString(claims.Picture))).Scan(&id)
 	if err == nil {
 		_, err = tx.Exec(r.Context(), "INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')", digest(session), id)
 	}
@@ -278,8 +283,8 @@ func (s *server) currentUser(r *http.Request) (User, error) {
 	if err != nil || !validToken(cookie.Value) {
 		return user, pgx.ErrNoRows
 	}
-	err = s.pool.QueryRow(r.Context(), `SELECT u.id,u.email,u.display_name FROM auth_sessions s
- JOIN app_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, digest(cookie.Value)).Scan(&user.ID, &user.Email, &user.Name)
+	err = s.pool.QueryRow(r.Context(), `SELECT u.id,u.email,u.display_name,u.profile_image_url FROM auth_sessions s
+ JOIN app_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, digest(cookie.Value)).Scan(&user.ID, &user.Email, &user.Name, &user.ProfileImageURL)
 	if err != nil {
 		return User{}, err
 	}
@@ -450,8 +455,39 @@ func CheckSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 	var column bool
-	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='app_users' AND column_name='parcel_detail_fields')").Scan(&column); err != nil || !column {
+	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('app_users') AND attname='parcel_detail_fields' AND NOT attisdropped)").Scan(&column); err != nil || !column {
 		return errors.New("missing parcel detail preferences migration")
 	}
+	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('app_users') AND attname='profile_image_url' AND NOT attisdropped)").Scan(&column); err != nil || !column {
+		return errors.New("missing profile_image_url on app_users; apply migration 49 before starting the API")
+	}
 	return nil
+}
+
+// crm passes the authenticated identity to the private workflow boundary.
+func (s *server) crm(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.detailUser(w, r)
+	if !ok {
+		return
+	}
+	(parcelcrm.Store{DB: s.pool}).Serve(w, r, parcelcrm.AccountID(user.ID), s.origin)
+}
+
+func pictureString(raw json.RawMessage) string {
+	var picture string
+	_ = json.Unmarshal(raw, &picture)
+	return picture
+}
+
+// Only Google-hosted HTTPS profile images from verified ID-token claims may reach the browser.
+// Missing or malformed pictures are optional and never block authentication.
+func profileImageURL(raw string) string {
+	if len(raw) == 0 || len(raw) > 2048 {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || u.Port() != "" || u.Opaque != "" || u.Hostname() != "lh3.googleusercontent.com" {
+		return ""
+	}
+	return u.String()
 }

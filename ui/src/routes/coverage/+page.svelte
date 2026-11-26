@@ -8,7 +8,6 @@ const selected = $derived(counties.find((county) => county.id === page.url.searc
   <meta name="description" content="County ingestion configuration and parcel display availability." />
 </svelte:head>
 <div class="app">
-  <header><a class="brand" href="/">▧ <span>landman</span></a></header>
   <main class="coverage-page" aria-label="County coverage">
     <div class="content">
       <a class="back" href={selected ? `/?county=${selected.id}` : '/'}>← Return to map</a>

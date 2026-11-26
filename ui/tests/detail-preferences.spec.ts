@@ -65,7 +65,7 @@ await expect(panel.getByRole('region', { name: 'Land and value' })).toContainTex
   await panel.getByRole('checkbox', { name: 'Septic field rating' }).uncheck();
   await panel.getByRole('checkbox', { name: 'Reported delinquent total' }).check();
   await panel.getByRole('button', { name: 'Save details' }).click();
-  await expect(panel.getByRole('status')).toContainText('saved');
+  await expect(panel.getByText('Detail fields saved.')).toBeVisible();
   await expect(panel.getByRole('region', { name: 'Tax and foreclosure' })).toBeVisible();
   await expect(panel.getByRole('region', { name: 'Ownership and sales' })).toContainText('County Owner');
   await expect(panel.getByRole('region', { name: 'Soil screening' })).toHaveCount(0);
