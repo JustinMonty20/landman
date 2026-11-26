@@ -102,7 +102,7 @@ test('switching parcels preserves drafts and blocks stale notes and stale writes
  await finder.fill('Switch');await page.getByRole('option',{name:'Switch A · APARCEL'}).click();
  await expect(scratch.getByRole('textbox',{name:'New note'})).toHaveValue('Draft for A');
 });
-test('a pending note load cannot replace a newly submitted note',async ({page})=>{
+test('a pending note load cannot replace a newly submitted note',async ({page},info)=>{
  await fixture(page);let release:(()=>void)|undefined;
  await page.route(/\/api\/me\/favorites\/[^/]+\/notes(?:\?.*)?$/,async route=>{
   if(route.request().method()==='GET')await new Promise<void>(resolve=>release=resolve);
@@ -116,6 +116,13 @@ test('a pending note load cannot replace a newly submitted note',async ({page})=
  release?.();
  await expect(scratch.getByRole('button',{name:'Add note'})).toBeEnabled();
  await expect(scratch.getByRole('textbox',{name:'New note'})).toHaveValue('Keep draft while loading');
+ await expect(scratch.getByText('No notes yet.',{exact:true})).toHaveCount(0);
+ await expect(scratch.getByText('New note',{exact:true})).toHaveCount(0);
+ const textbox=await scratch.getByRole('textbox',{name:'New note'}).boundingBox();
+ const add=await scratch.getByRole('button',{name:'Add note'}).boundingBox();
+ expect(textbox).not.toBeNull();expect(add).not.toBeNull();
+ expect(add!.y-(textbox!.y+textbox!.height)).toBeGreaterThanOrEqual(12);
+ await scratch.screenshot({path:info.outputPath('04-quiet-composer.png')});
 });
 test('failed create retries same ID; conflict preserves edit text',async ({page})=>{
  await fixture(page);let attempts:string[]=[],current=note('55555555-5555-4555-8555-555555555555',a,'Original');let created=false;

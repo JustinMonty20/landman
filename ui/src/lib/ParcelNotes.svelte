@@ -91,15 +91,14 @@ function date(value:string){return new Date(value).toLocaleString()}
 <section class="notes" aria-label="Private parcel scratchpad">
  <div class="section-heading"><h2>{mode==='timeline'?'Notes':'Private scratchpad'}</h2>{#if mode==='preview'}<a href={`/notes?parcel=${encodeURIComponent(parcel)}`}>Notes →</a>{/if}</div>
  <form class="new-note" onsubmit={(event)=>{event.preventDefault();void create()}}>
-  <label for="new-note">New note</label>
-  <textarea id="new-note" class="textarea" rows="2" value={drafts[parcel]??''} oninput={(e)=>drafts[parcel]=e.currentTarget.value} required></textarea>
+  <textarea id="new-note" aria-label="New note" class="textarea" rows="2" value={drafts[parcel]??''} oninput={(e)=>drafts[parcel]=e.currentTarget.value} required></textarea>
   {#if large(drafts[parcel]??'')}<span class="length-error" role="alert">Note is too long. Shorten it before saving.</span>{/if}
   <button class="btn btn-icon preset-filled-primary-500 note-icon" type="submit" aria-label="Add note" title="Add note" disabled={pending || loading || !drafts[parcel]?.trim() || large(drafts[parcel]??'')}>{@render icon('add')}</button>
  </form>
  {#if savedBeyondPage}<p role="status">Note saved. Load more notes to see it in chronological order.</p>{/if}
  {#if error}<p role="alert">{error}</p><button class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void load()}>Reload notes</button>{/if}
  {#if loading}<p role="status">Loading notes…</p>
- {:else if items.length===0 && !error}<p>No notes yet.</p>{/if}
+ {/if}
  <ul aria-label="Dated notes">
  {#each items as note (note.id)}
  <li><div class="note-heading"><p class="note-date"><time datetime={note.created_at}>{date(note.created_at)}</time>{#if note.updated_at!==note.created_at} · Edited <time datetime={note.updated_at}>{date(note.updated_at)}</time>{/if}</p>
@@ -123,5 +122,5 @@ function date(value:string){return new Date(value).toLocaleString()}
  {#if next && mode==='timeline'}<button class="btn btn-sm preset-outlined-surface-300-700" disabled={loading || pending} onclick={()=>void load(true)}>Load more notes</button>{/if}
 </section>
 <style>
-.notes{padding:12px;display:grid;gap:10px;font-size:13px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.notes h2{font-size:16px;font-weight:650}.section-heading a{color:var(--color-primary-300);font-weight:600;white-space:nowrap}.notes form{display:grid;gap:6px}.new-note{grid-template-columns:1fr auto;align-items:end}.new-note label,.new-note textarea,.length-error{grid-column:1 / -1}.notes textarea{width:100%;min-height:62px}.notes ul{display:grid;gap:8px;list-style:none;padding:0}.notes li{border:1px solid var(--border);border-radius:8px;padding:10px;overflow-wrap:anywhere}.note-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}.note-body{white-space:pre-wrap;margin-top:5px;line-height:1.45}.note-date{color:var(--muted);font-size:11px}.note-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}.confirm-label{font-size:11px;color:var(--color-surface-200)}.notes button{justify-self:start}.note-icon{width:40px;height:40px;display:grid;place-items:center;padding:0;cursor:pointer}.note-icon:focus-visible{outline:2px solid var(--color-primary-400);outline-offset:2px}.length-error{color:#fbbf74}
+.notes{padding:12px;display:grid;gap:10px;font-size:13px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.notes h2{font-size:16px;font-weight:650}.section-heading a{color:var(--color-primary-300);font-weight:600;white-space:nowrap}.notes form{display:grid;gap:6px}.notes .new-note{grid-template-columns:1fr auto;align-items:end;row-gap:12px}.new-note textarea,.length-error{grid-column:1 / -1}.notes textarea{width:100%;min-height:62px}.notes ul{display:grid;gap:8px;list-style:none;padding:0}.notes li{border:1px solid var(--border);border-radius:8px;padding:10px;overflow-wrap:anywhere}.note-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}.note-body{white-space:pre-wrap;margin-top:5px;line-height:1.45}.note-date{color:var(--muted);font-size:11px}.note-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}.confirm-label{font-size:11px;color:var(--color-surface-200)}.notes button{justify-self:start}.note-icon{width:40px;height:40px;display:grid;place-items:center;padding:0;cursor:pointer}.note-icon:focus-visible{outline:2px solid var(--color-primary-400);outline-offset:2px}.length-error{color:#fbbf74}
 </style>
