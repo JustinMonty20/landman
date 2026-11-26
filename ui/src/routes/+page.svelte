@@ -100,7 +100,7 @@ async function toggleFavorite(){
   if(!owned())return;
   favorite=data;toaster.dismiss();
   if(removing)favoriteStatus='Favorite removed. Your lead state and history are retained.';
-  else toaster.create({title:'Parcel saved',description:'Added to your leads board.',type:'success',duration:8000});
+  else toaster.create({title:'Parcel saved',description:'Added to your leads board.',type:'success',duration:5000});
  }catch(e){if(owned())favoriteStatus=String(e)}
  finally{if(owned())favoritePending=false}
 }
@@ -586,7 +586,7 @@ return () => task.abort();
     <a class="coverage-link" href={`/coverage?county=${selectedId}`}>County coverage</a>
   </main>
 </div>
-<Toast.Group {toaster} class="favorite-toasts">{#snippet children(toast)}<Toast toast={toast} class="favorite-toast"><Toast.Title>Parcel saved</Toast.Title><Toast.Description>Added to your leads board.</Toast.Description><Toast.ActionTrigger onclick={() => {window.location.href='/leads'}}>View board</Toast.ActionTrigger><Toast.CloseTrigger aria-label="Dismiss notification">×</Toast.CloseTrigger></Toast>{/snippet}</Toast.Group>
+<Toast.Group {toaster} class="favorite-toasts">{#snippet children(toast)}<Toast toast={toast} class="favorite-toast"><Toast.Title>Parcel saved</Toast.Title><Toast.Description>Added to your leads board.</Toast.Description><Toast.ActionTrigger onclick={() => {window.location.href='/leads'}}>View board</Toast.ActionTrigger><Toast.CloseTrigger class="favorite-toast-close" aria-label="Dismiss notification" title="Dismiss notification">×</Toast.CloseTrigger></Toast>{/snippet}</Toast.Group>
 <style>
 h1 { font-size: 19px; font-weight: 650; }
 .results .pagination { margin-top: auto; }
@@ -631,7 +631,7 @@ h1 { font-size: 19px; font-weight: 650; }
 @media (max-width: 900px) { .map-controls { right: 65px; max-width: 440px; } }
 
 
-.parcel-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}.parcel-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}.parcel-action{width:24px;height:24px;min-width:24px;min-height:24px;padding:0;color:var(--muted);border:0;background:transparent}.parcel-action:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.parcel-action svg{width:12px;height:12px}.favorite-star svg{width:17px;height:17px}.favorite-star.active{color:#f5bd4f}.favorite-status{padding:4px 15px;font-size:11px;color:var(--muted)}:global(.favorite-toasts){position:fixed;bottom:76px;right:350px;z-index:20;max-width:min(360px,calc(100vw - 40px))}:global(.favorite-toast){background:var(--color-surface-900);border:1px solid var(--border);padding:16px;border-radius:9px;box-shadow:0 12px 35px #0009;animation:none!important;transition:none!important;display:grid;gap:8px;font-size:13px;color:#f2f4f6!important}:global(.favorite-toast [data-part=title]),:global(.favorite-toast [data-part=description]){color:#e0e5e9!important}:global(.favorite-toast button){min-height:40px;color:var(--color-primary-300);background:#304052;border-radius:5px;text-align:center}
+.parcel-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}.parcel-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}.parcel-action{width:24px;height:24px;min-width:24px;min-height:24px;padding:0;color:var(--muted);border:0;background:transparent}.parcel-action:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.parcel-action svg{width:12px;height:12px}.favorite-star svg{width:17px;height:17px}.favorite-star.active{color:#f5bd4f}.favorite-status{padding:4px 15px;font-size:11px;color:var(--muted)}:global(.favorite-toasts){position:fixed;bottom:76px;right:350px;z-index:20;max-width:min(360px,calc(100vw - 40px))}:global(.favorite-toast){background:var(--color-surface-900);border:1px solid var(--border);padding:16px;border-radius:9px;box-shadow:0 12px 35px #0009;animation:none!important;transition:none!important;display:grid;gap:8px;font-size:13px;color:#f2f4f6!important}:global(.favorite-toast [data-part=title]),:global(.favorite-toast [data-part=description]){color:#e0e5e9!important}:global(.favorite-toast button){min-height:40px;color:var(--color-primary-300);background:#304052;border-radius:5px;text-align:center}:global(.favorite-toast [data-part=title]),:global(.favorite-toast [data-part=description]){padding-right:32px}:global(.favorite-toast .favorite-toast-close){position:absolute;top:4px;right:4px;display:grid;place-items:center;width:32px;height:32px;min-height:32px;padding:0;background:transparent;font-size:22px;line-height:1}:global(.favorite-toast .favorite-toast-close:focus-visible){outline:2px solid var(--color-primary-400);outline-offset:2px}
 
 
 @media(max-width:800px){:global(.favorite-toasts){right:16px;bottom:72px}}
