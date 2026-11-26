@@ -5,6 +5,7 @@ import '../../style.css';
 type State = { id:string; name:string; position:number; revision:number; count:number };
 type Card = { favorite?:boolean; parcel_id:string; parcel_number:string|null; address:string|null; state_id:string; revision:number; excluded:boolean; exclusion_reason:string; favorited_at:string };
 type Board = { states:State[]; default_state_id:string; revision:number; next:string };
+type CardPage = { items:Card[]; next:string };
 let board = $state<Board>();
 let cards = $state<Record<string,Card[]>>({});
 let next = $state<Record<string,string>>({});
@@ -28,24 +29,38 @@ let generation = 0;
 let pendingCards = $state<Record<string,boolean>>({});
 let pendingStates = $state(false);
 async function load() {
-const request=++generation;loading=true;loadErrors={columns:{}};pendingStates=false;pendingCards={};next={};cards={};board=undefined;
-try {const data=await api<Board>('/api/me/crm/board');if(request!==generation)return;board=data;await Promise.all(data.states.map(s=>loadCards(s.id,false,request)))}
-catch(e){if(request===generation)loadErrors.board=String(e)}finally{if(request===generation)loading=false}
+const request=++generation,hide=hideExcluded;loading=true;loadErrors={columns:{}};pendingStates=false;pendingCards={};
+try {
+ const data=await api<Board>('/api/me/crm/board');
+ if(request!==generation)return;
+ const pages=await Promise.allSettled(data.states.map(s=>readCards(s.id,hide)));
+ if(request!==generation)return;
+ const refreshedCards:Record<string,Card[]>={},refreshedNext:Record<string,string>={},errors:LoadErrors={columns:{}};
+ data.states.forEach((s,index)=>{
+  const page=pages[index];
+  if(page.status==='fulfilled'){refreshedCards[s.id]=page.value.items;refreshedNext[s.id]=page.value.next}
+  else {refreshedCards[s.id]=cards[s.id]??[];errors.columns[s.id]=String(page.reason)}
+ });
+ cards=refreshedCards;next=refreshedNext;board=data;loadErrors=errors;
+}catch(e){if(request===generation)loadErrors.board=String(e)}finally{if(request===generation)loading=false}
+}
+function readCards(id:string,hide:boolean,cursor=''):Promise<CardPage> {
+ const params=new URLSearchParams({limit:'20',hide_excluded:String(hide)});if(cursor)params.set('cursor',cursor);
+ return api<CardPage>(`/api/me/crm/board/${id}?${params}`);
 }
 async function loadMoreStates(){
-if(!board?.next || pendingStates)return;
+if(loading || !board?.next || pendingStates)return;
 const request=generation,cursor=board.next;pendingStates=true;loadErrors.states=undefined;
 try{const page=await api<Board>(`/api/me/crm/board?cursor=${encodeURIComponent(cursor)}`);if(request!==generation || board?.next!==cursor)return;board={...board,states:[...board.states,...page.states],next:page.next};await Promise.all(page.states.map(s=>loadCards(s.id,false,request)))}
 catch(e){if(request===generation && board?.next===cursor)loadErrors.states=String(e)}finally{if(request===generation)pendingStates=false}
 }
 async function loadCards(id:string,more:boolean,request=generation) {
-if(pendingCards[id])return;
+if(loading || pendingCards[id])return;
 const cursor=more?next[id]:'';
 if(more && !cursor)return;
 const hide=hideExcluded;
 pendingCards[id]=true;loadErrors.columns[id]=undefined;
-try {const params=new URLSearchParams({limit:'20',hide_excluded:String(hide)});if(cursor)params.set('cursor',cursor);
-const data=await api<{items:Card[];next:string}>(`/api/me/crm/board/${id}?${params}`);
+try {const data=await readCards(id,hide,cursor);
 if(request!==generation || hide!==hideExcluded || (more && next[id]!==cursor))return;
 cards[id]=more?[...(cards[id]??[]),...data.items]:data.items;next[id]=data.next;loadErrors.columns[id]=undefined;
 }catch(e){if(request===generation && hide===hideExcluded && (!more || next[id]===cursor))loadErrors.columns[id]=String(e)}
@@ -146,12 +161,12 @@ onMount(()=>{void load()});
 <main class="favorites">
 <div class="intro"><div><p class="eyebrow">YOUR WORKSPACE</p><h1>Leads</h1><p class="subtitle">Your private board for saved parcels and lead states.</p></div></div>
 <div class="toolbar"><div class="board-name"><span class="board-mark" aria-hidden="true">▦</span><div><strong>Board</strong><small>One private board · {board?.states.length ?? 0}{board?.next ? '+' : ''} states</small></div></div>
-<div class="toolbar-actions"><label class="filter"><input type="checkbox" bind:checked={hideExcluded} onchange={() => void load()} /> Hide excluded</label><button class="btn btn-sm preset-outlined-surface-300-700" onclick={() => void load()} disabled={busy}>↻ <span>Reload board</span></button><button class="btn btn-sm preset-filled-primary-500" onclick={() => openAction({kind:'create'})} disabled={!board || busy}>+ Add state</button></div></div>
-{#if loading}<p class="notice" role="status">Loading your board…</p>{/if}
+<div class="toolbar-actions"><label class="filter"><input type="checkbox" bind:checked={hideExcluded} onchange={() => void load()} /> Hide excluded</label><button class="btn btn-sm preset-outlined-surface-300-700" onclick={() => void load()} disabled={busy}>↻ <span>Reload board</span></button><button class="btn btn-sm preset-filled-primary-500" onclick={() => openAction({kind:'create'})} disabled={!board || busy || loading}>+ Add state</button></div></div>
+{#if loading && !board}<p class="notice" role="status">Loading your board…</p>{/if}
 {#if loadErrors.board}<p class="notice error" role="alert">{loadErrors.board} <button class="inline-action" onclick={load}>Retry board load</button></p>{/if}
 {#if mutationError && !dialogOpen}<p class="notice error" role="alert">{mutationError}</p>{/if}
 {#if board}
-<div class="canvas" aria-label="Lead states"><div class="states">
+<div class="canvas" aria-label="Lead states" aria-busy={loading}><div class="states">
 {#each board.states as s (s.id)}
 <section class="column" class:drop-active={dropTarget===s.id} aria-label={s.name} ondragover={(e)=>{e.preventDefault();if(dragged)dropTarget=s.id}} ondragleave={(e)=>{if(!e.currentTarget.contains(e.relatedTarget as Node))dropTarget=''}} ondrop={(e)=>drop(e,s.id)}>
 <div class="column-head"><span class="state-dot" aria-hidden="true"></span><h2>{s.name}</h2><span class="count" aria-label={`${s.count} favorites`}>{s.count}</span>{#if board.default_state_id===s.id}<span class="default">Default</span>{/if}
@@ -163,7 +178,7 @@ onMount(()=>{void load()});
 {#if board.states.length>1}<Menu.Separator/><Menu.Item value="delete" onclick={() => openAction({kind:'delete',state:s})}>Delete state…</Menu.Item>{/if}
 </Menu.Content></Menu.Positioner></Menu></div>
 <div class="column-body">
-{#if loadErrors.columns[s.id]}<p class="column-message error" role="alert">{loadErrors.columns[s.id]} <button class="inline-action" onclick={() => void loadCards(s.id,cards[s.id] !== undefined)} disabled={pendingCards[s.id]}>Retry {s.name} cards</button></p>{:else if pendingCards[s.id] && !cards[s.id]}<p class="column-message" role="status">Loading parcels…</p>{:else if !pendingCards[s.id] && !cards[s.id]?.length}<p class="column-message">No {hideExcluded?'visible ':''}favorites in this state.</p>{/if}
+{#if loadErrors.columns[s.id]}<p class="column-message error" role="alert">{loadErrors.columns[s.id]} <button class="inline-action" onclick={() => void loadCards(s.id,Boolean(next[s.id]))} disabled={pendingCards[s.id]}>Retry {s.name} cards</button></p>{:else if pendingCards[s.id] && !cards[s.id]}<p class="column-message" role="status">Loading parcels…</p>{:else if !pendingCards[s.id] && !cards[s.id]?.length}<p class="column-message">No {hideExcluded?'visible ':''}favorites in this state.</p>{/if}
 {#each cards[s.id]??[] as card (card.parcel_id)}
 <article class="card" draggable="true" ondragstart={(e)=>{dragged=card.parcel_id;e.dataTransfer?.setData('text/plain',card.parcel_id)}} ondragend={()=>{dragged='';dropTarget=''}}>
 <div class="card-top"><span class="parcel-label">PARCEL</span><Menu><Menu.Trigger class="icon-button" aria-label={`Actions for parcel ${card.parcel_number || card.parcel_id}`} disabled={busy}>···</Menu.Trigger><Menu.Positioner><Menu.Content class="action-menu"><Menu.Item value="exclude" onclick={() => openAction({kind:card.excluded?'restore':'exclude',card})}>{card.excluded?'Restore lead':'Exclude lead…'}</Menu.Item><Menu.Separator/><Menu.Item value="remove" onclick={() => openAction({kind:'remove',card})}>Remove favorite…</Menu.Item></Menu.Content></Menu.Positioner></Menu></div>
@@ -172,12 +187,12 @@ onMount(()=>{void load()});
 <div class="card-footer"><a href={`/?parcel=${card.parcel_id}`}>View parcel <span aria-hidden="true">↗</span></a><label class="state-select"><select aria-label={`Change state for ${card.parcel_number || card.parcel_id}`} value={card.state_id} onchange={(e)=>move(card,e.currentTarget.value)} disabled={busy}>{#each board.states as target}<option value={target.id}>{target.name}</option>{/each}</select></label></div>
 </article>
 {/each}
-{#if next[s.id]}<button class="more" disabled={busy || pendingCards[s.id]} onclick={() => void loadCards(s.id,true)}>Load more in {s.name}</button>{/if}
+{#if next[s.id]}<button class="more" disabled={busy || loading || pendingCards[s.id]} onclick={() => void loadCards(s.id,true)}>Load more in {s.name}</button>{/if}
 </div></section>
 {/each}
 </div></div>
 {#if loadErrors.states}<p class="notice error" role="alert">{loadErrors.states}</p>{/if}
-{#if board.next}<button class="btn preset-outlined-surface-300-700 state-more" disabled={busy || pendingStates} onclick={loadMoreStates}>Load more states</button>{/if}
+{#if board.next}<button class="btn preset-outlined-surface-300-700 state-more" disabled={busy || loading || pendingStates} onclick={loadMoreStates}>Load more states</button>{/if}
 {/if}
 </main>
 <Dialog open={dialogOpen} onOpenChange={(details)=>{if(!details.open && (!busy || recovering))closeAction()}}>
