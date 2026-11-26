@@ -89,9 +89,9 @@ function date(value:string){return new Date(value).toLocaleString()}
 </svg>
 {/snippet}
 <section class="notes" aria-label="Private parcel scratchpad">
- <div class="section-heading"><h2>{mode==='timeline'?'Notes':'Private scratchpad'}</h2>{#if mode==='preview'}<a href={`/notes?parcel=${encodeURIComponent(parcel)}`}>Notes →</a>{/if}</div>
+ <div class="section-heading"><h2>{mode==='timeline'?'Notes':'Scratchpad'}</h2>{#if mode==='preview'}<a href={`/notes?parcel=${encodeURIComponent(parcel)}`}>Notes →</a>{/if}</div>
  <form class="new-note" onsubmit={(event)=>{event.preventDefault();void create()}}>
-  <textarea id="new-note" aria-label="New note" class="textarea" rows="2" value={drafts[parcel]??''} oninput={(e)=>drafts[parcel]=e.currentTarget.value} required></textarea>
+  <textarea id="new-note" aria-label="Note text" class="textarea" rows="2" value={drafts[parcel]??''} oninput={(e)=>drafts[parcel]=e.currentTarget.value} required></textarea>
   {#if large(drafts[parcel]??'')}<span class="length-error" role="alert">Note is too long. Shorten it before saving.</span>{/if}
   <button class="btn btn-icon preset-filled-primary-500 note-icon" type="submit" aria-label="Add note" title="Add note" disabled={pending || loading || !drafts[parcel]?.trim() || large(drafts[parcel]??'')}>{@render icon('add')}</button>
  </form>
