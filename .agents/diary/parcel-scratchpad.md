@@ -1,0 +1,1 @@
+- [Unrelated code smell] `docs/application-login.md` describes the map as fictional and says favorites are not implemented. The current application uses stored parcels and already includes favorites. Updating this historical guide is outside the scratchpad change.
