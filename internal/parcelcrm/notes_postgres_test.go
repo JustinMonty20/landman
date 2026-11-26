@@ -35,7 +35,7 @@ func TestScratchpadIsolationRetryAndRefresh(t *testing.T) {
 	if _, e = s.createNote(ctx, b, parcel, id, n.Body); e != pgx.ErrNoRows {
 		t.Fatalf("foreign token: %v", e)
 	}
-	if page, e := s.notes(ctx, b, parcel, "", 20); e != nil || len(page.Items) != 0 {
+	if page, e := s.notes(ctx, b, parcel, "", 20, "desc"); e != nil || len(page.Items) != 0 {
 		t.Fatalf("foreign page: %+v %v", page, e)
 	}
 	if _, e = s.editNote(ctx, b, parcel, id, "guess", n.Revision); e != pgx.ErrNoRows {
@@ -72,7 +72,7 @@ func TestScratchpadIsolationRetryAndRefresh(t *testing.T) {
 	if e = tx.Commit(ctx); e != nil || string(refreshed) != parcel {
 		t.Fatalf("refresh ID %s: %v", refreshed, e)
 	}
-	page, e := s.notes(ctx, a, parcel, "", 20)
+	page, e := s.notes(ctx, a, parcel, "", 20, "desc")
 	if e != nil || len(page.Items) != 1 || page.Items[0].Body != "edited" {
 		t.Fatalf("refresh: %+v %v", page, e)
 	}
@@ -87,7 +87,7 @@ func TestScratchpadIsolationRetryAndRefresh(t *testing.T) {
 	if e = s.deleteNote(ctx, a, parcel, id, 2); e != nil {
 		t.Fatal(e)
 	}
-	if page, e = s.notes(ctx, a, parcel, "", 20); e != nil || len(page.Items) != 0 {
+	if page, e = s.notes(ctx, a, parcel, "", 20, "desc"); e != nil || len(page.Items) != 0 {
 		t.Fatalf("delete: %+v %v", page, e)
 	}
 }
@@ -100,10 +100,38 @@ func TestScratchpadPageAndAccountCascade(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	if _, e := s.DB.Exec(ctx, `UPDATE user_parcel_notes SET created_at='2026-01-01T00:00:00Z' WHERE user_id=$1 AND parcel_id=$2`, string(a), parcel); e != nil {
+		t.Fatal(e)
+	}
+	// Ascending pages must be globally chronological, including equal timestamps.
+	ascending := []string{}
+	for cursor := ""; ; {
+		page, e := s.notes(ctx, a, parcel, cursor, 2, "asc")
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, n := range page.Items {
+			ascending = append(ascending, n.ID)
+		}
+		if page.Next == "" {
+			break
+		}
+		cursor = page.Next
+	}
+	for i, id := range ascending {
+		expected := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+		if id != expected {
+			t.Fatalf("ascending[%d] = %s, want %s", i, id, expected)
+		}
+	}
+	if _, e := s.notes(ctx, a, parcel, "", 2, "DESC; DROP TABLE user_parcel_notes"); e != errInvalid {
+		t.Fatalf("order validation: %v", e)
+	}
 	seen := map[string]bool{}
+	newestFirst := []string{}
 	cursor := ""
 	for {
-		page, e := s.notes(ctx, a, parcel, cursor, 2)
+		page, e := s.notes(ctx, a, parcel, cursor, 2, "desc")
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -112,6 +140,7 @@ func TestScratchpadPageAndAccountCascade(t *testing.T) {
 				t.Fatal("duplicate page entry")
 			}
 			seen[n.ID] = true
+			newestFirst = append(newestFirst, n.ID)
 		}
 		if page.Next == "" {
 			break
@@ -121,10 +150,16 @@ func TestScratchpadPageAndAccountCascade(t *testing.T) {
 	if len(seen) != 5 {
 		t.Fatalf("paged %d entries", len(seen))
 	}
-	if _, e := s.notes(ctx, a, parcel, "", 51); e != errInvalid {
+	for i, id := range newestFirst {
+		expected := fmt.Sprintf("00000000-0000-4000-8000-%012d", 4-i)
+		if id != expected {
+			t.Fatalf("default descending[%d] = %s, want %s", i, id, expected)
+		}
+	}
+	if _, e := s.notes(ctx, a, parcel, "", 51, "desc"); e != errInvalid {
 		t.Fatalf("unbounded: %v", e)
 	}
-	if _, e := s.notes(ctx, a, parcel, "bad", 2); e != errInvalid {
+	if _, e := s.notes(ctx, a, parcel, "bad", 2, "desc"); e != errInvalid {
 		t.Fatalf("bad cursor: %v", e)
 	}
 	if _, e := s.createNote(ctx, b, parcel, "33333333-3333-4333-8333-333333333333", "other user"); e != nil {
@@ -184,6 +219,12 @@ func TestScratchpadHTTPBoundary(t *testing.T) {
 		if w := request(b, method, "/"+id, body, "http://example.test", true); w.Code != 404 {
 			t.Fatalf("foreign %s: %d", method, w.Code)
 		}
+	}
+	if w := request(a, "GET", "?order=invalid", "", "", false); w.Code != 400 {
+		t.Fatalf("invalid order %d", w.Code)
+	}
+	if w := request(a, "GET", "?order=asc&limit=1", "", "", false); w.Code != 200 {
+		t.Fatalf("ascending HTTP %d", w.Code)
 	}
 	w := request(a, "GET", "?limit=1", "", "", false)
 	var page NotePage

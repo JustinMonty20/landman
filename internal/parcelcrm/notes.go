@@ -37,7 +37,7 @@ func scanNote(row pgx.Row) (Note, error) {
 	e := row.Scan(&n.ID, &n.UserID, &n.ParcelID, &n.Body, &n.CreatedAt, &n.UpdatedAt, &n.Revision)
 	return n, e
 }
-func (s Store) notes(ctx context.Context, user AccountID, parcel, cursor string, limit int) (NotePage, error) {
+func (s Store) notes(ctx context.Context, user AccountID, parcel, cursor string, limit int, order string) (NotePage, error) {
 	page := NotePage{Items: []Note{}}
 	if !uuid(parcel) || limit < 1 || limit > 50 {
 		return page, errInvalid
@@ -48,6 +48,9 @@ func (s Store) notes(ctx context.Context, user AccountID, parcel, cursor string,
 	}
 	if !exists {
 		return page, pgx.ErrNoRows
+	}
+	if order != "desc" && order != "asc" {
+		return page, errInvalid
 	}
 	var at *time.Time
 	var id *string
@@ -63,7 +66,12 @@ func (s Store) notes(ctx context.Context, user AccountID, parcel, cursor string,
 		at = &parsed
 		id = &parts[1]
 	}
-	rows, e := s.DB.Query(ctx, `SELECT id::text,user_id::text,parcel_id::text,body,created_at,updated_at,revision FROM user_parcel_notes WHERE user_id=$1 AND parcel_id=$2 AND ($3::timestamptz IS NULL OR (created_at,id)<($3::timestamptz,$4::uuid)) ORDER BY created_at DESC,id DESC LIMIT $5`, string(user), parcel, at, id, limit+1)
+	// Direction is selected from two fixed queries; user input never reaches SQL.
+	query := `SELECT id::text,user_id::text,parcel_id::text,body,created_at,updated_at,revision FROM user_parcel_notes WHERE user_id=$1 AND parcel_id=$2 AND ($3::timestamptz IS NULL OR (created_at,id)<($3::timestamptz,$4::uuid)) ORDER BY created_at DESC,id DESC LIMIT $5`
+	if order == "asc" {
+		query = `SELECT id::text,user_id::text,parcel_id::text,body,created_at,updated_at,revision FROM user_parcel_notes WHERE user_id=$1 AND parcel_id=$2 AND ($3::timestamptz IS NULL OR (created_at,id)>($3::timestamptz,$4::uuid)) ORDER BY created_at ASC,id ASC LIMIT $5`
+	}
+	rows, e := s.DB.Query(ctx, query, string(user), parcel, at, id, limit+1)
 	if e != nil {
 		return page, e
 	}
@@ -190,7 +198,11 @@ func (s Store) serveNotes(w http.ResponseWriter, r *http.Request, user AccountID
 			}
 		}
 		var page NotePage
-		page, e = s.notes(r.Context(), user, parcel, r.URL.Query().Get("cursor"), limit)
+		order := r.URL.Query().Get("order")
+		if order == "" && !r.URL.Query().Has("order") {
+			order = "desc"
+		}
+		page, e = s.notes(r.Context(), user, parcel, r.URL.Query().Get("cursor"), limit, order)
 		if e == nil {
 			send(w, page)
 		}

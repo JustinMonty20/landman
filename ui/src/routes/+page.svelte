@@ -3,6 +3,7 @@ import { onMount, tick } from 'svelte';
 import { Tabs, Toast, createToaster } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import ParcelNotes from '../lib/ParcelNotes.svelte';
+import { noteDrafts, noteEdits, noteRetries } from '../lib/notesState.svelte';
 import { detailGroups, detailFields, defaultDetailFields, parseDetailFields, type DetailField } from '../lib/detailGroups';
 import ParcelMap, { jurisdictionColor, zoningColor } from '../lib/ParcelMap.svelte';
 import FilterPanel from '../lib/FilterPanel.svelte';
@@ -53,9 +54,6 @@ const layerQuery = $derived(parcelView && viewport ? mapLayerQuery(viewport) : '
 let parcels = $state<ParcelShape[]>([]);
 let parcelError = $state('');
 let parcelID = $state('');
-let noteDrafts = $state<Record<string,string>>({});
-let noteEdits = $state<Record<string,string>>({});
-let noteRetries = $state<Record<string,{id:string;body:string}>>({});
 type Favorite = {revision:number;favorite:boolean;state_id:string;excluded:boolean;exclusion_reason:string};
 let favorite = $state<Favorite|null>(null);
 let favoriteStatus = $state('');
