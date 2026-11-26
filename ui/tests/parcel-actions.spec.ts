@@ -5,7 +5,7 @@ const id = '11111111-1111-4111-8111-111111111111';
 test.use({ video: 'on' });
 
 for (const colorScheme of ['dark', 'light'] as const) {
- test(`parcel actions share one row and icon size with ${colorScheme} OS preference`, async ({ page }, info) => {
+ test(`parcel actions share one row with a larger star under ${colorScheme} OS preference`, async ({ page }, info) => {
   await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' });
   await page.route('**/*', route => {
    const url = new URL(route.request().url());
@@ -32,9 +32,9 @@ for (const colorScheme of ['dark', 'light'] as const) {
   await expect(actions.getByRole('button').first()).toHaveAccessibleName('Close parcel details');
   expect(starBox.x - closeBox.x - closeBox.width).toBe(4);
   const starIcon = (await star.locator('svg').boundingBox())!;
-  expect(starIcon.width).toBe(12);
-  expect(starIcon.height).toBe(12);
-  expect(await close.locator('svg').boundingBox()).toMatchObject({ y: starIcon.y, width: 12, height: 12 });
+  expect(starIcon.width).toBe(22);
+  expect(starIcon.height).toBe(22);
+  expect(await close.locator('svg').boundingBox()).toMatchObject({ y: starIcon.y + 5, width: 12, height: 12 });
   await page.screenshot({ path: info.outputPath('01-actions.png'), fullPage: true });
   await star.focus();
   await expect(star).toBeFocused();
