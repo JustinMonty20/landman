@@ -11,10 +11,10 @@ Qualification jobs publish zoning and road generations and derive stored parcel 
 
 ## How to get to it (user POV)
 
-- `./landman run union.gis.zoning` fetches the zoning source group and reconciles stored qualification evidence.
-- `./landman run union.gis.roads` fetches roads and reconciles stored qualification evidence.
+- `./landman run union.gis.zoning` fetches and publishes the zoning source group.
+- `./landman run union.gis.roads` fetches and publishes roads. Run assessment separately for stored parcel evidence.
 - `./landman run union.qualification.assess` reconciles stored data without a county fetch.
-- The scheduler uses separate zoning, road, and qualification calendars. It reconciles stored qualification evidence once at startup before calendar dispatch.
+- The scheduler uses separate zoning, road, and qualification calendars. It runs stored assessment only when its calendar is due; startup alone does not assess.
 
 ## Driving it with make and the landman binary
 
@@ -35,10 +35,12 @@ go test -race ./internal/connector/union -count=1
 DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres \
   ./internal/qualification -count=1 -v
 DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres \
-  ./cmd/landman -count=1 -v
+  ./cmd/landman \
+  -run '^(TestPostgresConcurrentSourceRefreshes|TestPostgresRefreshWaitCancellation|TestCountyHostCooldownAfterFailureCancellationAndLostSession|TestWaitingCountyLockFailureStalesPublishedRoadEvidence|TestCountyHostExclusionAndCancellation|TestCountyHostSessionLossCancelsWork)$' \
+  -count=1 -v
 ```
 
-Require the captured full stored replay, group publication/retirement, failed repair, stored-topology, long-edge distance, failure-order, and host-lock tests to execute. Save verbose output. Read `docs/union-qualification-verification.md` for the approximation limits; do not claim exact curved-edge measurements.
+Require the captured full stored replay, group publication/retirement, failed repair, stored-topology, long-edge distance, failure-order, and all six named CLI host-lock tests to execute. The default CLI skill separately runs the full command-package unit suite and parcel fixtures; this selection keeps unrelated operator-file and performance gates separate. Save verbose output. Read `docs/union-qualification-verification.md` for the approximation limits; do not claim exact curved-edge measurements.
 
 - Check the real no-source path in a new setup database, not the fixture database:
 
