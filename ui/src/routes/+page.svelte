@@ -527,8 +527,9 @@ return () => task.abort();
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
-                <Tabs.Trigger class="btn" value="research">Research links</Tabs.Trigger>
-                <Tabs.Trigger class="btn" value="notes">Workspace</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="research">Research</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="notes">Notes</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="tasks">Tasks</Tabs.Trigger>
               </Tabs.List>
               <Tabs.Content class="parcel-tab-content" value="evidence">
             <div class="detail-editor"><button class="btn btn-sm" aria-expanded={editingDetails} onclick={() => { draftFields = [...groups]; editingDetails = !editingDetails; }}>Choose detail fields</button>
@@ -558,6 +559,10 @@ return () => task.abort();
               <Tabs.Content class="parcel-tab-content" value="notes">
                 {#key parcelID}
                   <ParcelNotes parcel={parcelID} drafts={noteDrafts} edits={noteEdits} retries={noteRetries}/>
+                {/key}
+              </Tabs.Content>
+              <Tabs.Content class="parcel-tab-content" value="tasks">
+                {#key parcelID}
                   {#if favorite?.favorite}
                     <ParcelTasks parcel={parcelID} editable={!favorite.excluded}/>
                   {:else if favoriteRead === 'ready'}
@@ -633,7 +638,7 @@ h1 { font-size: 19px; font-weight: 650; }
 :global(.results:has(.parcel-heading) > [data-scope='tabs'][data-part='root']) { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 :global(.parcel-tab-content:not([hidden])) { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 :global(.parcel-tab-content[hidden]) { display: none; }
-:global(.results:has(.parcel-heading) > [data-scope='tabs'] .map-tabs .btn) { min-width: 0; padding-inline: 4px; font-size: 12px; white-space: normal; }
+:global(.results:has(.parcel-heading) > [data-scope='tabs'] .map-tabs .btn) { min-width: 0; padding-inline: 4px; font-size: 12px; white-space: nowrap; }
 :global(.results:has(.parcel-heading)) { overflow: hidden; }
 .research-content { padding: 12px 14px; font-size: 13px; line-height: 1.5; }
 .research-sites { list-style: disc; padding-left: 20px; margin-bottom: 14px; }
