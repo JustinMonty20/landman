@@ -5,6 +5,7 @@ const card=(id:string,favorite:boolean,revision:number)=>({parcel_id:id,favorite
 async function fixture(page:import('@playwright/test').Page){
  await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
  await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
+await page.route('**/api/me/favorites/*/notes*',route=>route.fulfill({json:{items:[],next:''}}));
  await page.route('**/api/coverage*',route=>route.fulfill({json:{counties:[]}}));
 }
 test('star toggles confirmed favorite, toast navigates to Leads; removal retains revision',async ({page},info)=>{
@@ -26,6 +27,32 @@ test('failed write never paints star gold; stale parcel response does not alter 
  await page.route(`**/api/me/favorites/${b}`,route=>route.fulfill({status:404}));
  await page.goto(`/?parcel=${a}`);await page.getByRole('button',{name:'Favorite parcel'}).click();await expect(page.getByRole('alert')).toContainText('Could not save favorite');await expect(page.getByRole('button',{name:'Favorite parcel'})).toHaveAttribute('aria-pressed','false');
  await page.getByRole('button',{name:'Favorite parcel'}).click();await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeDisabled();await page.goto(`/?parcel=${b}`);await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeEnabled();release?.();await expect(page.getByRole('button',{name:'Favorite parcel'})).toHaveAttribute('aria-pressed','false');await expect(page.getByRole('button',{name:'View board'})).toHaveCount(0);
+});
+
+test('saved toast closes from its top-right icon and expires after five seconds',async ({page},info)=>{
+ await fixture(page);await page.clock.install();let saved=false,revision=1;
+ await page.route(`**/api/me/favorites/${a}`,route=>{
+  if(route.request().method()==='GET')return route.fulfill({status:404});
+  saved=route.request().method()!=='DELETE';revision++;
+  return route.fulfill({json:card(a,saved,revision)});
+ });
+ await page.goto(`/?parcel=${a}`);
+ await page.getByRole('button',{name:'Favorite parcel'}).click();
+ const close=page.getByRole('button',{name:'Dismiss notification'});
+ await expect(close).toBeVisible();
+ const toast=page.locator('.favorite-toast');
+ const box=await toast.boundingBox(),cross=await close.boundingBox();
+ expect(box).not.toBeNull();expect(cross).not.toBeNull();
+ expect(cross!.y-box!.y).toBeLessThanOrEqual(8);
+ expect(box!.x+box!.width-cross!.x-cross!.width).toBeLessThanOrEqual(8);
+ await page.screenshot({path:info.outputPath('saved-toast-top-right.png')});
+ await close.click();await expect(close).toHaveCount(0);
+ await page.getByRole('button',{name:'Remove favorite'}).click();
+ await page.getByRole('button',{name:'Favorite parcel'}).click();
+ await expect(close).toBeVisible();await page.mouse.move(0,0);
+ await page.clock.runFor(4500);await expect(close).toBeVisible();
+ await page.clock.runFor(1000);await expect(close).toHaveCount(0);
+ await page.screenshot({path:info.outputPath('saved-toast-expired.png')});
 });
 
 async function selectViaFinder(page:import('@playwright/test').Page,id:string){

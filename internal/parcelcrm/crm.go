@@ -452,6 +452,10 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 	q := r.URL.Query()
 	path := strings.TrimPrefix(r.URL.Path, "/api/me/")
 	parts := strings.Split(path, "/")
+	if len(parts) >= 3 && parts[0] == "favorites" && parts[2] == "notes" {
+		s.serveNotes(w, r, user, origin, parts)
+		return
+	}
 	var req struct {
 		Name          string `json:"name"`
 		StateID       string `json:"state_id"`

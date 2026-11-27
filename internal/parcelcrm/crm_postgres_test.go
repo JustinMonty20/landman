@@ -40,7 +40,7 @@ func fixture(t *testing.T) (Store, AccountID, AccountID, string) {
 			t.Fatal(e)
 		}
 	}
-	e = db.QueryRow(context.Background(), `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number) VALUES('union','union','crm_fixture',$1,$1) RETURNING id::text`, stamp).Scan(&id)
+	e = db.QueryRow(context.Background(), `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number) VALUES('union','union','union_county_gis',$1,$1) RETURNING id::text`, stamp).Scan(&id)
 	if e != nil {
 		t.Fatal(e)
 	}
