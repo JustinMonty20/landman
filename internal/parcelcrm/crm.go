@@ -279,6 +279,13 @@ func (s Store) mutate(ctx context.Context, user AccountID, id, action, target, r
 	if tag.RowsAffected() == 0 {
 		return Card{}, errConflict
 	}
+	var canceled []Task
+	if action == "exclude" || action == "remove" {
+		canceled, e = cancelParcelReminders(ctx, tx, user, id)
+		if e != nil {
+			return Card{}, e
+		}
+	}
 	if action == "exclude" || action == "restore" {
 		_, e = tx.Exec(ctx, `INSERT INTO user_parcel_exclusion_changes(user_id,parcel_id,excluded,reason) VALUES($1,$2,$3,$4)`, string(user), id, action == "exclude", func() string {
 			if action == "exclude" {
@@ -292,6 +299,9 @@ func (s Store) mutate(ctx context.Context, user AccountID, id, action, target, r
 	}
 	if e = tx.Commit(ctx); e != nil {
 		return Card{}, e
+	}
+	for _, reminder := range canceled {
+		logReminder("cancel-stub", reminder)
 	}
 	return s.card(ctx, user, id)
 }
@@ -454,6 +464,10 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 	parts := strings.Split(path, "/")
 	if len(parts) >= 3 && parts[0] == "favorites" && parts[2] == "notes" {
 		s.serveNotes(w, r, user, origin, parts)
+		return
+	}
+	if path == "crm/tasks" || (len(parts) >= 3 && parts[0] == "favorites" && parts[2] == "tasks") {
+		s.serveTasks(w, r, user, parts)
 		return
 	}
 	var req struct {
