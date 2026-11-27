@@ -3,9 +3,12 @@
 package parcelcrm
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -380,6 +383,148 @@ func TestNonfavoriteTasksAndScopedClear(t *testing.T) {
 	}
 	if _, e = s.clearParcelTasks(ctx, a, parcel, 1, snapshot); !errors.Is(e, errConflict) {
 		t.Fatalf("repeat clear %v", e)
+	}
+}
+
+func TestTaskThenFavoritePublicRevision(t *testing.T) {
+	s, a, _, parcel := fixture(t)
+	request := func(method, path, payload string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "http://app.test"+path, strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://app.test")
+		w := httptest.NewRecorder()
+		s.Serve(w, req, a, "http://app.test")
+		return w
+	}
+	path := "/api/me/favorites/" + parcel
+	if w := request("GET", path, ""); w.Code != 404 {
+		t.Fatalf("initial favorite %d", w.Code)
+	}
+	taskPath := "/api/me/parcels/" + parcel + "/tasks"
+	due := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+	body := fmt.Sprintf(`{"id":"8d1bb391-3008-481a-a94a-3eae8bf62504","message":"Private","due_at":%q,"timezone":"UTC"}`, due)
+	if w := request("POST", taskPath, body); w.Code != 200 {
+		t.Fatalf("task %d %s", w.Code, w.Body.String())
+	}
+	w := request("GET", path, "")
+	if w.Code != 200 {
+		t.Fatalf("favorite read %d %s", w.Code, w.Body.String())
+	}
+	var current Card
+	if e := json.Unmarshal(w.Body.Bytes(), &current); e != nil || current.Favorite || current.Revision < 1 {
+		t.Fatalf("retained status %+v %v", current, e)
+	}
+	w = request("PUT", path, fmt.Sprintf(`{"revision":%d}`, current.Revision))
+	if w.Code != 200 {
+		t.Fatalf("favorite write %d %s", w.Code, w.Body.String())
+	}
+	var favorited Card
+	if e := json.Unmarshal(w.Body.Bytes(), &favorited); e != nil || !favorited.Favorite {
+		t.Fatalf("favorite %+v %v", favorited, e)
+	}
+	if w := request("PUT", path, `{}`); w.Code != 200 {
+		t.Fatalf("active idempotence %d", w.Code)
+	}
+	if w := request("DELETE", path, fmt.Sprintf(`{"revision":%d}`, favorited.Revision)); w.Code != 200 {
+		t.Fatalf("remove %d", w.Code)
+	}
+	if w := request("PUT", path, `{}`); w.Code != 409 {
+		t.Fatalf("stale reactivation %d", w.Code)
+	}
+}
+
+func TestClearLogsOnlyCommittedQueuedReminders(t *testing.T) {
+	s, a, b, parcel := fixture(t)
+	ctx := context.Background()
+	due := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+	create := func(user AccountID, p, id, message string) Task {
+		tsk, e := s.createTask(ctx, user, p, id, message, due, "UTC")
+		if e != nil {
+			t.Fatal(e)
+		}
+		return tsk
+	}
+	first := create(a, parcel, "a99f736e-e9e7-4a31-a4bd-a72877dcd046", "SECRET_FIRST")
+	second := create(a, parcel, "afba594e-d574-4de1-8aa5-5140fd141247", "SECRET_SECOND")
+	second, e := s.changeTask(ctx, a, parcel, second.ID, "reschedule", "SECRET_SECOND", time.Now().Add(4*time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339), "UTC", second.Revision)
+	if e != nil {
+		t.Fatal(e)
+	}
+	completed := create(a, parcel, "38557690-62ed-4655-a0da-6c558a0123a4", "SECRET_COMPLETED")
+	if _, e := s.changeTask(ctx, a, parcel, completed.ID, "complete", "", "", "", completed.Revision); e != nil {
+		t.Fatal(e)
+	}
+	foreign := create(b, parcel, "f456193d-e399-4bbd-a74f-20dd6285e0dc", "SECRET_FOREIGN")
+	var otherParcel string
+	if e := s.DB.QueryRow(ctx, `INSERT INTO parcels(county_id,county_code,source_name,source_parcel_id,parcel_number) VALUES('union','union','union_county_gis',$1,$1) RETURNING id::text`, "clear-log-"+parcel).Scan(&otherParcel); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		s.DB.Exec(context.Background(), `DELETE FROM user_parcels WHERE user_id=$1 AND parcel_id=$2`, string(a), otherParcel)
+		s.DB.Exec(context.Background(), `DELETE FROM parcels WHERE id=$1`, otherParcel)
+	})
+	unrelated := create(a, otherParcel, "a3caf026-afce-4e54-8d13-57928b1e1ce6", "SECRET_OTHER")
+	count, snapshot, e := s.openTaskSnapshot(ctx, a, parcel)
+	if e != nil || count != 2 {
+		t.Fatalf("snapshot %d %v", count, e)
+	}
+	var logs bytes.Buffer
+	prior := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prior)
+	request := func(method, path, payload string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "http://app.test"+path, strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://app.test")
+		w := httptest.NewRecorder()
+		s.Serve(w, req, a, "http://app.test")
+		return w
+	}
+	path := "/api/me/parcels/" + parcel + "/tasks/clear"
+	if w := request("POST", path, fmt.Sprintf(`{"count":1,"snapshot":%q}`, snapshot)); w.Code != 409 {
+		t.Fatalf("conflict %d", w.Code)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("conflict logged %s", logs.String())
+	}
+	if current, e := s.task(ctx, a, parcel, first.ID); e != nil || current.Status != "open" || current.ReminderState != "queued" {
+		t.Fatalf("conflict mutated %+v %v", current, e)
+	}
+	if _, e := s.DB.Exec(ctx, `UPDATE user_parcel_tasks SET revision=revision+1 WHERE user_id=$1 AND id=$2`, string(a), first.ID); e != nil {
+		t.Fatal(e)
+	}
+	if w := request("POST", path, fmt.Sprintf(`{"count":%d,"snapshot":%q}`, count, snapshot)); w.Code != 409 || logs.Len() != 0 {
+		t.Fatalf("same-count conflict logged %d %s", w.Code, logs.String())
+	}
+	count, snapshot, e = s.openTaskSnapshot(ctx, a, parcel)
+	if e != nil || count != 2 {
+		t.Fatalf("refreshed snapshot %d %v", count, e)
+	}
+	if w := request("POST", path, fmt.Sprintf(`{"count":%d,"snapshot":%q}`, count, snapshot)); w.Code != 200 {
+		t.Fatalf("clear %d %s", w.Code, w.Body.String())
+	}
+	text := logs.String()
+	for _, tsk := range []Task{first, second} {
+		if strings.Count(text, "reminder cancel-stub task_id="+tsk.ID+" parcel_id="+parcel+" due_utc="+tsk.DueAt.UTC().Format(time.RFC3339Nano)+fmt.Sprintf(" version=%d simulated=true", tsk.ScheduleVersion)) != 1 {
+			t.Fatalf("missing or duplicate cancel id=%s log=%s", tsk.ID, text)
+		}
+	}
+	if strings.Count(text, "reminder cancel-stub") != 2 || strings.Contains(text, "SECRET_") || strings.Contains(text, completed.ID) || strings.Contains(text, foreign.ID) || strings.Contains(text, unrelated.ID) {
+		t.Fatalf("unexpected cancel logs %s", text)
+	}
+	for _, tc := range []struct {
+		user          AccountID
+		p             string
+		tsk           Task
+		status, state string
+	}{{a, parcel, completed, "completed", "canceled"}, {b, parcel, foreign, "open", "queued"}, {a, otherParcel, unrelated, "open", "queued"}} {
+		current, e := s.task(ctx, tc.user, tc.p, tc.tsk.ID)
+		if e != nil || current.Status != tc.status || current.ReminderState != tc.state {
+			t.Fatalf("other task %+v %v", current, e)
+		}
+	}
+	if w := request("POST", path, fmt.Sprintf(`{"count":%d,"snapshot":%q}`, count, snapshot)); w.Code != 409 || logs.String() != text {
+		t.Fatalf("repeat mutated or logged %d %s", w.Code, logs.String())
 	}
 }
 

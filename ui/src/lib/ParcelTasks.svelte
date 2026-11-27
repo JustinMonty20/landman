@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import { dueCandidates, smsCapacity } from './taskTime';
-let {parcel = '', editable = true, refresh = 0}: {parcel?: string; editable?: boolean; refresh?: number} = $props();
+let {parcel = '', editable = true, refresh = 0, oncreated}: {parcel?: string; editable?: boolean; refresh?: number; oncreated?: (parcel: string) => void} = $props();
 type Task = {id:string;parcel_id:string;parcel_number:string|null;message:string;due_at:string;timezone:string;status:'open'|'completed'|'canceled';reminder_state:'queued'|'stubbed'|'canceled'|'missed';revision:number;schedule_version:number};
 let items=$state<Task[]>([]), next=$state(''), loading=$state(false), busy=$state(false), error=$state(''), notice=$state('');
 let message=$state(''), local=$state(''), offset=$state(''), editing=$state<Task|null>(null), createID=$state('');
@@ -44,12 +44,16 @@ async function refreshEditing(){
 }
 async function save(){if(busy || conflict || capacity.remaining<0 || !message.trim() || !candidates.some(c=>c.due_at===offset))return;
  busy=true;error='';notice='';
+ const savingParcel=parcel;
  try {const url=editing?`${path}/${editing.id}/reschedule`:path;
  if(!editing && !createID)createID=crypto.randomUUID();
  const payload=editing?{revision:editing.revision,message,due_at:offset,timezone}:{id:createID,message,due_at:offset,timezone};
  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
  if(!res.ok){if(res.status===409 && editing){conflict=true;currentTask=null;throw Error('Task changed in another tab. Refresh the task, review its current version, then retry your draft.');}throw Error(`Task not saved (${res.status}).`);}
- reset();notice='Task saved. EventBridge scheduling is stubbed; no SMS will be sent.';await load();
+ const createdParcel=editing?null:savingParcel;
+ reset();notice='Task saved. EventBridge scheduling is stubbed; no SMS will be sent.';
+ if(createdParcel)oncreated?.(createdParcel);
+ await load();
  }catch(e){error=String(e)}finally{busy=false}
 }
 async function prepareClear(){
@@ -82,7 +86,7 @@ $effect(()=>{if(refresh>0)void load()});
 </script>
 <section class="tasks" aria-label={parcel?'Parcel follow-up tasks':'Follow-up task queue'}>
  <header><h2>{parcel?'Follow-up tasks':'Upcoming and overdue follow-ups'}</h2><button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void load()} disabled={loading || busy}>Reload tasks</button></header>
- {#if parcel && editable && items.length>0}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void prepareClear()} disabled={busy || loading || clearing}>Clear all tasks…</button>{/if}
+ {#if parcel && items.length>0}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void prepareClear()} disabled={busy || loading || clearing}>Clear all tasks…</button>{/if}
 {#if confirmClear!==null}<div role="group" aria-label="Confirm clear all tasks"><p>Cancel {confirmClear.count} open tasks on this parcel and their pending reminders? Completed tasks stay completed. If tasks change after confirmation, this action fails and asks you to review again.</p><button type="button" class="btn btn-sm preset-filled-primary-500" onclick={()=>void clearAll()} disabled={clearing || confirmClear.count===0}>Confirm clear all</button><button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>confirmClear=null}>Keep tasks</button></div>{/if}
 <p class="stub-note">Personal tasks only. EventBridge scheduling and SMS are stubbed in the API. No SMS is sent. Use “Simulate SMS” on a due task to record a simulated result; this never completes the task.</p>
  {#if parcel && editable}
@@ -107,7 +111,7 @@ $effect(()=>{if(refresh>0)void load()});
   <div class="buttons">{#if parcel && editable}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>edit(t)} disabled={busy}>Edit / snooze</button>{/if}
   <button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'complete')} disabled={busy}>Complete task</button>
   <button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'cancel')} disabled={busy}>Clear task</button>
-  {#if Date.parse(t.due_at)<=now && t.reminder_state==='queued'}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'stub')} disabled={busy}>Simulate SMS (not sent)</button>{/if}</div>
+  {#if editable && Date.parse(t.due_at)<=now && t.reminder_state==='queued'}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'stub')} disabled={busy}>Simulate SMS (not sent)</button>{/if}</div>
  </li>{/snippet}
 {#if parcel}<ul>{#each items as t (t.id)}{@render taskRow(t)}{/each}</ul>
 {:else if items.length}<h3>Overdue</h3><ul>{#each overdue as t (t.id)}{@render taskRow(t)}{/each}</ul>

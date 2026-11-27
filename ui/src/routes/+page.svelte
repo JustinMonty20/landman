@@ -80,6 +80,9 @@ async function readFavorite(id:string){
   favorite=data;favoriteRead='ready';
  }catch {if(owned()){favoriteRead='failed';favoriteStatus='Favorite status unavailable.'}}
 }
+function taskCreated(id:string){
+ if(parcelID===id && !favoritePending)void readFavorite(id);
+}
 async function toggleFavorite(){
  if(favoritePending || favoriteRead==='loading')return;
  if(favoriteRead==='failed'){void readFavorite(parcelID);return;}
@@ -568,7 +571,7 @@ return () => task.abort();
               </Tabs.Content>
               <Tabs.Content class="parcel-tab-content" value="tasks">
                 {#key parcelID}
-                  <ParcelTasks parcel={parcelID} editable={favoriteRead==='ready' && !favorite?.excluded}/>
+                  <ParcelTasks parcel={parcelID} editable={favoriteRead==='ready' && !favorite?.excluded} oncreated={taskCreated}/>
                 {/key}
               </Tabs.Content>
             </Tabs>

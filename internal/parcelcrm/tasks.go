@@ -248,7 +248,21 @@ func (s Store) clearParcelTasks(ctx context.Context, user AccountID, parcel stri
 	}
 	// All supported task writes acquire the account lock first. Concurrent creations
 	// before this lock invalidate the snapshot; creations after commit stay open.
-	_, e = tx.Exec(ctx, `UPDATE user_task_reminders r SET state='canceled',changed_at=now() FROM user_parcel_tasks t WHERE t.user_id=$1 AND t.parcel_id=$2 AND t.status='open' AND r.user_id=t.user_id AND r.task_id=t.id AND r.version=t.schedule_version AND r.state='queued'`, string(user), parcel)
+	rows, e := tx.Query(ctx, `UPDATE user_task_reminders r SET state='canceled',changed_at=now() FROM user_parcel_tasks t WHERE t.user_id=$1 AND t.parcel_id=$2 AND t.status='open' AND r.user_id=t.user_id AND r.task_id=t.id AND r.version=t.schedule_version AND r.state='queued' RETURNING r.task_id::text,r.version,r.due_at`, string(user), parcel)
+	if e != nil {
+		return 0, e
+	}
+	var canceled []Task
+	for rows.Next() {
+		reminder := Task{ParcelID: parcel}
+		if e = rows.Scan(&reminder.ID, &reminder.ScheduleVersion, &reminder.DueAt); e != nil {
+			rows.Close()
+			return 0, e
+		}
+		canceled = append(canceled, reminder)
+	}
+	e = rows.Err()
+	rows.Close()
 	if e != nil {
 		return 0, e
 	}
@@ -261,6 +275,9 @@ func (s Store) clearParcelTasks(ctx context.Context, user AccountID, parcel stri
 	}
 	if e = tx.Commit(ctx); e != nil {
 		return 0, e
+	}
+	for _, reminder := range canceled {
+		logReminder("cancel-stub", reminder)
 	}
 	return count, nil
 }

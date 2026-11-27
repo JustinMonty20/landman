@@ -50,6 +50,47 @@ await page.getByRole('link',{name:'Tasks',exact:true}).click();await expect(page
 await expect(page.getByRole('link',{name:/Parcel 009845/})).toHaveCount(0);
 await page.screenshot({path:info.outputPath('05-other-parcel-survives.png'),fullPage:true});
 });
+test('first task retains nonfavorite revision so the first star succeeds once',async({page},info)=>{
+await fixture(page);let created=false,reads=0,writes=0, selectedDue='',selectedZone='';
+await page.route(`**/api/me/favorites/${parcel}`,route=>{
+ if(route.request().method()==='GET') {reads++;return created?route.fulfill({json:{parcel_id:parcel,revision:1,favorite:false,excluded:false,exclusion_reason:'',state_id:state}}):route.fulfill({status:404})}
+ expect(route.request().method()).toBe('PUT');expect(route.request().postDataJSON()).toEqual({revision:1});writes++;
+ return route.fulfill({json:{parcel_id:parcel,revision:2,favorite:true,excluded:false,exclusion_reason:'',state_id:state}});
+});
+await page.route(`**/api/me/parcels/${parcel}/tasks*`,route=>{
+ if(route.request().method()==='POST') {expect(route.request().postDataJSON()).toMatchObject({message:'First follow up',due_at:selectedDue,timezone:selectedZone});created=true;return route.fulfill({json:task('675d364c-70f0-4468-b979-422df800fbce',parcel)})}
+ return route.fulfill({json:{items:created?[task('675d364c-70f0-4468-b979-422df800fbce',parcel)]:[],next:''}});
+});
+await page.goto(`/?parcel=${parcel}&tab=tasks`);await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeEnabled();
+await page.getByRole('textbox',{name:'Follow-up message'}).fill('First follow up');
+await page.getByLabel('Due date and time').fill('2030-12-08T14:00');
+selectedZone=await page.evaluate(()=>Intl.DateTimeFormat().resolvedOptions().timeZone);
+selectedDue=(await page.getByLabel(/Time zone offset/).locator('option:not([disabled])').first().getAttribute('value'))!;
+await page.getByLabel(/Time zone offset/).selectOption(selectedDue);
+await page.getByRole('button',{name:'Create task'}).click();
+await expect(page.getByRole('status').filter({hasText:'Task saved.'})).toBeVisible();
+await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeEnabled();
+expect(reads).toBe(2);await page.getByRole('button',{name:'Favorite parcel'}).click();
+await expect(page.getByRole('button',{name:'Remove favorite'})).toHaveAttribute('aria-pressed','true');expect(writes).toBe(1);
+await page.screenshot({path:info.outputPath('06-first-task-then-favorite.png'),fullPage:true});
+});
+test('excluded parcel can clear existing tasks but cannot schedule or simulate',async({page},info)=>{
+await fixture(page);let cleared=false,posts=0;
+await page.route(`**/api/me/favorites/${parcel}`,route=>route.fulfill({json:{parcel_id:parcel,revision:2,favorite:true,excluded:true,exclusion_reason:'Excluded fixture',state_id:state}}));
+await page.route(`**/api/me/parcels/${parcel}/tasks/clear`,route=>{
+ if(route.request().method()==='POST'){expect(route.request().postDataJSON()).toEqual({count:1,snapshot:'0123456789abcdef0123456789abcdef'});posts++;cleared=true;return route.fulfill({json:{canceled:1}})}
+ return route.fulfill({json:{count:cleared?0:1,snapshot:'0123456789abcdef0123456789abcdef'}});
+});
+await page.route(`**/api/me/parcels/${parcel}/tasks*`,route=>route.fulfill({json:{items:cleared?[]:[{...task('a4183a27-8402-4f42-9773-4525de25399f',parcel),due_at:'2020-12-08T14:00:00Z'}],next:''}}));
+await page.goto(`/?parcel=${parcel}&tab=tasks`);await expect(page.getByText('Fixture follow up')).toBeVisible();
+await expect(page.getByRole('textbox',{name:'Follow-up message'})).toHaveCount(0);
+await expect(page.getByRole('button',{name:'Edit / snooze'})).toHaveCount(0);
+await expect(page.getByRole('button',{name:/Simulate SMS/})).toHaveCount(0);
+await expect(page.getByRole('button',{name:'Complete task'})).toBeVisible();
+await page.getByRole('button',{name:'Clear all tasks…'}).click();await expect(page.getByRole('group',{name:'Confirm clear all tasks'})).toBeVisible();
+await page.screenshot({path:info.outputPath('07-excluded-clear-confirmation.png'),fullPage:true});
+await page.getByRole('button',{name:'Confirm clear all'}).click();await expect(page.getByText('No open tasks.')).toBeVisible();expect(posts).toBe(1);
+});
 test('Clear all rejects changed confirmation and keeps refreshed tasks',async({page})=>{
 await fixture(page);let attempts=0;
 await page.route(`**/api/me/parcels/${parcel}/tasks/clear`,route=>{
