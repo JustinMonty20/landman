@@ -45,7 +45,7 @@ await page.getByRole('button',{name:'Clear all tasks…'}).click();await expect(
 await page.screenshot({path:info.outputPath('04-clear-confirmation.png'),fullPage:true});
 await page.getByRole('button',{name:'Keep tasks'}).click();expect(posts).toBe(0);await expect(page.getByText('Fixture follow up')).toBeVisible();
 await page.getByRole('button',{name:'Clear all tasks…'}).click();await page.getByRole('button',{name:'Confirm clear all'}).click();expect(posts).toBe(1);
-await expect(page.getByText('No open tasks.')).toBeVisible();
+await expect(page.getByText('No open tasks.')).toHaveCount(0);
 await page.getByRole('link',{name:'Tasks',exact:true}).click();await expect(page.getByRole('link',{name:new RegExp(other)})).toBeVisible();
 await expect(page.getByRole('link',{name:/Parcel 009845/})).toHaveCount(0);
 await page.screenshot({path:info.outputPath('05-other-parcel-survives.png'),fullPage:true});
@@ -63,7 +63,8 @@ await page.route(`**/api/me/parcels/${parcel}/tasks*`,route=>{
 });
 await page.goto(`/?parcel=${parcel}&tab=tasks`);await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeEnabled();
 await page.getByRole('textbox',{name:'Follow-up message'}).fill('First follow up');
-await page.getByLabel('Due date and time').fill('2030-12-08T14:00');
+await page.getByLabel('Due date',{exact:true}).fill('2030-12-08');
+await page.getByLabel('Due time',{exact:true}).fill('14:00');
 selectedZone=await page.evaluate(()=>Intl.DateTimeFormat().resolvedOptions().timeZone);
 selectedDue=(await page.getByLabel(/Time zone offset/).locator('option:not([disabled])').first().getAttribute('value'))!;
 await page.getByLabel(/Time zone offset/).selectOption(selectedDue);
@@ -89,7 +90,7 @@ await expect(page.getByRole('button',{name:/Simulate SMS/})).toHaveCount(0);
 await expect(page.getByRole('button',{name:'Complete task'})).toBeVisible();
 await page.getByRole('button',{name:'Clear all tasks…'}).click();await expect(page.getByRole('group',{name:'Confirm clear all tasks'})).toBeVisible();
 await page.screenshot({path:info.outputPath('07-excluded-clear-confirmation.png'),fullPage:true});
-await page.getByRole('button',{name:'Confirm clear all'}).click();await expect(page.getByText('No open tasks.')).toBeVisible();expect(posts).toBe(1);
+await page.getByRole('button',{name:'Confirm clear all'}).click();await expect(page.getByText('No open tasks.')).toHaveCount(0);expect(posts).toBe(1);
 });
 test('Clear all rejects changed confirmation and keeps refreshed tasks',async({page})=>{
 await fixture(page);let attempts=0;
@@ -105,4 +106,53 @@ await page.getByRole('button',{name:'Confirm clear all'}).click();
 await expect(page.getByRole('alert')).toContainText('Task count changed');
 await expect(page.getByRole('group',{name:'Confirm clear all tasks'})).toHaveCount(0);
 await expect(page.getByText('Fixture follow up')).toBeVisible();expect(attempts).toBe(1);
+});
+test('task editor fits date and time controls in narrow pane and enforces one segment',async({page},info)=>{
+await fixture(page);
+let posts=0;
+await page.route(`**/api/me/parcels/${parcel}/tasks*`,route=>{
+ if(route.request().method()==='POST'){posts++;return route.fulfill({status:500})}
+ return route.fulfill({json:{items:[],next:''}});
+});
+for(const viewport of [{width:1440,height:900},{width:1366,height:768},{width:768,height:1024}]){
+ await page.setViewportSize(viewport);
+ await page.goto(`/?parcel=${parcel}&tab=tasks`);
+ const pane=page.getByRole('region',{name:'Parcel follow-up tasks'});
+ const date=pane.getByLabel('Due date',{exact:true}),time=pane.getByLabel('Due time',{exact:true});
+ await expect(date).toBeVisible();await expect(time).toBeVisible();
+ const panelBox=await pane.boundingBox(),dateBox=await date.boundingBox(),timeBox=await time.boundingBox();
+ expect(panelBox).not.toBeNull();expect(dateBox).not.toBeNull();expect(timeBox).not.toBeNull();
+ for(const box of [dateBox!,timeBox!]){
+  expect(box.x).toBeGreaterThanOrEqual(panelBox!.x-1);
+  expect(box.x+box.width).toBeLessThanOrEqual(Math.min(viewport.width,panelBox!.x+panelBox!.width)+1);
+ }
+ await date.fill('2030-12-08');await time.fill('14:00');
+ await expect(pane.getByLabel(/Time zone offset/)).toBeVisible();
+ await pane.getByRole('textbox',{name:'Follow-up message'}).fill('Plain follow up');
+ await expect(pane.getByText('145 characters remaining')).toBeVisible();
+ await expect(pane.getByText(/GSM-7|units remaining|No open tasks/)).toHaveCount(0);
+ await pane.screenshot({path:info.outputPath(`task-controls-${viewport.width}x${viewport.height}.png`)});
+ }
+const pane=page.getByRole('region',{name:'Parcel follow-up tasks'});
+const message=pane.getByRole('textbox',{name:'Follow-up message'});
+await message.fill('A^');
+await expect(pane.getByText('157 characters remaining')).toBeVisible();
+await message.fill('A😀');
+await expect(pane.getByText('67 characters remaining')).toBeVisible();
+await message.fill('^'.repeat(81));
+await expect(pane.getByRole('alert')).toContainText('Message is too long for one SMS');
+await expect(pane.getByRole('button',{name:'Create task'})).toBeDisabled();
+await message.fill('😀'.repeat(36));
+await expect(pane.getByRole('button',{name:'Create task'})).toBeDisabled();
+await message.fill('^'.repeat(80));
+await expect(pane.getByText('0 characters remaining')).toBeVisible();
+await expect(pane.getByRole('alert')).toHaveCount(0);
+await pane.getByLabel(/Time zone offset/).selectOption({index:1});
+await pane.getByLabel('Due date',{exact:true}).fill('2030-12-09');
+await expect(pane.getByLabel(/Time zone offset/)).toHaveValue('');
+await expect(pane.getByRole('button',{name:'Create task'})).toBeDisabled();
+await page.getByLabel('Due time',{exact:true}).fill('');
+await expect(pane.getByLabel(/Time zone offset/)).toHaveCount(0);
+await expect(pane.getByRole('button',{name:'Create task'})).toBeDisabled();
+expect(posts).toBe(0);
 });

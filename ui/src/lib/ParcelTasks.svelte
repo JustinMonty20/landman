@@ -4,11 +4,12 @@ import { dueCandidates, smsCapacity } from './taskTime';
 let {parcel = '', editable = true, refresh = 0, oncreated}: {parcel?: string; editable?: boolean; refresh?: number; oncreated?: (parcel: string) => void} = $props();
 type Task = {id:string;parcel_id:string;parcel_number:string|null;message:string;due_at:string;timezone:string;status:'open'|'completed'|'canceled';reminder_state:'queued'|'stubbed'|'canceled'|'missed';revision:number;schedule_version:number};
 let items=$state<Task[]>([]), next=$state(''), loading=$state(false), busy=$state(false), error=$state(''), notice=$state('');
-let message=$state(''), local=$state(''), offset=$state(''), editing=$state<Task|null>(null), createID=$state('');
+let message=$state(''), dueDate=$state(''), dueTime=$state(''), offset=$state(''), editing=$state<Task|null>(null), createID=$state('');
 let confirmClear=$state<{count:number;snapshot:string}|null>(null), clearing=$state(false);
 let conflict=$state(false), currentTask=$state<Task|null>(null), now=$state(Date.now());
 let generation=0, reader:AbortController|null=null;
 const timezone=Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+const local=$derived(dueDate && dueTime ? `${dueDate}T${dueTime}` : '');
 const candidates=$derived(dueCandidates(local,timezone));
 const capacity=$derived(smsCapacity(message));
 const overdue=$derived(items.filter(t=>Date.parse(t.due_at)<now));
@@ -28,10 +29,10 @@ async function load(more=false){
  }catch(e){if(request===generation && !signal.aborted)error=String(e)}finally{if(request===generation){loading=false;reader=null}}
 }
 function edit(t:Task){editing=t;conflict=false;currentTask=null;error='';message=t.message;const date=new Date(t.due_at);const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date);
- const fields=Object.fromEntries(parts.map(p=>[p.type,p.value]));local=`${fields.year}-${fields.month}-${fields.day}T${fields.hour}:${fields.minute}`;
+ const fields=Object.fromEntries(parts.map(p=>[p.type,p.value]));dueDate=`${fields.year}-${fields.month}-${fields.day}`;dueTime=`${fields.hour}:${fields.minute}`;
  offset=dueCandidates(local,timezone).find(c=>Date.parse(c.due_at)===date.getTime())?.due_at ?? '';
 }
-function reset(){editing=null;conflict=false;currentTask=null;message='';local='';offset='';createID='';}
+function reset(){editing=null;conflict=false;currentTask=null;message='';dueDate='';dueTime='';offset='';createID='';}
 async function refreshEditing(){
  if(!editing || busy)return;
  const id=editing.id;busy=true;error='';
@@ -92,8 +93,9 @@ $effect(()=>{if(refresh>0)void load()});
  {#if parcel && editable}
  <form onsubmit={(e)=>{e.preventDefault();void save()}}>
  <label>Message (single SMS segment)<textarea class="textarea" aria-label="Follow-up message" bind:value={message} oninput={()=>{if(!editing)createID=''}} required disabled={busy}></textarea></label>
- <span class:invalid={capacity.remaining<0}>{capacity.remaining} {capacity.encoding} units remaining</span>
- <label>Due date and time<input class="input" type="datetime-local" bind:value={local} oninput={()=>{offset='';createID=''}} required disabled={busy}/></label>
+ {#if capacity.remaining<0}<p role="alert">Message is too long for one SMS. Shorten it to save.</p>{:else}<span>{capacity.remaining} characters remaining</span>{/if}
+ <div class="due-fields"><label>Due date<input class="input" type="date" bind:value={dueDate} oninput={()=>{offset='';createID=''}} required disabled={busy}/></label>
+ <label>Due time<input class="input" type="time" bind:value={dueTime} oninput={()=>{offset='';createID=''}} required disabled={busy}/></label></div>
  {#if local && candidates.length===0}<p role="alert">This local time does not exist in {timezone}. Choose another time.</p>{/if}
  {#if candidates.length>0}<label>Time zone offset ({timezone})<select class="select" bind:value={offset} onchange={()=>{createID=''}} required disabled={busy}>
  <option value="" disabled>Select an offset</option>{#each candidates as candidate}<option value={candidate.due_at}>{candidate.label}</option>{/each}</select></label>{/if}
@@ -103,7 +105,6 @@ $effect(()=>{if(refresh>0)void load()});
  </form>{/if}
  {#if notice}<p role="status">{notice}</p>{/if}{#if error}<p role="alert">{error}</p>{/if}
  {#if loading && items.length===0}<p role="status">Loading tasks…</p>{/if}
- {#if !loading && items.length===0 && !error}<p>No open tasks.</p>{/if}
  {#snippet taskRow(t:Task)}<li>
   {#if !parcel}<a href={`/?parcel=${t.parcel_id}&tab=tasks`}>Parcel {t.parcel_number || t.parcel_id}</a>{/if}
   <p class="message">{t.message}</p><p><strong>{Date.parse(t.due_at)<now?'Overdue':'Upcoming'}</strong> · {display(t)} ({t.timezone}) · version {t.schedule_version}</p>
@@ -119,5 +120,5 @@ $effect(()=>{if(refresh>0)void load()});
  {#if next}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void load(true)} disabled={loading || busy}>Load more tasks</button>{/if}
 </section>
 <style>
-.tasks{padding:12px;display:grid;gap:12px;font-size:13px}.tasks header,.buttons{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.tasks header{justify-content:space-between;height:auto;min-height:52px;padding:8px 12px;gap:8px}.tasks h2{font-size:16px;font-weight:650}.tasks h3{font-size:14px;font-weight:650;border-bottom:1px solid var(--border);padding-bottom:6px}.tasks form{display:grid;gap:10px}.tasks label{display:grid;gap:4px}.tasks textarea{min-height:70px}.tasks ul{display:grid;gap:8px;list-style:none;padding:0}.tasks li{border:1px solid var(--border);border-radius:8px;padding:12px;overflow-wrap:anywhere}.tasks li p{margin:6px 0}.tasks .message{white-space:pre-wrap}.tasks .invalid,.tasks [role="alert"]{color:#fbbf74}.tasks .stub-note{color:var(--muted)}.tasks a{color:var(--color-primary-300)}
+.tasks{padding:12px;display:grid;gap:12px;font-size:13px}.tasks header,.buttons{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.tasks header{justify-content:space-between;height:auto;min-height:52px;padding:8px 12px;gap:8px}.tasks h2{font-size:16px;font-weight:650}.tasks h3{font-size:14px;font-weight:650;border-bottom:1px solid var(--border);padding-bottom:6px}.tasks form{display:grid;gap:10px;min-width:0}.tasks label{display:grid;gap:4px;min-width:0}.tasks .due-fields{display:flex;flex-wrap:wrap;gap:10px;min-width:0}.tasks .due-fields label{flex:1 1 140px;min-width:0}.tasks .due-fields input{box-sizing:border-box;width:100%;min-width:0;max-width:100%}.tasks textarea{min-height:70px}.tasks ul{display:grid;gap:8px;list-style:none;padding:0}.tasks li{border:1px solid var(--border);border-radius:8px;padding:12px;overflow-wrap:anywhere}.tasks li p{margin:6px 0}.tasks .message{white-space:pre-wrap}.tasks [role="alert"]{color:#fbbf74}.tasks .stub-note{color:var(--muted)}.tasks a{color:var(--color-primary-300)}
 </style>

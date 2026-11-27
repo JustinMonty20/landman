@@ -13,4 +13,6 @@ test('single segment limits use GSM septets and UTF-16 units',()=>{
  assert.equal(smsCapacity('^'.repeat(81)).remaining,-2);
  assert.equal(smsCapacity('😀'.repeat(35)).remaining,0);
  assert.equal(smsCapacity('😀'.repeat(36)).remaining,-2);
+ assert.equal(smsCapacity('A^').remaining,157);
+ assert.equal(smsCapacity('A😀').remaining,67);
 });

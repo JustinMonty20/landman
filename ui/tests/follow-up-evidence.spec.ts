@@ -46,13 +46,15 @@ test('selected parcel composes a single-segment follow-up with explicit offset',
  const pane=page.getByRole('region',{name:'Parcel follow-up tasks'});
  await expect(pane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
  await pane.getByRole('textbox',{name:'Follow-up message'}).fill('Follow up with buyer');
- await pane.getByLabel('Due date and time').fill('2030-12-08T14:00');
+ await pane.getByLabel('Due date',{exact:true}).fill('2030-12-08');
+ await pane.getByLabel('Due time',{exact:true}).fill('14:00');
  await page.getByRole('tab',{name:'Research'}).click();
  await page.getByRole('tab',{name:'Evidence',exact:true}).click();
  await expect(pane.getByRole('textbox',{name:'Follow-up message'})).toBeHidden();
  await page.getByRole('tab',{name:'Tasks'}).click();
  await expect(pane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Follow up with buyer');
- await expect(pane.getByLabel('Due date and time')).toHaveValue('2030-12-08T14:00');
+ await expect(pane.getByLabel('Due date',{exact:true})).toHaveValue('2030-12-08');
+ await expect(pane.getByLabel('Due time',{exact:true})).toHaveValue('14:00');
  await expect(pane.getByLabel(/Time zone offset/)).toBeVisible();
  const choices=pane.getByLabel(/Time zone offset/);
  await choices.selectOption({index:1});

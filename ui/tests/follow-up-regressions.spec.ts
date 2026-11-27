@@ -87,7 +87,7 @@ for(const source of ['page','reload'] as const)for(const stale of ['page','error
  await requested;
  await expect(queue.getByRole('button',{name:'Load more tasks'})).toBeDisabled();
  await queue.getByRole('button',{name:'Complete task'}).click();
- await expect(queue.getByText('No open tasks.')).toBeVisible();
+ await expect(queue.getByText('No open tasks.')).toHaveCount(0);
  release();
  await expect(queue.getByText('Original reminder')).toHaveCount(0);
  await expect(queue.getByText('Obsolete page')).toHaveCount(0);

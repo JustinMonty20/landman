@@ -254,7 +254,8 @@ test('full-size parcel tabs scroll horizontally while notes and tasks retain dra
  await expect(taskPane.getByRole('button',{name:'Create task'})).toBeVisible();
  await expect(taskPane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
  await taskPane.getByRole('textbox',{name:'Follow-up message'}).fill('Retain my unsaved task');
- await taskPane.getByLabel('Due date and time').fill('2030-12-08T14:00');
+ await taskPane.getByLabel('Due date',{exact:true}).fill('2030-12-08');
+ await taskPane.getByLabel('Due time',{exact:true}).fill('14:00');
  await expect(taskPane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Retain my unsaved task');
  await panel.getByRole('tabpanel',{name:'Tasks'}).evaluate(el=>el.scrollTop=0);
  await expect(taskPane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
@@ -265,5 +266,6 @@ test('full-size parcel tabs scroll horizontally while notes and tasks retain dra
  await expect(taskPane).toBeHidden();
  await tabs.getByRole('tab',{name:'Tasks'}).click();
  await expect(taskPane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Retain my unsaved task');
- await expect(taskPane.getByLabel('Due date and time')).toHaveValue('2030-12-08T14:00');
+ await expect(taskPane.getByLabel('Due date',{exact:true})).toHaveValue('2030-12-08');
+ await expect(taskPane.getByLabel('Due time',{exact:true})).toHaveValue('14:00');
 });
