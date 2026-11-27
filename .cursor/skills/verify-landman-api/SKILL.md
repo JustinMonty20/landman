@@ -1,6 +1,6 @@
 ---
 name: verify-landman-api
-description: Verify the Landman Go API and Google session boundary. Use for cmd/api, internal/auth, internal/parcelapi, API migrations, routes, or sessions.
+description: Verify the Landman Go API, sessions, and private parcel records. Use for cmd/api, internal/auth, internal/parcelapi, internal/parcelcrm, API migrations, routes, or sessions.
 ---
 # Verify Landman API
 
@@ -15,7 +15,20 @@ export AUTH_TEST_DATABASE_URL="$VERIFY_DATABASE_URL"
 go test -race -tags postgres ./internal/auth -count=1 -v
 ```
 
-Require tests to run, not skip. The database name must start with `landman_auth_test_`. Tests use a local signed-token provider. They check identity, session rotation, hashing, expiry, revocation, allowed accounts, callback replay, rejected claims, origin checks, and migration rollback. Exit the lane shell to remove its container.
+Require tests to run, not skip. The database name must start with `landman_auth_test_`. Tests use a local signed-token provider. They check identity, session rotation, hashing, expiry, revocation, allowed accounts, callback replay, rejected claims, origin checks, migration rollback, saved detail fields, and private owner information. Exit the lane shell to remove its container.
+
+## Private favorites and lead-state database lane
+
+Use a new setup shell with `VERIFY_DB_NAME=landman_auth_test_verify`. Run this package separately from the authentication package:
+
+```sh
+CRM_TEST_DATABASE_URL="$VERIFY_DATABASE_URL" \
+  go test -race -tags postgres ./internal/parcelcrm \
+  -run '^(TestFocusedStateRead|TestBoardIsolationAndRevision|TestReplayAfterRemovalRequiresRevision|TestConcurrentDeleteAndMoveHistory|TestBoundedPagesAndOrigin)$' \
+  -count=1 -v
+```
+
+Require the database tests to execute. Check account isolation, board and card pages, state creation and changes, default states, exclusions, favorite removal, revision conflicts, retries, and exact-origin checks. These tests exercise stored private records. They do not prove browser behavior or reminder delivery. `TestBoardFixtureMeasurement` uses 1,000 favorites and 50 states; run it only as an explicitly selected local performance check. Do not make it a default pass requirement. Exit this shell to remove its container.
 
 ## Parcel API database lane
 
@@ -26,7 +39,7 @@ export API_TEST_DATABASE_URL="$VERIFY_DATABASE_URL"
 go test -race -tags postgres ./internal/parcelapi -count=1 -v
 ```
 
-Require `TestHTTPPostGIS` and the tax and source database tests to run. An unset URL causes skips and is not a pass. Check list/map agreement, cursor and source stamps, bounds, response limits, tax active-file selection, missing evidence, and soil provenance. Exit this shell after the fixture tests. Keep it only when the optional process check is explicitly selected.
+Require `TestHTTPPostGIS` and the tax and source database tests to run. An unset URL causes skips and is not a pass. Check list/map agreement, parcel lookup, cursor and source stamps, bounds, response limits, tax active-file selection, missing evidence, soil provenance, qualification layers, jurisdiction filters, and stored flood evidence. Exit this shell after the fixture tests. Keep it only when the optional process check is explicitly selected.
 
 ## Optional real API process
 
@@ -72,9 +85,11 @@ Require HTTP 401 without a session and a clean process exit. Database fixtures v
 ## Offline checks and completion
 
 ```sh
-env -u DATABASE_URL -u AUTH_TEST_DATABASE_URL -u API_TEST_DATABASE_URL go test -race ./internal/auth ./internal/parcelapi -count=1
-go vet ./cmd/api ./internal/auth ./internal/parcelapi
-go build ./cmd/api ./internal/auth ./internal/parcelapi
+env -u DATABASE_URL -u AUTH_TEST_DATABASE_URL -u API_TEST_DATABASE_URL \
+  -u CRM_TEST_DATABASE_URL \
+  go test -race ./internal/auth ./internal/parcelapi ./internal/parcelcrm -count=1
+go vet ./cmd/api ./internal/auth ./internal/parcelapi ./internal/parcelcrm
+go build ./cmd/api ./internal/auth ./internal/parcelapi ./internal/parcelcrm
 ```
 
 Record commands, exits, test execution or skips, and process evidence under ignored `artifacts/verify/`. Use `verify-landman-ui` for proxy or browser changes. Never substitute browser fixture success for API database evidence. Keep secrets and session tokens out of logs.

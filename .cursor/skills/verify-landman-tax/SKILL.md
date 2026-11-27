@@ -21,6 +21,18 @@ DATABASE_URL="$VERIFY_DATABASE_URL" TAX_GOLDEN_DB=1 \
 
 Require the golden test to execute, not skip. It exercises the configured tax job, all four feed tables, retained files, identical retry, and the existing performance gate. Store tests check failed publication and active-import retention. These fixtures do not prove that operator files are available.
 
+## Retained capture and replay fixtures
+
+Use a new database setup shell with `VERIFY_DB_NAME=taxworker_verify`. Run:
+
+```sh
+TAX_SHARED_TEST_DSN="$VERIFY_DATABASE_URL" TAX_SHARED_TEST_DISPOSABLE=1 \
+  go test -race -tags postgres ./internal/connector/union/taxjob \
+  -run '^TestSharedTaxRunRetainsAndReplaysFourFiles$' -count=1 -v
+```
+
+Require this test to execute. It checks all four retained captures, replay attempts, unchanged and older content, failed publication, and later parcel links. This lane uses local fixture files. It does not require operator paths. The separate schema-upgrade fixture needs its own old-schema database and is not this replay check.
+
 ## Optional operator-file drive
 
 Require explicit operator approval and all four input paths. Do not request source URLs. Known county URLs are provenance only. The application does not download these files. Keep files unchanged while the job reads them.
@@ -93,12 +105,29 @@ Require the latest attempt to be `union.tax` with outcome `failed`. Automated st
 
 ## Optional combined bare-command drive
 
-This is a separate opt-in check, not the tax-only drive. Require all four files and explicit approval for county GIS and USDA requests. Use a new empty migrated database. Do not also run the separate GIS journey in this pass.
+This is a separate opt-in check, not the tax-only drive. Require all four tax paths, a FEMA catalog path, and a FEMA archive path. FEMA is the Federal Emergency Management Agency. Require approval for county parcel, soil, zoning, road, structure, and assessed-value requests, plus USDA requests. Use a new empty migrated database. Do not also run the separate GIS journey in this pass.
 
-Repeat the operator-file block through `run_tax_cli` definition in this new shell. Run without arguments:
+Before a live recommendation, compare current source counts with each client's row, receipt, byte, and time limits. Record any known rejecting gate. Local fixture success does not prove that a full source fits those limits.
+
+Repeat the operator-file block through the `run_tax_cli` definition in this new shell. The tax-only function deliberately excludes FEMA settings. Define a separate combined function:
 
 ```sh
-if run_tax_cli >"$EVIDENCE/all.stdout.txt" 2>"$EVIDENCE/all.stderr.txt"; then
+: "${UNION_FEMA_CATALOG_PATH:?Require the FEMA catalog file}"
+: "${UNION_FEMA_ARCHIVE_PATH:?Require the FEMA archive file}"
+run_all_cli() {
+  env -i PATH="$PATH" HOME="$HOME" DATABASE_URL="$VERIFY_DATABASE_URL" \
+    PARCEL_EVIDENCE_DIR="$PWD/$EVIDENCE/private" \
+    UNION_TAX_ARTIFACT_DIR="$PWD/$EVIDENCE/private" \
+    UNION_TAX_DELINQUENT_PATH="$UNION_TAX_DELINQUENT_PATH" \
+    UNION_TAX_BILLING_PATH="$UNION_TAX_BILLING_PATH" \
+    UNION_TAX_FORECLOSURE_PATH="$UNION_TAX_FORECLOSURE_PATH" \
+    UNION_TAX_PIPELINE_PATH="$UNION_TAX_PIPELINE_PATH" \
+    UNION_FEMA_ARTIFACT_DIR="$PWD/$EVIDENCE/private/fema" \
+    UNION_FEMA_CATALOG_PATH="$UNION_FEMA_CATALOG_PATH" \
+    UNION_FEMA_ARCHIVE_PATH="$UNION_FEMA_ARCHIVE_PATH" \
+    "$EVIDENCE/landman"
+}
+if run_all_cli >"$EVIDENCE/all.stdout.txt" 2>"$EVIDENCE/all.stderr.txt"; then
   status=0
 else
   status=$?
@@ -109,7 +138,9 @@ docker exec "$VERIFY_CONTAINER" psql -X -U verify -d "$VERIFY_DB_NAME" \
   >"$EVIDENCE/all-attempts.txt"
 ```
 
-Require exit 0, empty stdout, and clean full-scan attempts for parcels, soil, screening, and tax. Confirm parcel precedes soil, screening precedes tax, and qualification reconciliation occurs after successful sources. The combined process retains its single ten-minute deadline. A failed or quarantined required job must stop later jobs. Use `go test ./cmd/landman -count=1 -v` for controlled failure-order tests; do not damage a live source to force failure.
+Require exit 0, empty stdout, and clean attempts in this order: `union.gis.parcels`, `union.gis.soil`, `union.gis.zoning`, `union.gis.roads`, `union.fema`, `union.gis.structures`, `union.gis.assessed_value`, `union.soil.screening`, and `union.tax`. Source attempts use full-scan kind. Screening is a separate derived attempt. Qualification assessment is not in this combined sequence; run its stored-input command separately when selected.
+
+The combined command bounds each step separately. Most steps have ten minutes; assessed-value capture has three hours. There is no single ten-minute outer deadline for the whole combined command. A failed or quarantined required job stops later jobs. Use `go test ./cmd/landman -count=1 -v` for controlled ordering and deadline tests. Do not damage a live source to force failure. A combined drive without FEMA inputs cannot verify this path.
 
 ## Completion and cleanup
 

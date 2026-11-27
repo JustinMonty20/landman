@@ -9,13 +9,19 @@ Select one database name before this block:
 - API sessions: `export VERIFY_DB_NAME=landman_auth_test_verify`
 - Parcel API: `export VERIFY_DB_NAME=landman_api_test_verify`
 - Tax or qualification: `export VERIFY_DB_NAME=landman_tax_integration`
+- Retained tax capture and replay: `export VERIFY_DB_NAME=taxworker_verify`
+- Private favorites and lead states: `export VERIFY_DB_NAME=landman_auth_test_verify`
+- Parcel publication and replay: `export VERIFY_DB_NAME=landman_parceljob_test_verify`
+- Soil capture and replay: `export VERIFY_DB_NAME=soil_test_verify`
+- FEMA publication fixtures: `export VERIFY_DB_NAME=landman_api_test_fema`
+- Vacancy fixtures: `export VERIFY_DB_NAME=landman_api_test_verify`
 
 Run each lane in a separate shell and container. The container has a random loopback port and no retained volume. Docker removal deletes only this test database. The password below is for disposable local data only.
 
 ```sh
 set -euo pipefail
 case "${VERIFY_DB_NAME:-}" in
-  landman_auth_test_verify|landman_api_test_verify|landman_tax_integration) ;;
+  landman_auth_test_verify|landman_api_test_verify|landman_api_test_fema|landman_tax_integration|taxworker_verify|landman_parceljob_test_verify|soil_test_verify) ;;
   *) echo 'Select a verification database name'; exit 1 ;;
 esac
 VERIFY_CONTAINER=$(docker run -d --rm \

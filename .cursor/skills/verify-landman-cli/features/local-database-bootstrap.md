@@ -22,13 +22,13 @@ Preconditions:
 - Docker is available.
 - The shell has `VERIFY_CONTAINER`, `VERIFY_VOLUME`, `POSTGRES_URL`, and `GOOSE_DATABASE_URL` from `live-gis.md`.
 - `DB_CONTAINER` on every `make` command is `landman-verify-postgis`.
-- This run will not `docker compose` and will not `make db-drop` against `landman-postgis`.
+- This run will not `docker compose` and will not `verify_make db-drop` against `landman-postgis`.
 
 - Run the `docker run` in `live-gis.md`. `docker inspect` on `landman-verify-postgis` shows running and healthy, image `postgis/postgis:18-3.6-alpine`, and host port `55432` on `127.0.0.1`.
-- Run `make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"`, then `make db-create` with the same overrides. Both exit 0. A second `make db-create` also exits 0.
-- Run `make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0`. Exit code 0.
-- Run `make migrate-version` with the same `DB_CONTAINER` and `DATABASE_URL`. Exit code 0. Stderr contains `goose: version ` and the integer of the highest filename prefix in `db/migrations/`. A log timestamp precedes that line. Stdout is the Make recipe. `make migrate-up` stderr contains `goose: successfully migrated database to version: ` and the same integer. Read the highest numbered migration from the current checkout. Require that integer in the output; do not use a historical fixed version.
-- Run `check-schema` with the flags in `live-gis.md`. Stdout is `schema: ok` and the exit code is 0. If the exit code is 1, do not load the seed. A schema mismatch names the table and the column, then `missing` or `not null`. A refused container, an unreadable seed, a seed that does not parse, a missing flag, or a failed catalog query prints `check-schema:` on stderr and leaves stdout empty.
+- Run `verify_make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"`, then `verify_make db-create` with the same overrides. Both exit 0. A second `verify_make db-create` also exits 0.
+- Run `verify_make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0`. Exit code 0.
+- Run `verify_make migrate-version` with the same `DB_CONTAINER` and `DATABASE_URL`. Exit code 0. Stderr contains `goose: version ` and the integer of the highest filename prefix in `db/migrations/`. A log timestamp precedes that line. Stdout is the Make recipe. `verify_make migrate-up` stderr contains `goose: successfully migrated database to version: ` and the same integer. Read the highest numbered migration from the current checkout. Require that integer in the output; do not use a historical fixed version.
+- Run `check-schema` with the flags in `live-gis.md`. Stdout is `schema: ok` and the exit code is 0. If the exit code is 1, do not load the seed. A schema mismatch names the table and the column, then `missing` or `not null`. Operational failures exit 1. Missing or invalid flags exit 2. Both leave stdout empty; capture stderr and the actual exit.
 - Run `docker exec -i "$VERIFY_CONTAINER" psql "$GOOSE_DATABASE_URL" -c '\d parcels'` and a public base-table listing. `parcels` includes `id`, `county_id`, `shape`, and `likely_vacant`. The base tables include `parcels`, `parcel_sales`, `job_attempts`, `quarantined_records`, `soil_map_units`, `soil_polygons`, `soil_polygon_parcels`, `soil_screening_runs`, `soil_screening_heads`, `soil_screening_members`, `soil_screening_ratings`, `soil_polygon_sets`, `soil_polygon_set_members`, `soil_polygon_set_heads`, `soil_interpretation_keys`, `soil_screening_refresh_status`, `soil_assessment_keys`, `soil_parcel_assessments`, `soil_assessment_map_units`, `soil_component_facts`, `soil_measurements`, `goose_db_version`, and `spatial_ref_sys`.
 - Run `docker exec -i "$VERIFY_CONTAINER" psql "$GOOSE_DATABASE_URL" -v ON_ERROR_STOP=1 < .cursor/skills/verify-landman-cli/seed.sql`. Exit code 0.
 - Run `check-loaded` with the flags in `live-gis.md`. Exit code 0. Stdout prints the census and then `loaded: ok`. The census includes `census parcels=` and a `census parcel` line for `07102010` and for `07102051`. Those lines are the reset check. A miss names the table or the `source_parcel_id` and exits 1.
@@ -38,14 +38,14 @@ Preconditions:
 
 - `pg_isready` can pass while the `landman` database is missing or while migrations have not run. Healthcheck success is not readiness for this feature.
 - Goose `localhost:5432` is Postgres inside `landman-verify-postgis`. The host port `55432` is for `./landman` only.
-- `make db-drop` always drops the database named `landman` on `DB_CONTAINER`. Without the command-line `DB_CONTAINER`, Make uses `.env` and can drop the operator database.
-- `make db-create` does not pass `ON_ERROR_STOP`. A SQL error in the bootstrap script can still exit 0. Treat a later read of the `landman` database as the proof that create worked.
+- `verify_make db-drop` drops the database named `landman` on the explicit verification container. The helper rejects a missing verification container override. Raw `make db-drop` can load `.env` and select the operator database; do not use it here.
+- `verify_make db-create` does not pass `ON_ERROR_STOP`. A SQL error in the bootstrap script can still exit 0. Treat a later read of the `landman` database as the proof that create worked.
 - The bootstrap SQL creates a database named `landman`. It cannot create a different name. Isolation is the container, not a second database name.
 - Host port `5432` in `docker-compose.yml` is fixed. `POSTGRES_PORT` in `.env` does not change that mapping. The README sentence that says to update the URLs after changing `POSTGRES_PORT` describes a port Compose does not publish.
 - `parcel_shape_parts` is a temporary table dropped on commit. A schema check after bootstrap, and a schema check after import, must not require it.
 - `parcel_sales` exists after migrate. The seed loads the kept slots for its parcel ids. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete. The reset check is the `check-loaded` census.
 - `capture-seed` rewrites `seed.sql` from the county. This bootstrap loads the file already in the repo. Do not run `capture-seed` as part of the reset.
-- Source commands record attempts and successful sources also record derived attempts. Scheduler startup records qualification reconciliation before any calendar is due. Bare `./landman` also includes tax; use the tax skill for that combined path. Quarantine rows appear only for rejected records.
+- Source commands record attempts. Clean soil imports start screening; parcel imports start it when due. Qualification runs through its own command or calendar, not scheduler startup. Bare `./landman` also includes tax; use the tax skill for that combined path. Quarantine rows appear only for rejected records.
 - Goose migrations that have already been applied are not replayed if you edit an old file. New behavior belongs in a new numbered file.
 - `make migrate-create` writes a new SQL file. It is not a verification drive.
-- `make migrate-down` rolls back one migration on `DATABASE_URL`. Reset the verify database with `make db-drop` and `make db-create` on `landman-verify-postgis`, not with `migrate-down`.
+- `make migrate-down` rolls back one migration on `DATABASE_URL`. Reset the verify database with `verify_make db-drop` and `verify_make db-create` on `landman-verify-postgis`, not with `migrate-down`.

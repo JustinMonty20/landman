@@ -1,6 +1,6 @@
 ---
 name: verify-landman-cli
-description: Verify parcel edge cases with small local fixtures and seeded PostGIS data. Use for parcel ingestion, storage, geometry, sales, quarantine, repair, scheduler, or qualification changes.
+description: Verify CLI ingestion with local fixtures and PostGIS data. Use for parcels, soil, retained capture or replay, FEMA, vacancy, storage, quarantine, repair, scheduler, or qualification changes.
 ---
 # Verify Landman CLI
 
@@ -56,9 +56,42 @@ DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./internal/qual
 
 The command-package unit tests check dispatch and failure ordering. The selected qualification tests check a few stored shapes, source retirement, missing evidence, and independent refresh failures. For a qualification algorithm change, also run the full local qualification suite in [qualification checks](features/qualification.md). This uses local data, not live county requests.
 
+## Other ingestion paths
+
+Select the matching row when its source or shared ingestion behavior changes. Use a new container from [database setup](../verify-landman/database.md) for each row. All commands use small local fixtures. Run from the repository root and require the database tests to execute.
+
+| Path | Database name | Command |
+| --- | --- | --- |
+| Parcel publication, owner labels, and replay | `landman_parceljob_test_verify` | `DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./internal/connector/union/parceljob -count=1 -v` |
+| Soil capture, screening, and replay | `soil_test_verify` | `SOIL_TEST_DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./internal/connector/union/soiljob -count=1 -v` |
+| Retained FEMA publication and replay | `landman_api_test_fema` | `FEMA_API_TEST_DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./internal/connector/fema -count=1 -v` |
+| Vacancy fixtures | `landman_api_test_verify` | `API_TEST_DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./internal/vacancy -count=1 -v` |
+| Structure and assessed-value capture/replay | `landman_api_test_verify` | `API_TEST_DATABASE_URL="$VERIFY_DATABASE_URL" go test -race -tags postgres ./internal/connector/union/vacancyjob -count=1 -v` |
+
+FEMA is the Federal Emergency Management Agency. Its database fixture checks publication retention and replay. It does not parse a saved official archive or download a release. `TestSavedUnionArchive` needs an explicitly selected `FEMA_TEST_ARCHIVE` path; report its default skip. Structure and assessed-value fixtures use local HTTP services, not county requests. These checks do not prove full-county completeness or runtime limits. Tax capture and replay use `verify-landman-tax`. Full stored-soil assessment and performance checks remain separate selected checks; do not infer them from capture fixtures.
+
+## Isolated Make targets
+
+For the extended bootstrap, migration, and scheduler recipes, define this function in Bash at the repository root:
+
+```sh
+verify_make() { .cursor/skills/verify-landman-cli/verify-make.sh "$@"; }
+```
+
+The executable helper removes the `.env` include from a temporary Makefile and clears inherited settings. It accepts one target only. Build accepts no additional arguments. Database targets accept only `DB_CONTAINER`, `POSTGRES_URL`, `DATABASE_URL`, `GOOSE_VERSION`, and `GOOSE_CMD` assignments. Each database target requires one `DB_CONTAINER=landman-verify-<name>` assignment. Extra targets, Make options, and other assignments are rejected. Confirm that this run owns the container before any reset. Pass each database URL on the command line. The helper does not prove container ownership.
+
+Use `verify_make build`, not `make run`. The helper leaves the product Makefile unchanged. Do not use it to run arbitrary Make targets.
+
+After a change to this helper or the GIS bootstrap block, run its local failure-path tests. They use temporary files and command substitutes, not Docker or source requests:
+
+```sh
+python3 .cursor/skills/verify-landman-cli/verify-harness.py
+```
+
 ## Optional checks
 
-- [Live GIS journey](live-gis.md): explicit approval only. It fetches county soil and parcels and calls USDA.
+- [Feature map](features/README.md): local bootstrap, migrations, scheduler, and qualification checks, plus the optional GIS journey. Bootstrap and scheduler waiting do not need a live-source request.
+- [Live GIS journey](live-gis.md): explicit approval only. It fetches county soil and parcels and calls USDA. The one-page timing probe is a diagnostic, not countywide capture proof.
 - [Qualification checks](features/qualification.md): extended local spatial cases and a separately approved live-source path.
 - County-sized synthetic performance and retained live-capture replay: use `docs/ingestion-gaps-verification.md` only when explicitly selected.
 - Manual tax files and the combined bare command: use `verify-landman-tax` only when that opt-in drive is requested.
