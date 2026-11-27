@@ -30,8 +30,8 @@ test('conflict preserves draft and requires explicit current-task refresh before
   if(url.pathname.endsWith(`/${task}`)){reads++;revision=2;return route.fulfill({json:row({revision:2,message:'Concurrent change',schedule_version:2})})}
   return route.fulfill({json:{items:[row({revision,message:revision===2?'Concurrent change':'Original reminder',schedule_version:revision})],next:''}});
  };
- await page.route(`**/api/me/favorites/${parcel}/tasks/**`,taskRoute);
- await page.route(`**/api/me/favorites/${parcel}/tasks*`,taskRoute);
+ await page.route(`**/api/me/parcels/${parcel}/tasks/**`,taskRoute);
+ await page.route(`**/api/me/parcels/${parcel}/tasks*`,taskRoute);
  await page.goto(`/?parcel=${parcel}`);await page.getByRole('tab',{name:'Tasks'}).click();
  const pane=page.getByRole('region',{name:'Parcel follow-up tasks'});
  await expect(pane.getByText('Original reminder')).toBeVisible();
@@ -54,41 +54,17 @@ test('conflict preserves draft and requires explicit current-task refresh before
  await expect(pane.getByText('Task saved. EventBridge scheduling is stubbed; no SMS will be sent.')).toBeVisible();
  expect(posts).toBe(2);expect(reads).toBe(1);
 });
-for(const kind of ['exclude','remove'] as const){
- test(`${kind} refreshes embedded task queue after canceled reminder`,async ({page},info)=>{
-  await fixture(page);await board(page);
-  let canceled=false,queueReads=0;
-  await page.route('**/api/me/crm/tasks*',route=>{queueReads++;return route.fulfill({json:{items:[row({reminder_state:canceled?'canceled':'queued'})],next:''}})});
-  const favoriteRoute=(route:import('@playwright/test').Route)=>{
-   if(route.request().method()==='GET')return route.fulfill({json:{parcel_id:parcel,favorite:true,revision:1}});
-   expect(route.request().method()).toBe(kind==='exclude'?'PUT':'DELETE');
-   expect(route.request().postDataJSON().revision).toBe(1);
-   canceled=true;return route.fulfill({json:{parcel_id:parcel,favorite:kind==='exclude',excluded:kind==='exclude',revision:2}});
-  };
-  await page.route(`**/api/me/favorites/${parcel}/exclusion`,favoriteRoute);
-  await page.route(`**/api/me/favorites/${parcel}`,favoriteRoute);
-  await page.goto('/leads');
-  await expect(page.getByText('SMS: queued, not sent')).toBeVisible();
-  await page.getByRole('button',{name:'Actions for parcel 009845'}).click();
-  await page.getByRole('menuitem',{name:kind==='exclude'?'Exclude lead…':'Remove favorite…'}).click();
-  if(kind==='exclude')await page.getByRole('textbox',{name:'Exclusion reason'}).fill('Not pursuing');
-  await page.getByRole('button',{name:kind==='exclude'?'Exclude lead':'Remove favorite',exact:true}).click();
-  await expect(page.getByText('SMS: canceled, not sent')).toBeVisible();
-  expect(queueReads).toBeGreaterThanOrEqual(2);
-  await page.getByRole('region',{name:'Follow-up task queue'}).screenshot({path:info.outputPath(`${kind}-canceled-queue.png`)});
- });
-}
 test('upcoming becomes overdue and simulation becomes available at due time without reload',async ({page},info)=>{
  await page.clock.install({time:new Date('2030-12-08T13:59:50Z')});
  await fixture(page);await board(page);
  let reads=0;
  await page.route('**/api/me/crm/tasks*',route=>{reads++;return route.fulfill({json:{items:[row()],next:''}})});
- await page.goto('/leads');
+ await page.goto('/tasks');
  const queue=page.getByRole('region',{name:'Follow-up task queue'});
- await expect(queue.getByText('Upcoming', {exact:true})).toBeVisible();
+ await expect(queue.getByRole('heading',{name:'Upcoming',exact:true})).toBeVisible();
  await expect(queue.getByRole('button',{name:'Simulate SMS (not sent)'})).toHaveCount(0);
  await page.clock.runFor(11_000);
- await expect(queue.getByText('Overdue', {exact:true})).toBeVisible();
+ await expect(queue.getByRole('heading',{name:'Overdue',exact:true})).toBeVisible();
  await expect(queue.getByRole('button',{name:'Simulate SMS (not sent)'})).toBeVisible();
  expect(reads).toBe(1);
  await queue.screenshot({path:info.outputPath('due-without-reload.png')});
@@ -103,8 +79,8 @@ for(const source of ['page','reload'] as const)for(const stale of ['page','error
   if(reads===2){entered();await held;return route.fulfill(stale==='error'?{status:503}:{json:{items:[row({id:'55555555-5555-4555-8555-555555555555',message:'Obsolete page'})],next:''}})}
   return route.fulfill({json:{items:reads===1?[row()]:[],next:reads===1?'next-page':''}});
  });
- await page.route(`**/api/me/favorites/${parcel}/tasks/${task}/complete`,route=>route.fulfill({json:row({status:'completed',revision:2})}));
- await page.goto('/leads');
+ await page.route(`**/api/me/parcels/${parcel}/tasks/${task}/complete`,route=>route.fulfill({json:row({status:'completed',revision:2})}));
+ await page.goto('/tasks');
  const queue=page.getByRole('region',{name:'Follow-up task queue'});
  await expect(queue.getByText('Original reminder')).toBeVisible();
  await queue.getByRole('button',{name:source==='page'?'Load more tasks':'Reload tasks'}).click();

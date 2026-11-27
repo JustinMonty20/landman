@@ -5,14 +5,18 @@ let {parcel = '', editable = true, refresh = 0}: {parcel?: string; editable?: bo
 type Task = {id:string;parcel_id:string;parcel_number:string|null;message:string;due_at:string;timezone:string;status:'open'|'completed'|'canceled';reminder_state:'queued'|'stubbed'|'canceled'|'missed';revision:number;schedule_version:number};
 let items=$state<Task[]>([]), next=$state(''), loading=$state(false), busy=$state(false), error=$state(''), notice=$state('');
 let message=$state(''), local=$state(''), offset=$state(''), editing=$state<Task|null>(null), createID=$state('');
+let confirmClear=$state<{count:number;snapshot:string}|null>(null), clearing=$state(false);
 let conflict=$state(false), currentTask=$state<Task|null>(null), now=$state(Date.now());
 let generation=0, reader:AbortController|null=null;
 const timezone=Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const candidates=$derived(dueCandidates(local,timezone));
 const capacity=$derived(smsCapacity(message));
-const path=$derived(parcel?`/api/me/favorites/${parcel}/tasks`:'/api/me/crm/tasks');
+const overdue=$derived(items.filter(t=>Date.parse(t.due_at)<now));
+const upcoming=$derived(items.filter(t=>Date.parse(t.due_at)>=now));
+const path=$derived(parcel?`/api/me/parcels/${parcel}/tasks`:'/api/me/crm/tasks');
 function display(t:Task){return new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short',timeZone:t.timezone}).format(new Date(t.due_at));}
 async function load(more=false){
+ if(!more)confirmClear=null;
  if(more && (loading || busy || !next))return;
  reader?.abort();reader=new AbortController();const request=++generation,signal=reader.signal;
  const cursor=more?next:'';loading=true;error='';
@@ -48,19 +52,39 @@ async function save(){if(busy || conflict || capacity.remaining<0 || !message.tr
  reset();notice='Task saved. EventBridge scheduling is stubbed; no SMS will be sent.';await load();
  }catch(e){error=String(e)}finally{busy=false}
 }
+async function prepareClear(){
+error='';try {const res=await fetch(`${path}/clear`);if(!res.ok)throw Error(`Clear count unavailable (${res.status}).`);const data:{count:number;snapshot:string}=await res.json();confirmClear=data;}catch(e){error=String(e)}
+}
+async function clearAll(){
+if(confirmClear===null || clearing)return;
+clearing=true;error='';
+try {const res=await fetch(`${path}/clear`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(confirmClear)});
+if(!res.ok)throw Error(res.status===409?'Task count changed. Review the current tasks and confirm again.':`Clear failed (${res.status}).`);
+const data:{canceled:number}=await res.json();confirmClear=null;notice=`Cleared ${data.canceled} open tasks on this parcel. Pending reminders canceled; completed tasks unchanged.`;await load();
+}catch(e){const failure=String(e);await load();error=failure}finally{clearing=false}
+}
 async function action(t:Task,kind:'complete'|'cancel'|'stub'){
  busy=true;error='';notice='';
- try{const res=await fetch(`/api/me/favorites/${t.parcel_id}/tasks/${t.id}/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:t.revision})});
+ try{const res=await fetch(`/api/me/parcels/${t.parcel_id}/tasks/${t.id}/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:t.revision})});
  if(!res.ok)throw Error(res.status===409?'Task or reminder changed. Reload before retrying.':`Action failed (${res.status}).`);
- notice=kind==='stub'?'SMS simulation recorded in API log. Nothing was sent.':kind==='complete'?'Task completed. This did not send SMS.':'Task canceled. No SMS was sent.';await load();
+ if(kind==='cancel')confirmClear=null;notice=kind==='stub'?'SMS simulation recorded in API log. Nothing was sent.':kind==='complete'?'Task completed. This did not send SMS.':'Task cleared. Pending reminder canceled; no SMS was sent.';await load();
  }catch(e){error=String(e)}finally{busy=false}
 }
-onMount(()=>{void load();const timer=setInterval(()=>{now=Date.now()},1000);return ()=>{clearInterval(timer);generation++;reader?.abort()}});
+onMount(()=>{
+  if(parcel && new URL(window.location.href).searchParams.get('tab')==='tasks') {
+    const tabs=document.querySelector<HTMLElement>('[aria-label="Parcel evidence views"]');
+    if(tabs) tabs.scrollLeft=tabs.scrollWidth-tabs.clientWidth;
+  }
+  void load();const timer=setInterval(()=>{now=Date.now()},1000);
+  return ()=>{clearInterval(timer);generation++;reader?.abort()}
+});
 $effect(()=>{if(refresh>0)void load()});
 </script>
 <section class="tasks" aria-label={parcel?'Parcel follow-up tasks':'Follow-up task queue'}>
  <header><h2>{parcel?'Follow-up tasks':'Upcoming and overdue follow-ups'}</h2><button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void load()} disabled={loading || busy}>Reload tasks</button></header>
- <p class="stub-note">Personal tasks only. EventBridge scheduling and SMS are stubbed in the API. No SMS is sent. Use “Simulate SMS” on a due task to record a simulated result; this never completes the task.</p>
+ {#if parcel && editable && items.length>0}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void prepareClear()} disabled={busy || loading || clearing}>Clear all tasks…</button>{/if}
+{#if confirmClear!==null}<div role="group" aria-label="Confirm clear all tasks"><p>Cancel {confirmClear.count} open tasks on this parcel and their pending reminders? Completed tasks stay completed. If tasks change after confirmation, this action fails and asks you to review again.</p><button type="button" class="btn btn-sm preset-filled-primary-500" onclick={()=>void clearAll()} disabled={clearing || confirmClear.count===0}>Confirm clear all</button><button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>confirmClear=null}>Keep tasks</button></div>{/if}
+<p class="stub-note">Personal tasks only. EventBridge scheduling and SMS are stubbed in the API. No SMS is sent. Use “Simulate SMS” on a due task to record a simulated result; this never completes the task.</p>
  {#if parcel && editable}
  <form onsubmit={(e)=>{e.preventDefault();void save()}}>
  <label>Message (single SMS segment)<textarea class="textarea" aria-label="Follow-up message" bind:value={message} oninput={()=>{if(!editing)createID=''}} required disabled={busy}></textarea></label>
@@ -76,17 +100,20 @@ $effect(()=>{if(refresh>0)void load()});
  {#if notice}<p role="status">{notice}</p>{/if}{#if error}<p role="alert">{error}</p>{/if}
  {#if loading && items.length===0}<p role="status">Loading tasks…</p>{/if}
  {#if !loading && items.length===0 && !error}<p>No open tasks.</p>{/if}
- <ul>{#each items as t (t.id)}<li>
-  {#if !parcel}<a href={`/?parcel=${t.parcel_id}`}>Parcel {t.parcel_number || t.parcel_id}</a>{/if}
+ {#snippet taskRow(t:Task)}<li>
+  {#if !parcel}<a href={`/?parcel=${t.parcel_id}&tab=tasks`}>Parcel {t.parcel_number || t.parcel_id}</a>{/if}
   <p class="message">{t.message}</p><p><strong>{Date.parse(t.due_at)<now?'Overdue':'Upcoming'}</strong> · {display(t)} ({t.timezone}) · version {t.schedule_version}</p>
   <p>SMS: {t.reminder_state==='stubbed'?'simulated, not sent':t.reminder_state==='queued'?'queued, not sent':t.reminder_state==='missed'?'missed, not sent':'canceled, not sent'}</p>
   <div class="buttons">{#if parcel && editable}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>edit(t)} disabled={busy}>Edit / snooze</button>{/if}
   <button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'complete')} disabled={busy}>Complete task</button>
-  <button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'cancel')} disabled={busy}>Cancel task</button>
+  <button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'cancel')} disabled={busy}>Clear task</button>
   {#if Date.parse(t.due_at)<=now && t.reminder_state==='queued'}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void action(t,'stub')} disabled={busy}>Simulate SMS (not sent)</button>{/if}</div>
- </li>{/each}</ul>
+ </li>{/snippet}
+{#if parcel}<ul>{#each items as t (t.id)}{@render taskRow(t)}{/each}</ul>
+{:else if items.length}<h3>Overdue</h3><ul>{#each overdue as t (t.id)}{@render taskRow(t)}{/each}</ul>
+<h3>Upcoming</h3><ul>{#each upcoming as t (t.id)}{@render taskRow(t)}{/each}</ul>{/if}
  {#if next}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void load(true)} disabled={loading || busy}>Load more tasks</button>{/if}
 </section>
 <style>
-.tasks{padding:12px;display:grid;gap:12px;font-size:13px}.tasks header,.buttons{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.tasks header{justify-content:space-between;height:auto;min-height:52px;padding:8px 12px;gap:8px}.tasks h2{font-size:16px;font-weight:650}.tasks form{display:grid;gap:10px}.tasks label{display:grid;gap:4px}.tasks textarea{min-height:70px}.tasks ul{display:grid;gap:8px;list-style:none;padding:0}.tasks li{border:1px solid var(--border);border-radius:8px;padding:12px;overflow-wrap:anywhere}.tasks li p{margin:6px 0}.tasks .message{white-space:pre-wrap}.tasks .invalid,.tasks [role="alert"]{color:#fbbf74}.tasks .stub-note{color:var(--muted)}.tasks a{color:var(--color-primary-300)}
+.tasks{padding:12px;display:grid;gap:12px;font-size:13px}.tasks header,.buttons{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.tasks header{justify-content:space-between;height:auto;min-height:52px;padding:8px 12px;gap:8px}.tasks h2{font-size:16px;font-weight:650}.tasks h3{font-size:14px;font-weight:650;border-bottom:1px solid var(--border);padding-bottom:6px}.tasks form{display:grid;gap:10px}.tasks label{display:grid;gap:4px}.tasks textarea{min-height:70px}.tasks ul{display:grid;gap:8px;list-style:none;padding:0}.tasks li{border:1px solid var(--border);border-radius:8px;padding:12px;overflow-wrap:anywhere}.tasks li p{margin:6px 0}.tasks .message{white-space:pre-wrap}.tasks .invalid,.tasks [role="alert"]{color:#fbbf74}.tasks .stub-note{color:var(--muted)}.tasks a{color:var(--color-primary-300)}
 </style>

@@ -8,6 +8,9 @@ The operator approved one favorites list and one private Kanban board per user. 
 
 This plan defines the private workflow required by [V1](v1.md) and [the browser application](browser-parcel-ui.md). For this workflow, their references to saved lists mean this single favorites collection. Preserve their other commitments, including saved-parcel tax requests and personal SMS reminder delivery. This plan does not implement those requests or remove their release gates.
 
+## Operator-approved task lifecycle update
+Tasks can be created for any stored parcel: first task atomically initializes a private `user_parcels` tracking row with `favorite=false`, without a board card or star. Removing a favorite keeps open tasks and queued reminder intents. Explicit exclusion still cancels queued reminders and prevents new tasks or schedules; restoration does not reactivate old intents. Parcel-level Clear task cancels one open task and its pending reminder; confirmed Clear all cancels only the selected account and parcel’s open tasks and queued current versions. Confirmation uses a bounded open-task count and ID/revision snapshot; any intervening task change invalidates it. Completed tasks remain completed. `/tasks` owns the global queue; `/leads` is board-only with an Add task link into the selected parcel Tasks tab. EventBridge and SMS remain log-only stubs.
+
 ## Existing code and proposed seam
 
 `internal/auth/auth.go` supplies Google sign-in, approved-email access, database-backed sessions, and authenticated account identity. `app_users.id` is the stable local identity. Google subject identifies the external account; email is not the ownership key. Account-owned parcel detail preferences already exist. Shared county parcels use `parcels.id`.
@@ -43,7 +46,7 @@ Keep a separate activity history for favorite changes, state changes, reminder a
 
 ### Removal and permanent deletion
 
-Removing a favorite hides its card and cancels pending reminders atomically. Retain its notes, state, and history. Reject new reminders while the favorite is inactive. Explain this behavior in the confirmation. Favoriting again restores the private record and its retained state; canceled reminders stay canceled.
+Removing a favorite hides its card but retains its open tasks, pending reminder intents, notes, state, and history. It does not block new tasks or schedules for that parcel. Explain this in the confirmation. Favoriting again restores the private record and retained state; exclusion-canceled reminders stay canceled.
 
 Provide a separate confirmed action to permanently delete the user's tracking record, notes, activity, and reminders. Do not delete shared county parcels or other users' records. A later favorite starts a new private record. Account deletion must remove all account-owned CRM data; account self-service deletion is not added by this plan.
 
@@ -81,8 +84,8 @@ All proposed routes are under `/api/me`. The server derives ownership from the s
 | `/favorites/{parcel_id}/exclusion` | Exclude with a required reason or restore, with expected revision. |
 | `/favorites/{parcel_id}/notes` | Page, create, edit, and delete scratchpad entries. |
 | `/favorites/{parcel_id}/activity` | Page history and manage dated manual entries. |
-| `/favorites/{parcel_id}/reminders` | Create, edit, complete, snooze, reschedule, and cancel personal tasks. |
-| `/crm/reminders` | Page upcoming and overdue personal tasks across parcels. |
+| `/parcels/{parcel_id}/tasks` | Page, create, complete, reschedule, and clear personal tasks without requiring a favorite. Confirmed Clear all cancels open tasks and pending current reminders for this account and parcel. |
+| `/crm/tasks` | Page upcoming and overdue personal tasks across parcels. |
 
 Exact method and payload specifications belong to implementation review. Every mutation must define retry and conflict behavior before coding. Shared parcel reads remain separate from these private reads. Saving or viewing a favorite must not request live county tax data.
 
@@ -92,7 +95,7 @@ Exact method and payload specifications belong to implementation review. Every m
 
 - Run production on AWS. The exact AWS runtime is not yet selected.
 - Use AWS SMS delivery to the user's own verified US phone number. Do not support other destination countries in the first release. A `+1` prefix alone does not establish a US destination.
-- Let the user enter reminder text and select a date and time for a favorite parcel.
+- Let the user enter reminder text and select a date and time for any stored parcel.
 - Send once per scheduled reminder. Successful delivery does not complete the task. Do not repeat automatically until completion. Explicit snooze or reschedule creates a new scheduled version.
 - Send only the user's text. Do not append a parcel identifier, link, application name, or other text to the reminder body. Carrier-required sender and opt-out behavior must be checked before release; do not silently change this content contract.
 - Limit the body to one SMS segment using the encoding of the complete message. GSM-7 supports up to 160 septets; extension characters consume two septets. Unicode SMS generally supports 70 UTF-16 code units; supplementary characters consume two units. Verify the selected AWS product's encoding behavior before implementation acceptance. Do not use a universal character-count limit, truncate text, or silently send multiple segments. Show remaining capacity in the editor and apply the same validation on the server.
@@ -102,7 +105,7 @@ The operator selected SMS-only reminders for V1. Email reminder delivery and ema
 
 Store due times as UTC instants and retain an IANA timezone identifier for local display. Require explicit offset selection for ambiguous daylight-saving times; reject nonexistent local times. Initial reminders are one-time tasks. Recurrence is outside scope.
 
-Task completion and delivery success are different states. A delivered notification does not complete a task. Snooze and reschedule replace the due instant and invalidate older pending delivery versions. Cancellation, removal from favorites, and permanent deletion prevent new delivery claims. Recheck status and version before provider submission. Explain that an already accepted provider request cannot be recalled.
+Task completion and delivery success are different states. A delivered notification does not complete a task. Snooze and reschedule replace the due instant and invalidate older pending delivery versions. Task cancellation, explicit exclusion, and permanent deletion prevent new delivery claims; removing a favorite does not. Recheck status and version before provider submission. Explain that an already accepted provider request cannot be recalled.
 
 Use durable delivery records with no automatic retries after a provider submission attempt. If AWS explicitly rejects a send, show a failed status and require an explicit user action for another send. Do not retry temporary service errors automatically. Do not automatically retry a submission when provider acceptance is uncertain. Mark its delivery state as uncertain and let the user explicitly authorize another send after a duplicate warning. Keep these submission outcomes separate from recovery of work that was never submitted. Only never-submitted work is eligible for automatic outage recovery within the one-hour window. Any new send must still pass current task, destination, and scheduling checks. Claim work transactionally. Recover expired claims after interruption. Use provider idempotency where supported; do not promise exactly-once external delivery when provider acceptance is uncertain. Keep failures visible. Notifications go only to the buyer's verified destination, never an owner.
 
@@ -136,14 +139,14 @@ Page cards per column and load note history on demand. Do not fetch full parcel 
 - [ ] Concurrent first use creates one default state and settings record. Repeated favorite requests create one card.
 - [ ] Create, rename, reorder, and delete states. Test occupied/default deletion, foreign-user destinations, concurrent moves, and stale revisions.
 - [ ] Board moves and parcel quick actions agree after reload. Note edits and state changes preserve unrelated data.
-- [ ] Remove and restore a favorite; retain notes and cancel pending reminders. Test permanent deletion and account cascade without shared-parcel deletion.
+- [ ] Remove and restore a favorite; retain notes, open tasks, and queued reminder intents. Test exclusion cancellation and restoration without reactivation. Test permanent deletion and account cascade without shared-parcel deletion.
 - [ ] Verify parcel refresh, missing-source evidence, and restrictive deletion behavior with the canonical import path.
 - [ ] Test reminder due times, daylight-saving cases, snooze, reschedule, completion, cancellation, restart recovery, duplicate creation, delivery retries, and cancellation/submission races.
 - [ ] Verify no private text enters shared responses, tiles, caches, or logs. Test safe rendering and exact-origin mutation rejection.
 - [ ] Use seeded two-account fixtures for routine tests. Do not require live county sources, operator files, or full-county imports.
 - [ ] Run focused Go tests, database integration tests, UI checks/unit tests/build, and the repository CI equivalents selected under [review verification](../docs/review-verification.md).
 - [ ] After UI changes, use `/landman-ui-evidence` for desktop/tablet board actions, keyboard moves, notes, state management, removal, reminders, and two-account isolation. Give reviewers artifact paths, actions, expected/observed results, and evidence limits.
-- [ ] Verify exclusion reasons, visible excluded cards, reminder cancellation, rejected reminder creation for excluded or inactive favorites, restoration without reminder reactivation, and independence from custom states. Verify that dated manual contact records do not send owner messages.
+- [ ] Verify exclusion reasons, visible excluded cards, reminder cancellation, rejected task creation and schedules while excluded, restoration without reminder reactivation, and independence from custom states. Verify that dated manual contact records do not send owner messages.
 - [ ] Before implementation acceptance, agree numeric latency and response-size budgets. Measure board pages and writes with at least 1,000 favorites, 50 states, and two simultaneous users. This fixture is a test baseline, not a product limit. Measure larger state counts before claiming unlimited practical scale.
 
 Select independent review checks for ownership/database integrity and UI/reminder behavior at implementation time. This architecture-only PR needs document consistency, link, naming, and independent design review. It does not require application builds or browser evidence because it changes no application behavior.

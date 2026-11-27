@@ -165,7 +165,7 @@ test('full-size parcel tabs scroll horizontally while notes and tasks retain dra
   if(route.request().method()==='PUT'){saved=true;return route.fulfill({json:{parcel_id:a,revision:1,favorite:true,excluded:false,exclusion_reason:'',state_id:'fixture'}})}
   return route.fulfill(saved?{json:{parcel_id:a,revision:1,favorite:true,excluded:false,exclusion_reason:'',state_id:'fixture'}}:{status:404});
  });
- await page.route(`**/api/me/favorites/${a}/tasks*`,route=>route.fulfill({json:{items:[],next:''}}));
+ await page.route(`**/api/me/parcels/${a}/tasks*`,route=>route.fulfill({json:{items:[],next:''}}));
  await page.goto(`/?parcel=${a}`);
  const panel=page.getByRole('region',{name:'Parcel evidence'});
  const tabs=panel.getByRole('tablist',{name:'Parcel evidence views'});
@@ -176,7 +176,7 @@ test('full-size parcel tabs scroll horizontally while notes and tasks retain dra
   return {viewport:el.clientWidth,content:el.scrollWidth,button:button.getBoundingClientRect().width,
    font:style.fontSize,padding:style.paddingInline,height:button.getBoundingClientRect().height,
    overflow:getComputedStyle(el).overflowX,scrollbar:getComputedStyle(el).scrollbarWidth,
-   scrollbarPixels:el.offsetHeight-el.clientHeight,scrollLeft:el.scrollLeft};
+   scrollbarPixels:el.getBoundingClientRect().height-el.clientHeight,scrollLeft:el.scrollLeft};
  });
  const original=await page.getByRole('tablist',{name:'Map controls'}).getByRole('tab').first().evaluate(el=>{
   const style=getComputedStyle(el);
@@ -249,16 +249,13 @@ test('full-size parcel tabs scroll horizontally while notes and tasks retain dra
  expect(await tabs.evaluate(el=>el.scrollLeft)).toBeGreaterThan(0);
  await page.screenshot({path:info.outputPath('four-tabs-tasks-horizontal.png')});
  await expect(panel.getByRole('region',{name:'Private parcel scratchpad'})).toBeHidden();
- await expect(panel.getByText('Favorite this parcel to create follow-up tasks.')).toBeVisible();
- await expect(panel.getByRole('button',{name:'Create task'})).toHaveCount(0);
- await page.screenshot({path:info.outputPath('four-tabs-tasks-prerequisite.png')});
- await panel.getByRole('button',{name:'Favorite parcel'}).click();
+ await expect(panel.getByRole('button',{name:'Favorite parcel'})).toHaveAttribute('aria-pressed','false');
  const taskPane=panel.getByRole('region',{name:'Parcel follow-up tasks'});
+ await expect(taskPane.getByRole('button',{name:'Create task'})).toBeVisible();
  await expect(taskPane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
  await taskPane.getByRole('textbox',{name:'Follow-up message'}).fill('Retain my unsaved task');
  await taskPane.getByLabel('Due date and time').fill('2030-12-08T14:00');
  await expect(taskPane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Retain my unsaved task');
- await page.getByRole('button',{name:'Dismiss notification'}).click();
  await panel.getByRole('tabpanel',{name:'Tasks'}).evaluate(el=>el.scrollTop=0);
  await expect(taskPane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
  await page.screenshot({path:info.outputPath('four-tabs-tasks.png')});

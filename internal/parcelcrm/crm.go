@@ -280,7 +280,7 @@ func (s Store) mutate(ctx context.Context, user AccountID, id, action, target, r
 		return Card{}, errConflict
 	}
 	var canceled []Task
-	if action == "exclude" || action == "remove" {
+	if action == "exclude" {
 		canceled, e = cancelParcelReminders(ctx, tx, user, id)
 		if e != nil {
 			return Card{}, e
@@ -466,7 +466,7 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 		s.serveNotes(w, r, user, origin, parts)
 		return
 	}
-	if path == "crm/tasks" || (len(parts) >= 3 && parts[0] == "favorites" && parts[2] == "tasks") {
+	if path == "crm/tasks" || (len(parts) >= 3 && parts[0] == "parcels" && parts[2] == "tasks") {
 		s.serveTasks(w, r, user, parts)
 		return
 	}
@@ -550,7 +550,8 @@ func (s Store) Serve(w http.ResponseWriter, r *http.Request, user AccountID, ori
 		case len(parts) == 3 && parts[2] == "exclusion" && r.Method == "DELETE":
 			c, e = s.mutate(ctx, user, id, "restore", "", "", req.Revision)
 		default:
-			e = errInvalid
+			http.NotFound(w, r)
+			return
 		}
 		if e == nil {
 			send(w, c)

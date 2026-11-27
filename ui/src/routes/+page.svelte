@@ -390,7 +390,12 @@ onMount(() => {
   const county = counties.find((county) => county.id === new URL(window.location.href).searchParams.get('county'));
   if (county) selectCounty(county.id);
   const linkedParcel = new URL(window.location.href).searchParams.get('parcel');
-  if (linkedParcel && /^[0-9a-f-]{36}$/i.test(linkedParcel)) { selectCounty('37179'); inspectParcel(linkedParcel, true); }
+  if (linkedParcel && /^[0-9a-f-]{36}$/i.test(linkedParcel)) {
+    selectCounty('37179'); inspectParcel(linkedParcel, true);
+    if (new URL(window.location.href).searchParams.get('tab') === 'tasks') {
+      evidenceTab = 'tasks';
+    }
+  }
 return () => task.abort();
 });
 </script>
@@ -563,11 +568,7 @@ return () => task.abort();
               </Tabs.Content>
               <Tabs.Content class="parcel-tab-content" value="tasks">
                 {#key parcelID}
-                  {#if favorite?.favorite}
-                    <ParcelTasks parcel={parcelID} editable={!favorite.excluded}/>
-                  {:else if favoriteRead === 'ready'}
-                    <p class="task-prerequisite">Favorite this parcel to create follow-up tasks.</p>
-                  {/if}
+                  <ParcelTasks parcel={parcelID} editable={favoriteRead==='ready' && !favorite?.excluded}/>
                 {/key}
               </Tabs.Content>
             </Tabs>
@@ -645,7 +646,6 @@ h1 { font-size: 19px; font-weight: 650; }
 .research-sites { list-style: disc; padding-left: 20px; margin-bottom: 14px; }
 .research-sites li { margin-bottom: 12px; }
 .research-sites a { color: #93c5fd; text-decoration: underline; }
-.task-prerequisite { padding: 0 12px 12px; font-size: 13px; color: var(--muted); }
 .detail-editor { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .detail-editor fieldset { display: grid; gap: 4px; }
 .flood-details, .empty { overflow: auto; padding: 10px; }

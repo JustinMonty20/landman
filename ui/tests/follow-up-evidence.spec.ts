@@ -12,9 +12,9 @@ test('personal follow-up queue explicitly simulates SMS without completing task'
  await page.route(`**/api/me/crm/board/${state}*`,route=>route.fulfill({json:{items:[{parcel_id:parcel,parcel_number:'009845',address:'10 Fixture Lane',state_id:state,favorite:true,excluded:false,exclusion_reason:'',revision:1,favorited_at:'2026-11-24 12:00:00+00'}],next:''}}));
  let simulated=false; const due=new Date(Date.now()-10*60_000).toISOString();
  await page.route('**/api/me/crm/tasks*',route=>route.fulfill({json:{items:[{id:task,parcel_id:parcel,parcel_number:'009845',message:'Review title with the buyer',due_at:due,timezone:'UTC',status:'open',reminder_state:simulated?'stubbed':'queued',revision:simulated?2:1,schedule_version:1}],next:''}}));
- await page.route(`**/api/me/favorites/${parcel}/tasks/${task}/stub`,route=>{expect(route.request().postDataJSON()).toEqual({revision:1});simulated=true;return route.fulfill({json:{id:task,status:'open',reminder_state:'stubbed',revision:2}})});
- await page.goto('/leads');
- await expect(page.getByRole('heading',{name:'Upcoming and overdue follow-ups'})).toBeVisible();
+ await page.route(`**/api/me/parcels/${parcel}/tasks/${task}/stub`,route=>{expect(route.request().postDataJSON()).toEqual({revision:1});simulated=true;return route.fulfill({json:{id:task,status:'open',reminder_state:'stubbed',revision:2}})});
+ await page.goto('/tasks');
+ await expect(page.getByRole('heading',{name:'Tasks',exact:true})).toBeVisible();
  await expect(page.getByText('Review title with the buyer')).toBeVisible();
  await expect(page.getByText('SMS: queued, not sent')).toBeVisible();
  await page.screenshot({path:info.outputPath('01-overdue-queued.png'),fullPage:true});
@@ -33,7 +33,7 @@ test('selected parcel composes a single-segment follow-up with explicit offset',
  await page.route(`**/api/me/favorites/${parcel}/notes*`,route=>route.fulfill({json:{items:[],next:''}}));
  let created:{id:string;message:string;due_at:string;timezone:string}|null=null;
  let firstToken='',attempts=0;
- await page.route(`**/api/me/favorites/${parcel}/tasks*`,route=>{
+ await page.route(`**/api/me/parcels/${parcel}/tasks*`,route=>{
   if(route.request().method()==='POST'){
    const body=route.request().postDataJSON();expect(body.message).toBe('Follow up with buyer');expect(body.id).toMatch(/^[0-9a-f-]{36}$/);expect(body.due_at).toMatch(/[+-]\d\d:\d\d$/);
    attempts++;if(attempts===1){firstToken=body.id;return route.fulfill({status:503})}

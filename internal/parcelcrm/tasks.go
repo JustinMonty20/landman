@@ -105,8 +105,8 @@ func (s Store) tasks(ctx context.Context, user AccountID, parcel, cursor string,
 		return page, errInvalid
 	}
 	if parcel != "" {
-		var owned string
-		e := s.DB.QueryRow(ctx, `SELECT parcel_id::text FROM user_parcels WHERE user_id=$1 AND parcel_id=$2`, string(user), parcel).Scan(&owned)
+		var stored string
+		e := s.DB.QueryRow(ctx, `SELECT id::text FROM parcels WHERE id=$1`, parcel).Scan(&stored)
 		if e != nil {
 			return page, e
 		}
@@ -172,6 +172,98 @@ func cancelParcelReminders(ctx context.Context, tx pgx.Tx, user AccountID, parce
 func logReminder(op string, t Task) {
 	log.Printf("reminder %s task_id=%s parcel_id=%s due_utc=%s version=%d simulated=true", op, t.ID, t.ParcelID, t.DueAt.UTC().Format(time.RFC3339Nano), t.ScheduleVersion)
 }
+
+// The caller already holds the account row lock. A missing source parcel remains 404.
+func (s Store) initTaskParcel(ctx context.Context, tx pgx.Tx, user AccountID, parcel string) error {
+	var state string
+	err := tx.QueryRow(ctx, `SELECT default_state_id::text FROM user_crm_settings WHERE user_id=$1`, string(user)).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `INSERT INTO user_lead_states(user_id,name,position) VALUES($1,'New',0) RETURNING id::text`, string(user)).Scan(&state)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO user_crm_settings(user_id,default_state_id) VALUES($1,$2)`, string(user), state)
+	}
+	if err != nil {
+		return err
+	}
+	var inserted string
+	err = tx.QueryRow(ctx, `INSERT INTO user_parcels(user_id,parcel_id,state_id,favorite) SELECT $1,id,$3,false FROM parcels WHERE id=$2 ON CONFLICT (user_id,parcel_id) DO NOTHING RETURNING parcel_id::text`, string(user), parcel, state).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return tx.QueryRow(ctx, `SELECT parcel_id::text FROM user_parcels WHERE user_id=$1 AND parcel_id=$2`, string(user), parcel).Scan(&inserted)
+	}
+	return err
+}
+
+// The snapshot records the exact open task IDs and revisions, not only a count.
+// LIMIT bounds confirmation reads; no mutation occurs above 5000 open tasks.
+const taskSnapshotSQL = `SELECT count(*)::int, md5(coalesce(string_agg(id::text || ':' || revision::text, ',' ORDER BY id),'')) FROM (SELECT id,revision FROM user_parcel_tasks WHERE user_id=$1 AND parcel_id=$2 AND status='open' ORDER BY id LIMIT 5001) open_tasks`
+
+func (s Store) openTaskSnapshot(ctx context.Context, user AccountID, parcel string) (int, string, error) {
+	if !uuid(parcel) {
+		return 0, "", errInvalid
+	}
+	var id string
+	if e := s.DB.QueryRow(ctx, `SELECT parcel_id::text FROM user_parcels WHERE user_id=$1 AND parcel_id=$2`, string(user), parcel).Scan(&id); e != nil {
+		return 0, "", e
+	}
+	var count int
+	var snapshot string
+	err := s.DB.QueryRow(ctx, taskSnapshotSQL, string(user), parcel).Scan(&count, &snapshot)
+	if count > 5000 {
+		return 0, "", errInvalid
+	}
+	return count, snapshot, err
+}
+func (s Store) clearParcelTasks(ctx context.Context, user AccountID, parcel string, expected int, expectedSnapshot string) (int, error) {
+	if !uuid(parcel) || expected < 1 || expected > 5000 || len(expectedSnapshot) != 32 {
+		return 0, errInvalid
+	}
+	for _, r := range expectedSnapshot {
+		if r < '0' || r > '9' {
+			if r < 'a' || r > 'f' {
+				return 0, errInvalid
+			}
+		}
+	}
+	tx, e := s.DB.Begin(ctx)
+	if e != nil {
+		return 0, e
+	}
+	defer tx.Rollback(ctx)
+	var id string
+	if e = tx.QueryRow(ctx, `SELECT id::text FROM app_users WHERE id=$1 FOR UPDATE`, string(user)).Scan(&id); e != nil {
+		return 0, e
+	}
+	if e = tx.QueryRow(ctx, `SELECT parcel_id::text FROM user_parcels WHERE user_id=$1 AND parcel_id=$2`, string(user), parcel).Scan(&id); e != nil {
+		return 0, e
+	}
+	var count int
+	var snapshot string
+	if e = tx.QueryRow(ctx, taskSnapshotSQL, string(user), parcel).Scan(&count, &snapshot); e != nil {
+		return 0, e
+	}
+	if count != expected || snapshot != expectedSnapshot {
+		return 0, errConflict
+	}
+	// All supported task writes acquire the account lock first. Concurrent creations
+	// before this lock invalidate the snapshot; creations after commit stay open.
+	_, e = tx.Exec(ctx, `UPDATE user_task_reminders r SET state='canceled',changed_at=now() FROM user_parcel_tasks t WHERE t.user_id=$1 AND t.parcel_id=$2 AND t.status='open' AND r.user_id=t.user_id AND r.task_id=t.id AND r.version=t.schedule_version AND r.state='queued'`, string(user), parcel)
+	if e != nil {
+		return 0, e
+	}
+	tag, e := tx.Exec(ctx, `UPDATE user_parcel_tasks SET status='canceled',revision=revision+1,updated_at=now() WHERE user_id=$1 AND parcel_id=$2 AND status='open'`, string(user), parcel)
+	if e != nil {
+		return 0, e
+	}
+	if tag.RowsAffected() != int64(count) {
+		return 0, errConflict
+	}
+	if e = tx.Commit(ctx); e != nil {
+		return 0, e
+	}
+	return count, nil
+}
 func (s Store) createTask(ctx context.Context, user AccountID, parcel, id, message, due, zone string) (Task, error) {
 	if !uuid(parcel) || !uuid(id) || !validMessage(message) {
 		return Task{}, errInvalid
@@ -204,8 +296,11 @@ func (s Store) createTask(ctx context.Context, user AccountID, parcel, id, messa
 	if instant.Before(time.Now()) {
 		return Task{}, errInvalid
 	}
+	if e = s.initTaskParcel(ctx, tx, user, parcel); e != nil {
+		return Task{}, e
+	}
 	var owned string
-	if e = tx.QueryRow(ctx, `SELECT parcel_id::text FROM user_parcels WHERE user_id=$1 AND parcel_id=$2 AND favorite AND NOT excluded FOR UPDATE`, string(user), parcel).Scan(&owned); e != nil {
+	if e = tx.QueryRow(ctx, `SELECT parcel_id::text FROM user_parcels WHERE user_id=$1 AND parcel_id=$2 AND NOT excluded FOR UPDATE`, string(user), parcel).Scan(&owned); e != nil {
 		return Task{}, e
 	}
 	_, e = tx.Exec(ctx, `INSERT INTO user_parcel_tasks(user_id,parcel_id,id,message,due_at,timezone,status) VALUES($1,$2,$3,$4,$5,$6,'open')`, string(user), parcel, id, message, instant, zone)
@@ -256,9 +351,9 @@ func (s Store) changeTask(ctx context.Context, user AccountID, parcel, id, actio
 	}
 	var currentRevision, version int64
 	var status string
-	var favorite, excluded bool
+	var excluded bool
 	var oldDue time.Time
-	e = tx.QueryRow(ctx, `SELECT t.revision,t.schedule_version,t.status,p.favorite,p.excluded,t.due_at FROM user_parcel_tasks t JOIN user_parcels p ON p.user_id=t.user_id AND p.parcel_id=t.parcel_id WHERE t.user_id=$1 AND t.parcel_id=$2 AND t.id=$3 FOR UPDATE OF t,p`, string(user), parcel, id).Scan(&currentRevision, &version, &status, &favorite, &excluded, &oldDue)
+	e = tx.QueryRow(ctx, `SELECT t.revision,t.schedule_version,t.status,p.excluded,t.due_at FROM user_parcel_tasks t JOIN user_parcels p ON p.user_id=t.user_id AND p.parcel_id=t.parcel_id WHERE t.user_id=$1 AND t.parcel_id=$2 AND t.id=$3 FOR UPDATE OF t,p`, string(user), parcel, id).Scan(&currentRevision, &version, &status, &excluded, &oldDue)
 	if e != nil {
 		return Task{}, e
 	}
@@ -266,7 +361,7 @@ func (s Store) changeTask(ctx context.Context, user AccountID, parcel, id, actio
 		return Task{}, errConflict
 	}
 	if action == "reschedule" || action == "stub" {
-		if !favorite || excluded {
+		if excluded {
 			return Task{}, errConflict
 		}
 	}
@@ -342,7 +437,37 @@ func (s Store) serveTasks(w http.ResponseWriter, r *http.Request, user AccountID
 		if e == nil {
 			send(w, page)
 		}
-	} else if len(parts) >= 3 && parts[0] == "favorites" && uuid(parts[1]) && parts[2] == "tasks" && len(parts) <= 5 {
+	} else if len(parts) == 4 && parts[0] == "parcels" && uuid(parts[1]) && parts[2] == "tasks" && parts[3] == "clear" {
+		parcel := parts[1]
+		if r.Method == "GET" {
+			var count int
+			var snapshot string
+			count, snapshot, e = s.openTaskSnapshot(ctx, user, parcel)
+			if e == nil {
+				send(w, struct {
+					Count    int    `json:"count"`
+					Snapshot string `json:"snapshot"`
+				}{count, snapshot})
+			}
+		} else if r.Method == "POST" {
+			var req struct {
+				Count    int    `json:"count"`
+				Snapshot string `json:"snapshot"`
+			}
+			if e = decodeTask(w, r, &req); e == nil {
+				var count int
+				count, e = s.clearParcelTasks(ctx, user, parcel, req.Count, req.Snapshot)
+				if e == nil {
+					send(w, struct {
+						Canceled int `json:"canceled"`
+					}{count})
+				}
+			}
+		} else {
+			http.NotFound(w, r)
+			return
+		}
+	} else if len(parts) >= 3 && parts[0] == "parcels" && uuid(parts[1]) && parts[2] == "tasks" && len(parts) <= 5 {
 		parcel := parts[1]
 		switch {
 		case len(parts) == 3 && r.Method == "GET":
