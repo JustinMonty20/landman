@@ -1,31 +1,14 @@
 # Optional live GIS verification
 
-Run this journey only after explicit approval for live county GIS and USDA requests. The default parcel checks are in `SKILL.md`. A failure here does not replace or invalidate the separate local fixture results.
+Run the source journey only after explicit approval for county GIS and USDA requests. USDA is the United States Department of Agriculture. Default local fixture checks are in `SKILL.md`. Live failure does not invalidate a separate fixture result.
 
-Landman has a Go CLI, PostGIS, and a separate API executable. This skill verifies CLI parcel, soil, scheduler, and qualification behavior. It does not verify manual tax ingestion, API/authentication, or browser UI behavior. Use `verify-landman` to select all required skills.
-
-With no arguments, `landman` requires five operator tax-file inputs and then runs parcel, soil, screening, and tax jobs. The tax skill owns the separate combined-command drive and its operator files. This CLI skill does not use that command. It drives `./landman run union.gis.soil` and then `./landman run union.gis.parcels`. Each successful source run screens the stored soil set and reconciles stored qualification data. The parcel job writes accepted parcels, prints fetch progress on stderr, and prints nothing on stdout. The soil job stores soil. `success_with_quarantine` stops downstream work. `./landman schedule` requires cron values for parcels, soil, zoning, roads, and qualification, then waits for the next due time. `./landman reprocess union.gis.parcels --limit N` repairs pending parcel records. `N` is an integer from 1 through 100, and the check occurs before the database opens. A clean repair screens stored soil and does not fetch county soil. An unknown command, including `import`, prints usage and exits 1 before it opens the database.
-
-Drive the real binary and verify database changes. Do not treat `go test` as a substitute. Do not use the operator database.
-
-## Verification sync
-This skill did not record a sync commit. This maintenance pass uses `70bc8f1` (the last commit that changed this skill) as the prior sync. The sync remains at `70bc8f1` because the current GIS drive is blocked by a USDA HTTP 502 response. Covered code: `cmd/landman`, `internal/connector/union/gis.go`, `internal/connector/union/translator.go`, parcel and soil storage, `Makefile`, and `db/migrations`.
+This journey runs soil, then parcels. It does not run the combined bare command, tax, FEMA, or vacancy jobs. Soil success starts stored screening. Parcel success starts screening when stored screening is due. Qualification assessment is a separate stored-input job. Do not infer its success from a GIS command.
 
 ## Launch
 
-Launch creates the verify database, migrates it, loads the seed, and builds the binary. Each `./landman` drive is a new process against that database.
+Run in Bash at the repository root. Use one database for this journey and a fresh CLI process for each drive. Do not source `.env`, use Compose, or use the operator database.
 
-### Names
-
-- Container `landman-verify-postgis`. This name is reserved for verification.
-- Host port `127.0.0.1:55432`. Goose does not use this port.
-- Image `postgis/postgis:18-3.6-alpine`, the same tag as `docker-compose.yml`.
-- Volume `landman-verify-data`.
-- Database name inside the container is `landman`, because `db/bootstrap/create_database.sql` always creates that name.
-
-`POSTGRES_URL` and the goose `DATABASE_URL` use `localhost:5432`. Goose joins the verify container network, so that host is Postgres inside the container. `./landman` runs on the host, so its `DATABASE_URL` uses `127.0.0.1:55432`. Do not export a single `DATABASE_URL` for both.
-
-Do not copy or source `.env`. Make loads `.env` when the file exists, and that file is the operator database. Pass `DB_CONTAINER`, `POSTGRES_URL`, and `DATABASE_URL` on the `make` command line. Command-line assignments override `.env`.
+Define `verify_make` from `SKILL.md`. It runs repository Make targets without operator settings. Use these dedicated names. Stop if the container, volume, or host port is already in use; do not remove an earlier run's data.
 
 ```sh
 export VERIFY_CONTAINER=landman-verify-postgis
@@ -33,204 +16,93 @@ export VERIFY_VOLUME=landman-verify-data
 export POSTGRES_URL='postgres://landman:landman@localhost:5432/postgres?sslmode=disable'
 export GOOSE_DATABASE_URL='postgres://landman:landman@localhost:5432/landman?sslmode=disable'
 export HOST_DATABASE_URL='postgres://landman:landman@127.0.0.1:55432/landman?sslmode=disable'
-```
-
-### Verify database
-
-If `landman-verify-postgis` already exists, inspect it before removing it. Remove it only when the image is `postgis/postgis:18-3.6-alpine` and the published binding is `127.0.0.1:55432`. Any other existing container with that name is a stop.
-
-```sh
-if docker inspect "$VERIFY_CONTAINER" >/dev/null 2>&1; then
-  image=$(docker inspect -f '{{.Config.Image}}' "$VERIFY_CONTAINER")
-  binding=$(docker inspect -f '{{json .HostConfig.PortBindings}}' "$VERIFY_CONTAINER")
-  case "$image" in
-    postgis/postgis:18-3.6-alpine) ;;
-    *) echo "refusing to remove $VERIFY_CONTAINER (image $image)"; exit 1 ;;
-  esac
-  case "$binding" in
-    *'"HostIp":"127.0.0.1"'*'"HostPort":"55432"'*) ;;
-    *) echo "refusing to remove $VERIFY_CONTAINER (binding $binding)"; exit 1 ;;
-  esac
-  docker rm -f "$VERIFY_CONTAINER"
-fi
-docker volume rm "$VERIFY_VOLUME" >/dev/null 2>&1 || true
-docker run -d \
-  --name "$VERIFY_CONTAINER" \
-  -e POSTGRES_USER=landman \
-  -e POSTGRES_PASSWORD=landman \
-  -e POSTGRES_DB=postgres \
-  -p 127.0.0.1:55432:5432 \
-  -v "$VERIFY_VOLUME":/var/lib/postgresql \
-  --health-cmd 'pg_isready -h 127.0.0.1 -U landman -d postgres' \
-  --health-interval 5s \
-  --health-timeout 5s \
-  --health-retries 12 \
-  postgis/postgis:18-3.6-alpine
-```
-
-Ready for migrations means `docker inspect` reports the container running and healthy. The healthcheck uses `pg_isready -h 127.0.0.1` against the `postgres` database. TCP readiness excludes the temporary bootstrap server. That is not a migrated `landman` database.
-
-Reset, migrate, and seed on every pass. `make db-drop` drops the database named `landman` on `DB_CONTAINER`. The explicit `DB_CONTAINER` is what keeps that drop on the verify container.
-
-```sh
-make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
-make db-create DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
-make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0
-go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-schema \
-  --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
-  --seed .cursor/skills/verify-landman-cli/seed.sql
-docker exec -i "$VERIFY_CONTAINER" \
-  psql "$GOOSE_DATABASE_URL" -v ON_ERROR_STOP=1 \
-  < .cursor/skills/verify-landman-cli/seed.sql
-go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-loaded \
-  --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
-  --seed .cursor/skills/verify-landman-cli/seed.sql
-```
-
-Run `check-schema` after `migrate-up` and before the seed load. Stdout is `schema: ok`, or one `schema: <table>.<column> missing` line for each inserted column the database does not have, or one `schema: <table>.<column> not null` line when a `NOT NULL` column has no default and the seed does not insert it. Exit 0 lets you load the seed. Exit 1 means you stop and do not load the seed.
-
-The seed is a captured Union County sample, not a synthetic row. The parcel ids are the ones whose centroids fall in EPSG:3857 500 m cells `(-17961, 8354)` and `(-17960, 8354)`. `capture-seed` refreshes those parcels, their kept sale slots, and the soil that intersects them. The header of `seed.sql` records the capture time and the two query URLs. Sale rows are the kept slots for those parcel ids. `SavePart` upserts each parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete.
-
-Run `check-loaded` after the seed load. It prints the census parsed from `seed.sql`, then `loaded: ok` when the live counts and the two sample parcels match that file. Exit 1 names the table or the `source_parcel_id`.
-
-Leave `landman-postgis` alone. Do not run `docker compose` for this skill. Compose publishes port `5432` and mounts the volume `landman-postgis-data`.
-
-### CLI
-
-```sh
-make build
-```
-
-Ready means `make build` exits 0 and `./landman` exists in the repo root. Git ignores that binary (`/landman` in `.gitignore`). There is no listen port and no prompt.
-
-`make run` rebuilds and then executes with Make's environment, including `.env` when that file exists. Do not use `make run` for a verify drive.
-
-## Doctor
-
-Run doctor before the first drive, after any failed drive, and again after a fresh container. A doctor failure caused by a wrong URL, container name, or expected line in this skill is drift in this skill. Fix the skill and retry the step that failed.
-
-### Database doctor
-
-```sh
-docker inspect -f '{{.Name}} {{.Config.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$VERIFY_CONTAINER"
-docker inspect -f '{{json .HostConfig.PortBindings}}' "$VERIFY_CONTAINER"
-make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0
-```
-
-Worth driving when all of these are true.
-
-- The name is `/landman-verify-postgis`.
-- The image is `postgis/postgis:18-3.6-alpine`.
-- The container is running and healthy.
-- The host binding is port `55432` on `127.0.0.1`.
-- `make migrate-version` exits 0. Stderr contains `goose: version ` followed by the integer of the highest filename prefix in `db/migrations/`. A log timestamp precedes that line. Stdout is the Make recipe.
-
-If a container named `landman-postgis` exists, leave it running. Do not inspect it as a substitute for the verify container.
-
-### CLI doctor
-
-```sh
-test -x ./landman
-go version
-curl -sS -o /tmp/landman-verify-layer-215.json -w "%{http_code}" \
-  "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/215?f=json"
-curl -sS -o /tmp/landman-verify-layer-197.json -w "%{http_code}" \
-  "https://atlas.unioncountync.gov/server/rest/services/OperationalLayers/MapServer/197?f=json"
-```
-
-Worth driving when `./landman` is executable, `go version` can build the module in `go.mod`, and both layer metadata requests return HTTP 200. Layer 215 is parcels. Layer 197 is soil. Those curls check that the hosts answer. Page timings come from `probe`. Exit 0 also calls the USDA tabular endpoint `https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest`. There is no separate metadata probe for that host. A failed USDA call fails the drive.
-
-## Drive
-
-Read `features/README.md` and the matching feature file before a drive. Use that file's commands.
-
-Capture stdout, stderr, and the exit code for every command. `RUN_ID` identifies the pass. Evidence paths are under `artifacts/verify/$RUN_ID/`.
-
-```sh
 RUN_ID=$(date +%Y%m%dT%H%M%S)-$$
 EVIDENCE=artifacts/verify/$RUN_ID
 mkdir -p "$EVIDENCE"
-go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman probe \
-  --evidence "$EVIDENCE"
+if docker container inspect "$VERIFY_CONTAINER" >/dev/null 2>&1 ||
+   docker volume inspect "$VERIFY_VOLUME" >/dev/null 2>&1 ||
+   [ -n "$(ss -H -ltn 'sport = :55432')" ]; then
+  echo 'Verification container, volume, or port is already in use' >&2
+  exit 1
+fi
+docker run -d --name "$VERIFY_CONTAINER" \
+  -e POSTGRES_USER=landman -e POSTGRES_PASSWORD=landman -e POSTGRES_DB=postgres \
+  -p 127.0.0.1:55432:5432 -v "$VERIFY_VOLUME":/var/lib/postgresql \
+  --health-cmd 'pg_isready -h 127.0.0.1 -U landman -d postgres' \
+  --health-interval 5s --health-timeout 5s --health-retries 12 \
+  postgis/postgis:18-3.6-alpine
+```
+
+Record the returned container ID. Clean this container and volume on failure as well as success. Keep evidence. Wait for Docker to report running and healthy before migrations. TCP readiness against `postgres` is not proof of a migrated `landman` database.
+
+Follow [bootstrap](features/local-database-bootstrap.md) and [migration status](features/migration-status.md). Capture each command's stdout, stderr, and exit before another command can replace the status. Stop on any failed setup command:
+
+```sh
+verify_make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
+verify_make db-create DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
+verify_make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0
+go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-schema \
+  --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
+  --seed .cursor/skills/verify-landman-cli/seed.sql
+docker exec -i "$VERIFY_CONTAINER" psql "$GOOSE_DATABASE_URL" \
+  -v ON_ERROR_STOP=1 < .cursor/skills/verify-landman-cli/seed.sql
+go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-loaded \
+  --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
+  --seed .cursor/skills/verify-landman-cli/seed.sql
+verify_make build
+```
+
+Require `schema: ok` before seed load, then the census and `loaded: ok`. The seed is a retained county sample, not a full import. `check-loaded` checks selected table counts and two parcel identities, not the whole schema. `capture-seed` replaces the sample from the county and is not a normal verification action.
+
+## Doctor
+
+A doctor is a readiness check. Run it before the first drive, on each fresh database, and after any failed drive. If a skill error causes failure, correct it and retry once. Do not continue from unknown state.
+
+```sh
+docker inspect -f '{{.Id}} {{.Config.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$VERIFY_CONTAINER"
+docker inspect -f '{{json .HostConfig.PortBindings}}' "$VERIFY_CONTAINER"
+verify_make migrate-version DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0
+test -x ./landman
+go version
+```
+
+Require this run's container ID, image `postgis/postgis:18-3.6-alpine`, running/healthy state, and only `127.0.0.1:55432` as the published database binding. The applied version must equal the highest migration prefix in this checkout. Goose uses container port 5432; host CLI commands use port 55432.
+
+Only after live approval, check layer 215 (parcels) and layer 197 (soil) through the established client URLs. `probe` below records their metadata and one ordered 2000-row page each. It is a timing diagnostic, not a multi-page completeness check. Compare the latest observed source counts with the application's row, receipt, byte, and time limits before recommending the import. Record any gate that rejects the run. A prior source count is not a current completeness receipt. USDA has no separate metadata check here; a failed USDA call is an external drive failure, not a pass.
+
+## Drive
+
+Read [the feature map](features/README.md) and [source import](features/import-parcels-and-soil.md). Do not run two GIS drives at once. Each source process has one ten-minute outer deadline that includes its derived work. Do not apply that claim to the combined bare command or every scheduled job.
+
+```sh
+go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman probe --evidence "$EVIDENCE"
 if HOST_DATABASE_URL="$HOST_DATABASE_URL" EVIDENCE="$EVIDENCE" \
   bash .cursor/skills/verify-landman-cli/run-gis.sh; then
   drive_status=0
 else
   drive_status=$?
 fi
-# The runner writes each source exit and the combined exit before it returns.
 go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman classify \
   --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
   --seed .cursor/skills/verify-landman-cli/seed.sql --evidence "$EVIDENCE"
 ```
 
-Run `probe` before the GIS commands. It times each layer's `?f=json` metadata request, then one 2000-row data page, and writes `page-timings.json`. Parcel pages use `orderByFields=OBJECTID`. Soil pages use `orderByFields=OBJECTID_1`. Exit 0 when both metadata calls returned HTTP 200. A slow data page still exits 0. Classify treats metadata as fast when the call is HTTP 200 within 5 seconds. A data page is slow at 15 seconds or a timeout. Batch log gaps do not identify county slowness. They include parcel translation and database writes. Only the timed HTTP probe supplies evidence of a slow county data page.
+Run `classify` after a failed runner too. It can make live requests to compare seeded sales. Preserve per-source and combined stdout, stderr, and exit files, `page-timings.json`, and `drive-outcome.json`. Require the combined exit to equal `drive_status`. The runner stops after the first failed source.
 
-Run `classify` after both GIS commands. Stdout is one verdict line. The command also writes `$EVIDENCE/drive-outcome.json`. The fields are `verdict`, `seededSales`, `fullImport`, and `sales`. `sales` is null when the parcel transaction did not commit. The parcel transaction committed when `job_attempts` has a `full_scan` row for `union.gis.parcels` whose outcome is `success` or `success_with_quarantine`. The helper does not look for an import summary line. The helper exits 2 for `inconclusive: county-source-slow`. `go run` turns that into shell exit 1 and prints `exit status 2` on stderr. Read the verdict line and `drive-outcome.json`.
+A pass requires clean full-scan publication, stored screening, a screening head, one soil assessment per county parcel, and the seeded sale comparison. Source counts and receipts must prove full capture separately from the single-page probe. Do not query a countywide sale total. Omitted sale slots must disappear on complete replacement. A source with quarantine is not a clean pass and does not start its derived work.
 
-Each GIS command has a 10-minute deadline. The two commands together cover parcel import, soil fetch, soil storage, optional USDA name lookup, and screening. Parcel pages use `BatchSize` 2000 from `cmd/landman/main.go`. The GIS client sends about one request per second. Soil pages are also 2000. The parcel job prints the `[union_county_gis]` lines and prints nothing on stdout. Soil fetch, soil storage, and screening log nothing. `Fetch complete:` is not success. The process still has to store soil and screen it.
+GIS stdout is empty. Stderr includes job, attempt, and stage logs; quiet output is not a success condition. `Fetch complete:` ends fetching, not publication or screening. Unknown commands, including `import`, fail before database access; match `usage: landman` and `run <job ID>`, not a historical full usage string. Repair limits outside 1 through 100 fail before database access.
 
-Stable handles:
+The classifier prints `pass`, `fail`, or `inconclusive: county-source-slow`. It writes the same verdict with `seededSales`, `fullImport`, and `sales` in `drive-outcome.json`. Its exit 2 becomes shell exit 1 under `go run`. Read the JSON and verdict, not only that shell status. An HTTP 502 from USDA is not proof of county slowness.
 
-- CLI stdout for each GIS command is empty
-- CLI stderr: `[union_county_gis] Total parcels to fetch: <n>`
-- CLI stderr: `[union_county_gis] Batch size: 2000, Total batches: <m>`
-- CLI stderr: `[union_county_gis] Batch <i>/<total> complete:`
-- CLI stderr: `[union_county_gis] Fetch complete:`
-- CLI stderr for an unknown command begins `usage: landman [schedule | run <job ID> | reprocess union.gis.parcels --limit N]`
-- CLI stderr when `--limit` is not an integer from 1 through 100: `reprocess limit must be between 1 and 100`
-- CLI stderr fatal substrings: `create GIS source:`, `fetch soil polygons:`, `import parcels:`, `union repair:`, `required union.gis.parcels:`, `required union.gis.soil:`, `required union.soil.screening:`, `required union.gis.parcels did not complete cleanly:`, `required union.gis.soil did not complete cleanly:`, `required union.soil.screening did not complete cleanly:`, `success_with_quarantine`, `invalid SOIL_SCREENING_MAX_AGE`, `connect for derived refresh exclusion:`, `wait for derived refresh exclusion:`
-- Makefile targets, always with the verify `DB_CONTAINER` and URL overrides: `make build`, `make db-drop`, `make db-create`, `make migrate-up`, `make migrate-version`, `make migrate-status`
-- SQL seed identities: `source_parcel_id` `07102010` and `07102051`, both `source_name` `union_county_gis`. Vacancy and situs are the `census parcel` lines from `check-loaded`.
-- `check-schema` stdout `schema: ok`
-- `check-loaded` stdout begins `census parcels=` and ends with `loaded: ok`
-- `classify` stdout `pass`, `fail`, or `inconclusive: county-source-slow`
+## Cleanup and evidence
 
-`log.Fatal` writes a timestamp before the error text and exits 1.
-
-## Evidence
-
-Store proof under `artifacts/verify/$RUN_ID/` in the repo root. Cleanup must not delete this directory. Do not commit it. `artifacts/verify/` is gitignored.
-
-Proof standards:
-
-- Exercise `./landman` with `HOST_DATABASE_URL`, and exercise goose through the Makefile against `GOOSE_DATABASE_URL`. Do not call the GIS fetch, the import service, or the vacant filter from a scratch program and call that a user-path proof.
-- Capture the command, stdout, stderr, and exit code. For the database, capture `drive-outcome.json` from `classify`.
-- A successful import exits 0. Stdout is empty. Stderr contains the batch-size line and `Fetch complete:`. `classify` then prints `pass`. `drive-outcome.json` records `seededSales` and `fullImport` as `met`. The parcel attempt is `attempt_kind` `full_scan` and outcome `success`. `SavePart` upserts each accepted parcel and its kept slots on the import transaction and deletes omitted sequences. `SaveSales` alone does not delete. Do not query a county-wide `parcel_sales` total.
-- An empty `PID` is stored with `likely_vacant` false. `job_attempts.processed_count` on the parcel job counts saved features, which can exceed the number of `parcels` rows. A quarantined record is not one of those saved features. Outcome `success_with_quarantine` exits non-zero and does not start that source command's derived work.
-- The GIS and USDA endpoints are production systems. There is no dry-run flag. Do not run two `./landman` drives at the same time. A second run records `skipped_overlap` and exits non-zero.
-- A green `make test` or `go test` is not evidence that the CLI or migrations work.
-
-## Cleanup
-
-Run cleanup after the last drive of the pass, including any re-drive. Check that `artifacts/verify/$RUN_ID/` still exists after cleanup.
-
-- If this run started `./landman` and it is still running, kill that PID only (`kill "$PID"`). Do not `pkill landman` or kill by process name.
-- `make clean` may remove the `./landman` binary this run built.
-- Remove only the verify container and its volume.
+Run cleanup after the last drive, including any correction check. Confirm the named evidence files still exist. Stop only a CLI PID this run started. Remove only this run's recorded container and volume:
 
 ```sh
 docker rm -f "$VERIFY_CONTAINER"
 docker volume rm "$VERIFY_VOLUME"
+test -d "$EVIDENCE"
 ```
 
-- Do not `docker compose down`, do not stop `landman-postgis`, and do not `make db-drop` without `DB_CONTAINER=landman-verify-postgis`.
-- Do not delete `artifacts/verify/`.
-
-## Helpers
-
-The helper is one program.
-
-```sh
-go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman
-```
-
-`check-schema`, `check-loaded`, `probe`, and `classify` are the steps in the launch and the drive above. The seed file is `.cursor/skills/verify-landman-cli/seed.sql`.
-
-`capture-seed` refreshes that file from the county. It writes `seed.sql.capture-tmp` beside the seed and renames the temp file over `seed.sql` only after the temp file parses back to the same parcel ids. A request that hits 30 seconds, or a missed 3 minute budget, prints `capture: left seed.sql in place (county slow)` and the helper exits 2. The current seed stays. `go run` turns that exit into shell exit 1 and prints `exit status 2` on stderr. Do not run `capture-seed` on a normal drive.
-
-```sh
-go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman capture-seed \
-  --container "$VERIFY_CONTAINER" --postgres-url "$POSTGRES_URL" \
-  --seed .cursor/skills/verify-landman-cli/seed.sql
-```
+Do not remove evidence or stop `landman-postgis`. Test results do not replace real CLI and database evidence for this optional journey. Report an unapproved source path as not run, with the exact approval or input prerequisite. Preserve full-county release and performance gates.
