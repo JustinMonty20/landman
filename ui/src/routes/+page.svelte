@@ -525,11 +525,11 @@ return () => task.abort();
             </div></div>
             {#if favoriteStatus}<p class="favorite-status" role={favoriteStatus.startsWith('Error') || favoriteStatus.includes('unavailable') ? 'alert':'status'}>{favoriteStatus}</p>{/if}
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
-              <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
-                <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
-                <Tabs.Trigger class="btn" value="research">Research</Tabs.Trigger>
-                <Tabs.Trigger class="btn" value="notes">Notes</Tabs.Trigger>
-                <Tabs.Trigger class="btn" value="tasks">Tasks</Tabs.Trigger>
+              <Tabs.List class="map-tabs parcel-tabs" aria-label="Parcel evidence views">
+                <Tabs.Trigger class="btn" value="evidence" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Evidence</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="research" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Research</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="notes" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Notes</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="tasks" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Tasks</Tabs.Trigger>
               </Tabs.List>
               <Tabs.Content class="parcel-tab-content" value="evidence">
             <div class="detail-editor"><button class="btn btn-sm" aria-expanded={editingDetails} onclick={() => { draftFields = [...groups]; editingDetails = !editingDetails; }}>Choose detail fields</button>
@@ -638,7 +638,8 @@ h1 { font-size: 19px; font-weight: 650; }
 :global(.results:has(.parcel-heading) > [data-scope='tabs'][data-part='root']) { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 :global(.parcel-tab-content:not([hidden])) { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 :global(.parcel-tab-content[hidden]) { display: none; }
-:global(.results:has(.parcel-heading) > [data-scope='tabs'] .map-tabs .btn) { min-width: 0; padding-inline: 4px; font-size: 12px; white-space: nowrap; }
+:global(.parcel-tabs) { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--muted) var(--surface); }
+:global(.parcel-tabs .btn) { flex: 0 0 50%; white-space: nowrap; }
 :global(.results:has(.parcel-heading)) { overflow: hidden; }
 .research-content { padding: 12px 14px; font-size: 13px; line-height: 1.5; }
 .research-sites { list-style: disc; padding-left: 20px; margin-bottom: 14px; }

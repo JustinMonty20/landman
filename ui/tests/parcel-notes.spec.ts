@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+// Show native scrollbars in parcel screenshots; Playwright hides them by default.
+test.use({ launchOptions: { args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'], ignoreDefaultArgs: ['--hide-scrollbars'] } });
 const origin='http://127.0.0.1:5174';
 const a='11111111-1111-4111-8111-111111111111';
 const b='22222222-2222-4222-8222-222222222222';
@@ -151,7 +153,7 @@ test('failed create retries same ID; conflict preserves edit text',async ({page}
  await expect(scratch.getByText('Keep this')).toBeVisible();
  await expect(scratch.getByRole('button',{name:'Confirm delete note'})).toBeDisabled();
 });
-test('four fixed parcel tabs retain separate notes and tasks drafts with bounded scrolling',async ({page},info)=>{
+test('full-size parcel tabs scroll horizontally while notes and tasks retain drafts and bounded content',async ({page},info)=>{
  await fixture(page);
  await page.emulateMedia({reducedMotion:'reduce'});
  await page.setViewportSize({width:info.project.name==='tablet'?768:1440,height:560});
@@ -168,14 +170,44 @@ test('four fixed parcel tabs retain separate notes and tasks drafts with bounded
  const panel=page.getByRole('region',{name:'Parcel evidence'});
  const tabs=panel.getByRole('tablist',{name:'Parcel evidence views'});
  await expect(tabs.getByRole('tab')).toHaveText(['Evidence','Research','Notes','Tasks']);
- expect(await tabs.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
- const tabBounds=await tabs.boundingBox();
- for(const tab of await tabs.getByRole('tab').all()){
-  const bounds=await tab.boundingBox();
-  expect(bounds!.x).toBeGreaterThanOrEqual(tabBounds!.x);
-  expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(tabBounds!.x+tabBounds!.width+1);
+ const size=await tabs.evaluate(el=>{
+  const button=el.querySelector('button')!;
+  const style=getComputedStyle(button);
+  return {viewport:el.clientWidth,content:el.scrollWidth,button:button.getBoundingClientRect().width,
+   font:style.fontSize,padding:style.paddingInline,height:button.getBoundingClientRect().height,
+   overflow:getComputedStyle(el).overflowX,scrollbar:getComputedStyle(el).scrollbarWidth,
+   scrollbarPixels:el.offsetHeight-el.clientHeight,scrollLeft:el.scrollLeft};
+ });
+ const original=await page.getByRole('tablist',{name:'Map controls'}).getByRole('tab').first().evaluate(el=>{
+  const style=getComputedStyle(el);
+  return {font:style.fontSize,padding:style.paddingInline,height:el.getBoundingClientRect().height};
+ });
+ expect(size.content).toBeGreaterThan(size.viewport);
+ expect(size.button).toBeGreaterThanOrEqual(size.viewport/2-1);
+ expect(size.button).toBeLessThanOrEqual(size.viewport/2+1);
+ expect(size.scrollLeft).toBe(0);
+ expect(size.overflow).toBe('auto');
+ expect(size.scrollbar).toBe('thin');
+ expect(size.scrollbarPixels).toBeGreaterThan(2);
+ expect({font:size.font,padding:size.padding,height:size.height}).toEqual(original);
+ async function expectTabRevealed(name:string){
+  const tab=tabs.getByRole('tab',{name,exact:true});
+  await expect(tab).toBeFocused();
+  await expect(tab).toHaveAttribute('data-selected','');
+  await expect.poll(()=>tabs.evaluate((list,label)=>{
+   const bounds=list.getBoundingClientRect();
+   const button=Array.from(list.querySelectorAll('button')).find(el=>el.textContent===label)!.getBoundingClientRect();
+   return button.left>=bounds.left-1 && button.right<=bounds.right+1;
+  },name)).toBe(true);
  }
  await page.screenshot({path:info.outputPath('four-tabs-evidence.png')});
+ await tabs.evaluate(el=>el.scrollLeft=el.scrollWidth);
+ expect(await tabs.evaluate(el=>el.scrollLeft)).toBeGreaterThan(0);
+ await expect(tabs.getByRole('tab',{name:'Tasks'})).toBeInViewport();
+ await tabs.getByRole('tab',{name:'Tasks'}).click();
+ await expect(tabs.getByRole('tab',{name:'Tasks'})).toHaveAttribute('data-selected','');
+ await tabs.getByRole('tab',{name:'Evidence'}).click();
+ await expect(tabs.getByRole('tab',{name:'Evidence'})).toHaveAttribute('data-selected','');
  await expect(panel.getByRole('heading',{name:'Parcel evidence'})).toBeVisible();
  await expect(panel.getByRole('button',{name:'Close parcel details'})).toBeVisible();
  await expect(panel.getByRole('button',{name:'Favorite parcel'})).toBeVisible();
@@ -204,7 +236,8 @@ test('four fixed parcel tabs retain separate notes and tasks drafts with bounded
  await expect(panel.getByText('County parcel number:',{exact:false})).toBeVisible();
  await scrollTab('Research','research');
  await page.keyboard.press('ArrowRight');
- await expect(tabs.getByRole('tab',{name:'Notes'})).toBeFocused();
+ await expectTabRevealed('Notes');
+ expect(await tabs.evaluate(el=>el.scrollLeft)).toBeGreaterThan(0);
  await expect(panel.getByRole('region',{name:'Private parcel scratchpad'})).toBeVisible();
  const draft=panel.getByRole('textbox',{name:'Note text'});
  await draft.fill('Retain my unsaved note');
@@ -212,7 +245,9 @@ test('four fixed parcel tabs retain separate notes and tasks drafts with bounded
  await scrollTab('Notes','notes');
  await tabs.getByRole('tab',{name:'Notes'}).focus();
  await page.keyboard.press('ArrowRight');
- await expect(tabs.getByRole('tab',{name:'Tasks'})).toBeFocused();
+ await expectTabRevealed('Tasks');
+ expect(await tabs.evaluate(el=>el.scrollLeft)).toBeGreaterThan(0);
+ await page.screenshot({path:info.outputPath('four-tabs-tasks-horizontal.png')});
  await expect(panel.getByRole('region',{name:'Private parcel scratchpad'})).toBeHidden();
  await expect(panel.getByText('Favorite this parcel to create follow-up tasks.')).toBeVisible();
  await expect(panel.getByRole('button',{name:'Create task'})).toHaveCount(0);

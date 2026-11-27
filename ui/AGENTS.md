@@ -1,4 +1,5 @@
 # Parcel UI
+- For parcel-detail scrolling tabs, preserve existing button typography, padding, height, and approximately half-panel width. Scroll the tab row horizontally instead of compressing buttons unless the operator requests resizing.
 - For external parcel research, use the operator-specified parcel URL with the county parcel number. Preserve leading zeros and open it in a new tab. Show an unavailable state when the number is missing. Use a general search page only when the operator approves that fallback.
 
 - Keep the application header to the brand and account controls.
