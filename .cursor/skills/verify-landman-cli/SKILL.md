@@ -78,9 +78,15 @@ For the extended bootstrap, migration, and scheduler recipes, define this functi
 verify_make() { .cursor/skills/verify-landman-cli/verify-make.sh "$@"; }
 ```
 
-The executable helper removes the `.env` include from a temporary Makefile and clears inherited settings. It accepts build and the documented database targets. Database targets require an explicit `DB_CONTAINER=landman-verify-<name>`. Confirm that this run owns the container before any reset. Pass each database URL on the command line. The helper does not prove container ownership.
+The executable helper removes the `.env` include from a temporary Makefile and clears inherited settings. It accepts one target only. Build accepts no additional arguments. Database targets accept only `DB_CONTAINER`, `POSTGRES_URL`, `DATABASE_URL`, `GOOSE_VERSION`, and `GOOSE_CMD` assignments. Each database target requires one `DB_CONTAINER=landman-verify-<name>` assignment. Extra targets, Make options, and other assignments are rejected. Confirm that this run owns the container before any reset. Pass each database URL on the command line. The helper does not prove container ownership.
 
 Use `verify_make build`, not `make run`. The helper leaves the product Makefile unchanged. Do not use it to run arbitrary Make targets.
+
+After a change to this helper or the GIS bootstrap block, run its local failure-path tests. They use temporary files and command substitutes, not Docker or source requests:
+
+```sh
+python3 .cursor/skills/verify-landman-cli/verify-harness.py
+```
 
 ## Optional checks
 

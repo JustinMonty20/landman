@@ -11,6 +11,8 @@ Run in Bash at the repository root. Use one database for this journey and a fres
 Define `verify_make` from `SKILL.md`. It runs repository Make targets without operator settings. Use these dedicated names. Stop if the container, volume, or host port is already in use; do not remove an earlier run's data.
 
 ```sh
+set -euo pipefail
+command -v ss >/dev/null
 export VERIFY_CONTAINER=landman-verify-postgis
 export VERIFY_VOLUME=landman-verify-data
 export POSTGRES_URL='postgres://landman:landman@localhost:5432/postgres?sslmode=disable'
@@ -38,18 +40,27 @@ Record the returned container ID. Clean this container and volume on failure as 
 Follow [bootstrap](features/local-database-bootstrap.md) and [migration status](features/migration-status.md). Capture each command's stdout, stderr, and exit before another command can replace the status. Stop on any failed setup command:
 
 ```sh
-verify_make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
-verify_make db-create DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL"
-verify_make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0
-go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-schema \
+set -euo pipefail
+setup_step() {
+  local name=$1
+  shift
+  local status=0
+  "$@" >"$EVIDENCE/$name.stdout.txt" 2>"$EVIDENCE/$name.stderr.txt" || status=$?
+  printf '%s\n' "$status" >"$EVIDENCE/$name.exit.txt"
+  return "$status"
+}
+setup_step db-drop verify_make db-drop DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL" || exit "$?"
+setup_step db-create verify_make db-create DB_CONTAINER="$VERIFY_CONTAINER" POSTGRES_URL="$POSTGRES_URL" || exit "$?"
+setup_step migrate-up verify_make migrate-up DB_CONTAINER="$VERIFY_CONTAINER" DATABASE_URL="$GOOSE_DATABASE_URL" GOOSE_VERSION=v3.30.0 || exit "$?"
+setup_step check-schema go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-schema \
   --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
-  --seed .cursor/skills/verify-landman-cli/seed.sql
-docker exec -i "$VERIFY_CONTAINER" psql "$GOOSE_DATABASE_URL" \
-  -v ON_ERROR_STOP=1 < .cursor/skills/verify-landman-cli/seed.sql
-go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-loaded \
+  --seed .cursor/skills/verify-landman-cli/seed.sql || exit "$?"
+setup_step seed bash -ec 'docker exec -i "$1" psql "$2" -v ON_ERROR_STOP=1 < .cursor/skills/verify-landman-cli/seed.sql' \
+  seed "$VERIFY_CONTAINER" "$GOOSE_DATABASE_URL" || exit "$?"
+setup_step check-loaded go run ./.cursor/skills/verify-landman-cli/cmd/verify-landman check-loaded \
   --container "$VERIFY_CONTAINER" --goose-url "$GOOSE_DATABASE_URL" \
-  --seed .cursor/skills/verify-landman-cli/seed.sql
-verify_make build
+  --seed .cursor/skills/verify-landman-cli/seed.sql || exit "$?"
+setup_step build verify_make build || exit "$?"
 ```
 
 Require `schema: ok` before seed load, then the census and `loaded: ok`. The seed is a retained county sample, not a full import. `check-loaded` checks selected table counts and two parcel identities, not the whole schema. `capture-seed` replaces the sample from the county and is not a normal verification action.
