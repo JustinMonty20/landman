@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import { Dialog, Menu } from '@skeletonlabs/skeleton-svelte';
+import ParcelTasks from '../../lib/ParcelTasks.svelte';
 import '../../style.css';
 type State = { id:string; name:string; position:number; revision:number; count:number };
 type Card = { favorite?:boolean; parcel_id:string; parcel_number:string|null; address:string|null; state_id:string; revision:number; excluded:boolean; exclusion_reason:string; favorited_at:string };
@@ -165,6 +166,7 @@ onMount(()=>{void load()});
 {#if loading && !board}<p class="notice" role="status">Loading your board…</p>{/if}
 {#if loadErrors.board}<p class="notice error" role="alert">{loadErrors.board} <button class="inline-action" onclick={load}>Retry board load</button></p>{/if}
 {#if mutationError && !dialogOpen}<p class="notice error" role="alert">{mutationError}</p>{/if}
+<ParcelTasks />
 {#if board}
 <div class="canvas" aria-label="Lead states" aria-busy={loading}><div class="states">
 {#each board.states as s (s.id)}
@@ -184,6 +186,7 @@ onMount(()=>{void load()});
 <div class="card-top"><span class="parcel-label">PARCEL</span><Menu><Menu.Trigger class="icon-button" aria-label={`Actions for parcel ${card.parcel_number || card.parcel_id}`} disabled={busy}>···</Menu.Trigger><Menu.Positioner><Menu.Content class="action-menu"><Menu.Item value="exclude" onclick={() => openAction({kind:card.excluded?'restore':'exclude',card})}>{card.excluded?'Restore lead':'Exclude lead…'}</Menu.Item><Menu.Separator/><Menu.Item value="remove" onclick={() => openAction({kind:'remove',card})}>Remove favorite…</Menu.Item></Menu.Content></Menu.Positioner></Menu></div>
 <strong class="parcel-id">{card.parcel_number || card.parcel_id}</strong><p class="address">{card.address || 'Address unavailable'}</p>
 {#if card.excluded}<p class="exclusion"><span>Excluded</span> · {card.exclusion_reason}</p>{/if}
+<p class="task-link"><a href={`/?parcel=${card.parcel_id}`}>Follow-up tasks →</a></p>
 <div class="card-footer"><a href={`/?parcel=${card.parcel_id}`}>View parcel <span aria-hidden="true">↗</span></a><label class="state-select"><select aria-label={`Change state for ${card.parcel_number || card.parcel_id}`} value={card.state_id} onchange={(e)=>move(card,e.currentTarget.value)} disabled={busy}>{#each board.states as target}<option value={target.id}>{target.name}</option>{/each}</select></label></div>
 </article>
 {/each}
@@ -198,7 +201,7 @@ onMount(()=>{void load()});
 <Dialog open={dialogOpen} onOpenChange={(details)=>{if(!details.open && (!busy || recovering))closeAction()}}>
 <Dialog.Backdrop class="dialog-backdrop"/><Dialog.Positioner class="dialog-positioner"><Dialog.Content class="dialog-panel">
 <Dialog.Title class="dialog-title">{action?.kind==='create'?'Add state':action?.kind==='rename'?'Rename state':action?.kind==='delete'?'Delete state':action?.kind==='default'?'Change default state':action?.kind==='left'||action?.kind==='right'?'Reorder state':action?.kind==='exclude'?'Exclude lead':action?.kind==='restore'?'Restore lead':'Remove favorite'}</Dialog.Title>
-<Dialog.Description class="dialog-description">{action?.kind==='delete' ? `Move all parcels from ${'state' in (action ?? {}) ? (action as {state:State}).state.name : ''} to another state before deleting. This cannot be undone.` : action?.kind==='remove' ? 'Remove this favorite? Its state and exclusion remain saved if you add it again.' : action?.kind==='exclude' ? 'The parcel stays in its current state. Give a reason for excluding this lead.' : action?.kind==='restore' ? 'Clear this lead’s exclusion and reason?' : action?.kind==='default' ? 'New favorites will start in this state.' : action?.kind==='left'||action?.kind==='right' ? 'Change the order of your board columns?' : 'Use a short name that distinguishes this state.'}</Dialog.Description>
+<Dialog.Description class="dialog-description">{action?.kind==='delete' ? `Move all parcels from ${'state' in (action ?? {}) ? (action as {state:State}).state.name : ''} to another state before deleting. This cannot be undone.` : action?.kind==='remove' ? 'Remove this favorite? Its state and exclusion remain saved, but pending reminder intents are canceled and will not restart if you add it again.' : action?.kind==='exclude' ? 'The parcel stays in its current state. Pending reminder intents are canceled. Give a reason for excluding this lead.' : action?.kind==='restore' ? 'Clear this lead’s exclusion and reason?' : action?.kind==='default' ? 'New favorites will start in this state.' : action?.kind==='left'||action?.kind==='right' ? 'Change the order of your board columns?' : 'Use a short name that distinguishes this state.'}</Dialog.Description>
 <form onsubmit={(e)=>{e.preventDefault();void submitAction()}}>
 {#if action?.kind==='create'||action?.kind==='rename'}<label class="field">State name<input class="input" bind:value={name} required maxlength="80" disabled={busy}/></label>{/if}
 {#if action?.kind==='exclude'}<label class="field">Exclusion reason<textarea class="textarea" bind:value={reason} required disabled={busy} aria-describedby="reason-limit"></textarea><span id="reason-limit" class:error={reasonBytes>500}>{reasonBytes} / 500 UTF-8 bytes{reasonBytes>500 ? ' · Shorten the reason before saving.' : ''}</span></label>{/if}

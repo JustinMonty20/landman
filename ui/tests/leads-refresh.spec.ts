@@ -19,6 +19,7 @@ for (const failure of ['none', 'board', 'column'] as const) {
   const cardGate = new Promise<void>(resolve => releaseCards = resolve);
   await page.route('**/*', route => {
    const url = new URL(route.request().url());
+   if(url.origin===origin && url.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});
    return url.origin !== origin || /^\/(api|auth)(\/|$)/.test(url.pathname) ? route.abort() : route.continue();
   });
   await page.route('**/api/me', route => route.fulfill({ json: { id: 'fixture', email: 'buyer@example.test', name: 'Buyer' } }));

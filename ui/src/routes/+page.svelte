@@ -3,6 +3,7 @@ import { onMount, tick } from 'svelte';
 import { Tabs, Toast, createToaster } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import ParcelNotes from '../lib/ParcelNotes.svelte';
+import ParcelTasks from '../lib/ParcelTasks.svelte';
 import { noteDrafts, noteEdits, noteRetries } from '../lib/notesState.svelte';
 import { detailGroups, detailFields, defaultDetailFields, parseDetailFields, type DetailField } from '../lib/detailGroups';
 import ParcelMap, { jurisdictionColor, zoningColor } from '../lib/ParcelMap.svelte';
@@ -532,7 +533,7 @@ return () => task.abort();
             <div class="detail-editor"><button class="btn btn-sm" aria-expanded={editingDetails} onclick={() => { draftFields = [...groups]; editingDetails = !editingDetails; }}>Choose detail fields</button>
 {#if editingDetails}<form onsubmit={(event) => { event.preventDefault(); saveFields(); }}><fieldset disabled={savingDetails}><legend>Show individual fields in parcel details</legend>{#each detailGroups as group}<div class="field-picker-group"><strong>{group.label}</strong>{#each group.fields as field}<label class="check"><input type="checkbox" class="checkbox" checked={draftFields.includes(field.id)} onchange={() => toggleField(field.id)} />{field.label}</label>{/each}</div>{/each}<button class="btn btn-sm" type="submit">Save details</button></fieldset></form>{/if}<p role="status" aria-live="polite">{preferenceStatus}</p></div>
 <div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence id={parcelID} fields={groups} releaseId={flood?.release?.id} onlocation={focusParcelFromList} onresearch={updateResearch} /></div>
-            {#key parcelID}<ParcelNotes parcel={parcelID} drafts={noteDrafts} edits={noteEdits} retries={noteRetries}/>{/key}
+            {#key parcelID}<ParcelNotes parcel={parcelID} drafts={noteDrafts} edits={noteEdits} retries={noteRetries}/>{#if favorite?.favorite}<ParcelTasks parcel={parcelID} editable={!favorite.excluded}/>{/if}{/key}
               </Tabs.Content>
               <Tabs.Content value="research">
               <div class="research-content">

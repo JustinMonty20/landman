@@ -6,6 +6,8 @@ async function fixture(page:import('@playwright/test').Page){
  await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
  await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
 await page.route('**/api/me/favorites/*/notes*',route=>route.fulfill({json:{items:[],next:''}}));
+ await page.route('**/api/me/favorites/*/tasks*',route=>route.fulfill({json:{items:[],next:''}}));
+ await page.route('**/api/me/crm/tasks*',route=>route.fulfill({json:{items:[],next:''}}));
  await page.route('**/api/coverage*',route=>route.fulfill({json:{counties:[]}}));
 }
 test('star toggles confirmed favorite, toast navigates to Leads; removal retains revision',async ({page},info)=>{
