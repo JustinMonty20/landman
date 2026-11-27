@@ -32,7 +32,7 @@ test('conflict preserves draft and requires explicit current-task refresh before
  };
  await page.route(`**/api/me/favorites/${parcel}/tasks/**`,taskRoute);
  await page.route(`**/api/me/favorites/${parcel}/tasks*`,taskRoute);
- await page.goto(`/?parcel=${parcel}`);
+ await page.goto(`/?parcel=${parcel}`);await page.getByRole('tab',{name:'Workspace'}).click();
  const pane=page.getByRole('region',{name:'Parcel follow-up tasks'});
  await expect(pane.getByText('Original reminder')).toBeVisible();
  await pane.getByRole('button',{name:'Edit / snooze'}).click();
@@ -41,6 +41,9 @@ test('conflict preserves draft and requires explicit current-task refresh before
  await expect(pane.getByRole('alert')).toContainText('Refresh the task');
  await expect(pane.getByRole('button',{name:'Save new schedule version'})).toBeDisabled();
  await expect(pane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Buyer draft');
+ await page.getByRole('tab',{name:'Research links'}).click();await page.getByRole('tab',{name:'Workspace'}).click();
+ await expect(pane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Buyer draft');
+ await expect(pane.getByRole('button',{name:'Save new schedule version'})).toBeDisabled();
  expect(posts).toBe(1);
  await pane.getByRole('button',{name:'Refresh task for retry'}).click();
  await expect(pane.getByText(/Current task \(version 2\): Concurrent change/)).toBeVisible();

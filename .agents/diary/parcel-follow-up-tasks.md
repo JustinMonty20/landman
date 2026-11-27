@@ -1,3 +1,4 @@
 - Out-of-scope decision: Keep scheduled intent and private message in one concrete parcelcrm transaction, not a generic notification service; only one stub workflow exists.
 - Scope tangent: V1 verified-phone consent, actual AWS product, runtime, and real SMS delivery remain deferred. No phone collection or deployment in this change.
 - Out-of-scope decision: Existing plans describe future activity and tax actions; do not add audit-history or tax features with task scheduling.
+- Unrelated bug or code smell: Vite development tests log Svelte `ownership_invalid_mutation` for shared note draft/retry state in ParcelNotes and the Notes route. Drafts and retry IDs still survive navigation in browser checks; replacing the existing note state contract is outside this tab-layout change.

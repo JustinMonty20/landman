@@ -28,7 +28,7 @@ test('bounded preview and chronological timeline, inline older-note deletion and
   if(req.method()==='PUT'){const data=req.postDataJSON(),index=records.findIndex(n=>n.id===id);records[index]=note(id,a,data.body,2);return route.fulfill({json:records[index]})}
   return route.abort();
  });
- await page.goto(`/?parcel=${a}`);
+ await page.goto(`/?parcel=${a}`);await page.getByRole('tab',{name:'Workspace'}).click();
  const scratch=page.getByRole('region',{name:'Private parcel scratchpad'});
  await expect(scratch.getByRole('heading',{name:'Scratchpad',exact:true})).toBeVisible();
  await expect(scratch.getByRole('textbox',{name:'Note text'})).not.toHaveAttribute('placeholder',/New note/i);
@@ -81,7 +81,7 @@ test('bounded preview and chronological timeline, inline older-note deletion and
  await expect(timeline.getByText('Note is too long. Shorten it before saving.')).toBeVisible();
  await expect(timeline.getByRole('button',{name:'Add note'})).toBeDisabled();
  await timeline.getByRole('textbox',{name:'Note text'}).fill('Draft survives navigation');
- await page.getByRole('link',{name:'Return to parcel'}).click();
+ await page.getByRole('link',{name:'Return to parcel'}).click();await page.getByRole('tab',{name:'Workspace'}).click();
  await expect(page).toHaveURL(new RegExp(`parcel=${a}`));
  await expect(page.getByRole('textbox',{name:'Note text'})).toHaveValue('Draft survives navigation');
  await scratch.getByRole('textbox',{name:'Note text'}).fill('<script>alert(1)</script>');
@@ -96,7 +96,7 @@ test('switching parcels preserves drafts and blocks stale notes and stale writes
   return route.fulfill({json:{items:[note('44444444-4444-4444-8444-444444444444',url.pathname.includes(a)?a:b,url.pathname.includes(a)?'A secret':'B entry')],next:''}});
  });
  await page.route('**/api/v1/parcels/lookup*',route=>route.fulfill({json:{items:[{id:b,parcel_number:'BPARCEL',address:'Switch B'},{id:a,parcel_number:'APARCEL',address:'Switch A'}]}}));
- await page.goto(`/?parcel=${a}`);await page.getByRole('textbox',{name:'Note text'}).fill('Draft for A');
+ await page.goto(`/?parcel=${a}`);await page.getByRole('tab',{name:'Workspace'}).click();await page.getByRole('textbox',{name:'Note text'}).fill('Draft for A');
  const finder=page.getByRole('combobox',{name:'Find parcel ID or address'});
  await finder.fill('Switch');await page.getByRole('option',{name:'Switch B · BPARCEL'}).click();
  const scratch=page.getByRole('region',{name:'Private parcel scratchpad'});
@@ -110,7 +110,7 @@ test('a pending note load cannot replace a newly submitted note',async ({page},i
   if(route.request().method()==='GET')await new Promise<void>(resolve=>release=resolve);
   return route.fulfill({json:{items:[],next:''}});
  });
- await page.goto(`/?parcel=${a}`);
+ await page.goto(`/?parcel=${a}`);await page.getByRole('tab',{name:'Workspace'}).click();
  const scratch=page.getByRole('region',{name:'Private parcel scratchpad'});
  await expect(scratch.getByRole('status')).toContainText('Loading notes');
  await scratch.getByRole('textbox',{name:'Note text'}).fill('Keep draft while loading');
@@ -133,12 +133,16 @@ test('failed create retries same ID; conflict preserves edit text',async ({page}
   if(req.method()==='POST'){const data=req.postDataJSON();attempts.push(data.id);if(attempts.length===1)return route.fulfill({status:503});created=true;current=note(data.id,a,data.body);return route.fulfill({json:current})}
   if(req.method()==='PUT'||req.method()==='DELETE')return route.fulfill({status:409});return route.abort();
  });
- await page.goto(`/?parcel=${a}`);const scratch=page.getByRole('region',{name:'Private parcel scratchpad'});
+ await page.goto(`/?parcel=${a}`);await page.getByRole('tab',{name:'Workspace'}).click();const scratch=page.getByRole('region',{name:'Private parcel scratchpad'});
  await scratch.getByRole('textbox',{name:'Note text'}).fill('Keep this');await scratch.getByRole('button',{name:'Add note'}).click();
  await expect(scratch.getByRole('alert')).toContainText('text is preserved');await expect(scratch.getByRole('textbox',{name:'Note text'})).toHaveValue('Keep this');
+ await page.getByRole('tab',{name:'Research links'}).click();await page.getByRole('tab',{name:'Workspace'}).click();
+ await expect(scratch.getByRole('textbox',{name:'Note text'})).toHaveValue('Keep this');
  await scratch.getByRole('button',{name:'Add note'}).click();expect(attempts[0]).toBe(attempts[1]);
  await scratch.getByRole('button',{name:'Edit note'}).click();await scratch.getByRole('textbox',{name:'Edit note'}).fill('Unsent edit');await scratch.getByRole('button',{name:'Save note'}).click();
  await expect(scratch.getByRole('alert')).toContainText('changed in another tab');await expect(scratch.getByRole('textbox',{name:'Edit note'})).toHaveValue('Unsent edit');
+ await page.getByRole('tab',{name:'Evidence',exact:true}).click();await page.getByRole('tab',{name:'Workspace'}).click();
+ await expect(scratch.getByRole('textbox',{name:'Edit note'})).toHaveValue('Unsent edit');
  await scratch.getByRole('button',{name:'Reload notes'}).click();await expect(scratch.getByRole('textbox',{name:'Edit note'})).toHaveValue('Unsent edit');
  await scratch.getByRole('button',{name:'Cancel edit'}).click();
  await scratch.getByRole('button',{name:'Delete note',exact:true}).click();
@@ -146,4 +150,55 @@ test('failed create retries same ID; conflict preserves edit text',async ({page}
  await expect(scratch.getByRole('alert')).toContainText('changed in another tab');
  await expect(scratch.getByText('Keep this')).toBeVisible();
  await expect(scratch.getByRole('button',{name:'Confirm delete note'})).toBeDisabled();
+});
+test('Workspace is third fixed tab with isolated scrolling, keyboard access and retained draft',async ({page},info)=>{
+ await fixture(page);
+ await page.emulateMedia({reducedMotion:'reduce'});
+ await page.setViewportSize({width:info.project.name==='tablet'?768:1440,height:560});
+ const parcelNumber=('00012345 ').repeat(100);
+ await page.route(`**/api/v1/parcels/${a}`,route=>route.fulfill({json:{location:{type:'Point',coordinates:[-80.7,34.89]},parcel:{parcel_number:parcelNumber,address:'Fixture Way',mapped_acres:'2.5',updated_at:'2026-01-01'},source:'fixture',source_parcel_id:'fixture',owner_labels:null,sales:[]}}));
+ await page.route(/\/api\/me\/favorites\/[^/]+\/notes(?:\?.*)?$/,route=>route.fulfill({json:{items:[note('33333333-3333-4333-8333-333333333333',a,'A'.repeat(130)),note('44444444-4444-4444-8444-444444444444',a,'B'.repeat(130)),note('55555555-5555-4555-8555-555555555555',a,'C'.repeat(130))],next:''}}));
+ await page.goto(`/?parcel=${a}`);
+ const panel=page.getByRole('region',{name:'Parcel evidence'});
+ const tabs=panel.getByRole('tablist',{name:'Parcel evidence views'});
+ await expect(tabs.getByRole('tab')).toHaveText(['Evidence','Research links','Workspace']);
+ await expect(panel.getByRole('heading',{name:'Parcel evidence'})).toBeVisible();
+ await expect(panel.getByRole('button',{name:'Close parcel details'})).toBeVisible();
+ await expect(panel.getByRole('button',{name:'Favorite parcel'})).toBeVisible();
+ await expect(panel.getByRole('region',{name:'Private parcel scratchpad'})).toBeHidden();
+ await expect(panel.getByRole('region',{name:'Parcel follow-up tasks'})).toHaveCount(0);
+ const heading=panel.getByRole('heading',{name:'Parcel evidence'});
+ const fixedY=(await heading.boundingBox())!.y;
+ const tabY=(await tabs.boundingBox())!.y;
+ async function scrollTab(name:string,path:string){
+  const tab=panel.getByRole('tab',{name,exact:true});
+  const content=panel.getByRole('tabpanel',{name,exact:true});
+  await expect(tab).toHaveAttribute('data-selected','');
+  await expect.poll(()=>content.evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+  await content.evaluate(el=>el.scrollTop=el.scrollHeight);
+  await expect.poll(()=>content.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+  expect((await heading.boundingBox())!.y).toBe(fixedY);
+  expect((await tabs.boundingBox())!.y).toBe(tabY);
+  expect(await panel.evaluate(el=>el.scrollTop)).toBe(0);
+  await page.screenshot({path:info.outputPath(`${path}-scrolled.png`)});
+ }
+ await expect(panel.getByRole('region',{name:'Land and value'})).toBeVisible();
+ await scrollTab('Evidence','evidence');
+ await tabs.getByRole('tab',{name:'Evidence'}).focus();
+ await page.keyboard.press('ArrowRight');
+ await expect(tabs.getByRole('tab',{name:'Research links'})).toBeFocused();
+ await expect(panel.getByText('County parcel number:',{exact:false})).toBeVisible();
+ await scrollTab('Research links','research');
+ await page.keyboard.press('ArrowRight');
+ await expect(tabs.getByRole('tab',{name:'Workspace'})).toBeFocused();
+ await expect(panel.getByRole('region',{name:'Private parcel scratchpad'})).toBeVisible();
+ await expect(panel.getByText('Favorite this parcel to create follow-up tasks.')).toBeVisible();
+ await expect(panel.getByRole('button',{name:'Create task'})).toHaveCount(0);
+ const draft=panel.getByRole('textbox',{name:'Note text'});
+ await draft.fill('Retain my unsaved note');
+ await scrollTab('Workspace','notes');
+ await tabs.getByRole('tab',{name:'Research links'}).click();
+ await expect(draft).toBeHidden();
+ await tabs.getByRole('tab',{name:'Workspace'}).click();
+ await expect(draft).toHaveValue('Retain my unsaved note');
 });

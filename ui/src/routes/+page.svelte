@@ -528,14 +528,14 @@ return () => task.abort();
               <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
                 <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
                 <Tabs.Trigger class="btn" value="research">Research links</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="notes">Workspace</Tabs.Trigger>
               </Tabs.List>
-              <Tabs.Content value="evidence">
+              <Tabs.Content class="parcel-tab-content" value="evidence">
             <div class="detail-editor"><button class="btn btn-sm" aria-expanded={editingDetails} onclick={() => { draftFields = [...groups]; editingDetails = !editingDetails; }}>Choose detail fields</button>
 {#if editingDetails}<form onsubmit={(event) => { event.preventDefault(); saveFields(); }}><fieldset disabled={savingDetails}><legend>Show individual fields in parcel details</legend>{#each detailGroups as group}<div class="field-picker-group"><strong>{group.label}</strong>{#each group.fields as field}<label class="check"><input type="checkbox" class="checkbox" checked={draftFields.includes(field.id)} onchange={() => toggleField(field.id)} />{field.label}</label>{/each}</div>{/each}<button class="btn btn-sm" type="submit">Save details</button></fieldset></form>{/if}<p role="status" aria-live="polite">{preferenceStatus}</p></div>
 <div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence id={parcelID} fields={groups} releaseId={flood?.release?.id} onlocation={focusParcelFromList} onresearch={updateResearch} /></div>
-            {#key parcelID}<ParcelNotes parcel={parcelID} drafts={noteDrafts} edits={noteEdits} retries={noteRetries}/>{#if favorite?.favorite}<ParcelTasks parcel={parcelID} editable={!favorite.excluded}/>{/if}{/key}
               </Tabs.Content>
-              <Tabs.Content value="research">
+              <Tabs.Content class="parcel-tab-content" value="research">
               <div class="research-content">
                 <ul aria-label="External research sites" class="research-sites">
                   {#if currentResearch?.parcelNumber}
@@ -554,6 +554,16 @@ return () => task.abort();
                 </ul>
                 <p>County parcel number: {currentResearch ? currentResearch.parcelNumber || 'Not recorded' : 'Loading…'}. Both county links open this parcel directly. The tax link opens the 2026 record. An unavailable lookup does not mean the county has no record.</p>
               </div>
+              </Tabs.Content>
+              <Tabs.Content class="parcel-tab-content" value="notes">
+                {#key parcelID}
+                  <ParcelNotes parcel={parcelID} drafts={noteDrafts} edits={noteEdits} retries={noteRetries}/>
+                  {#if favorite?.favorite}
+                    <ParcelTasks parcel={parcelID} editable={!favorite.excluded}/>
+                  {:else if favoriteRead === 'ready'}
+                    <p class="task-prerequisite">Favorite this parcel to create follow-up tasks.</p>
+                  {/if}
+                {/key}
               </Tabs.Content>
             </Tabs>
           </section>
@@ -620,10 +630,16 @@ h1 { font-size: 19px; font-weight: 650; }
 .selected-zoning { border-top: 1px solid var(--border); padding-top: 6px; }
 .selected-zoning li { margin-top: 4px; }
 .field-picker-group { display: grid; gap: 3px; margin: 7px 0; }
-.research-content { padding: 12px 14px; font-size: 13px; line-height: 1.5; overflow-y: auto; }
+:global(.results:has(.parcel-heading) > [data-scope='tabs'][data-part='root']) { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+:global(.parcel-tab-content:not([hidden])) { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+:global(.parcel-tab-content[hidden]) { display: none; }
+:global(.results:has(.parcel-heading) > [data-scope='tabs'] .map-tabs .btn) { min-width: 0; padding-inline: 4px; font-size: 12px; white-space: normal; }
+:global(.results:has(.parcel-heading)) { overflow: hidden; }
+.research-content { padding: 12px 14px; font-size: 13px; line-height: 1.5; }
 .research-sites { list-style: disc; padding-left: 20px; margin-bottom: 14px; }
 .research-sites li { margin-bottom: 12px; }
 .research-sites a { color: #93c5fd; text-decoration: underline; }
+.task-prerequisite { padding: 0 12px 12px; font-size: 13px; color: var(--muted); }
 .detail-editor { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .detail-editor fieldset { display: grid; gap: 4px; }
 .flood-details, .empty { overflow: auto; padding: 10px; }
