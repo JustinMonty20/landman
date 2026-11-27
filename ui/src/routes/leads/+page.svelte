@@ -17,6 +17,7 @@ let mutationError = $state('');
 let loading = $state(true);
 let name = $state('');
 let hideExcluded = $state(false);
+let tasksRefresh = $state(0);
 class RequestError extends Error {
  status:number;
  constructor(status:number){super(status===409 ? 'Another tab changed this record. Reload and retry.' : `Request failed (${status}).`);this.status=status}
@@ -93,12 +94,12 @@ function openAction(nextAction:Action) {
  destination=selectedTarget?.id ?? '';sourceFreshness='valid';destinationFreshness=selectedTarget?'valid':'missing';deletedDestinations=new Set();unverifiedDestination='';
  mutationError='';dialogOpen=true;
 }
-async function change(url:string,method:string,payload:object):Promise<boolean> {
+async function change(url:string,method:string,payload:object,affectsTasks=false):Promise<boolean> {
  const owner=dialogGeneration;
  const owned=()=>dialogGeneration===owner;
  const pendingAction=action, selectedDestination=destination;
  busy=true;recovering=false;mutationError='';
- try {await api(url,method,payload);if(!owned())return false;await load();return owned()}
+ try {await api(url,method,payload);if(affectsTasks)tasksRefresh++;if(!owned())return false;await load();return owned()}
  catch(e){
   if(!owned())return false;
   recovering=true;
@@ -150,9 +151,9 @@ async function submitAction() {
   if(submitted.kind==='left'||submitted.kind==='right') ok=await change(`/api/me/crm/states/${s.id}`,'PATCH',{position:Math.max(0,s.position+(submitted.kind==='left'?-1:1)),revision:s.revision});
  }
  if('card' in submitted){const c=submitted.card;
-  if(submitted.kind==='exclude' && reason.trim() && reasonBytes<=500) ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'PUT',{reason:reason.trim(),revision:c.revision});
+  if(submitted.kind==='exclude' && reason.trim() && reasonBytes<=500) ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'PUT',{reason:reason.trim(),revision:c.revision},true);
   if(submitted.kind==='restore') ok=await change(`/api/me/favorites/${c.parcel_id}/exclusion`,'DELETE',{revision:c.revision});
-  if(submitted.kind==='remove') ok=await change(`/api/me/favorites/${c.parcel_id}`,'DELETE',{revision:c.revision});
+  if(submitted.kind==='remove') ok=await change(`/api/me/favorites/${c.parcel_id}`,'DELETE',{revision:c.revision},true);
  }
  if(ok && owner===dialogGeneration){closeAction();name='';reason=''}
 }
@@ -166,7 +167,7 @@ onMount(()=>{void load()});
 {#if loading && !board}<p class="notice" role="status">Loading your board…</p>{/if}
 {#if loadErrors.board}<p class="notice error" role="alert">{loadErrors.board} <button class="inline-action" onclick={load}>Retry board load</button></p>{/if}
 {#if mutationError && !dialogOpen}<p class="notice error" role="alert">{mutationError}</p>{/if}
-<ParcelTasks />
+<ParcelTasks refresh={tasksRefresh} />
 {#if board}
 <div class="canvas" aria-label="Lead states" aria-busy={loading}><div class="states">
 {#each board.states as s (s.id)}
