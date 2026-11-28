@@ -99,3 +99,9 @@ test('calendar minimum moves to the next local day at midnight',async({page})=>{
  await page.clock.fastForward(2_000);await expect(pane.getByRole('alert')).toContainText('Choose today or a future date');
  await expect(page.locator('.calendar-popup').getByText('8',{exact:true})).toHaveAttribute('data-disabled','');
 });
+test('an open time popup invalidates Set time when the clock passes its minute',async({page})=>{
+ await fixture(page);await page.getByRole('textbox',{name:'Due date'}).fill('2030-12-08');
+ const popup=await choose(page,'10','31','AM');await expect(popup.getByRole('button',{name:'Set time'})).toBeEnabled();
+ await page.clock.fastForward(41_000);await expect(popup.getByRole('button',{name:'Set time'})).toBeDisabled();
+ await popup.getByLabel('Minute').selectOption('32');await expect(popup.getByRole('button',{name:'Set time'})).toBeEnabled();
+});
