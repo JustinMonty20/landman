@@ -9,15 +9,29 @@ let message=$state(''), dueDate=$state(''), dueTime=$state(''), offset=$state(''
 let timeOpen=$state(false), hour=$state('12'), minute=$state('00'), period=$state('PM');
 const hours=Array.from({length:12},(_,i)=>String(i+1));
 const minutes=Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
-const selectedDate=$derived.by(()=>{try{return /^\d{4}-\d{2}-\d{2}$/.test(dueDate)?[parseDate(dueDate)]:[]}catch{return []}});
+const selectedDate=$derived.by(()=>{try{return /^\d{4}-\d{2}-\d{2}$/.test(dueDate) && dueDate>=today?[parseDate(dueDate)]:[]}catch{return []}});
 function timeOpened(open:boolean){timeOpen=open;if(open){const [h,m]=dueTime.split(':').map(Number);hour=String(Number.isFinite(h)?h%12||12:12);minute=String(Number.isFinite(m)?m:0).padStart(2,'0');period=h<12?'AM':'PM'}}
-function applyTime(){dueTime=`${String(Number(hour)%12+(period==='PM'?12:0)).padStart(2,'0')}:${minute}`;offset='';createID='';timeOpen=false}
+function applyTime(){if(!timeChoiceValid)return;dueTime=`${String(Number(hour)%12+(period==='PM'?12:0)).padStart(2,'0')}:${minute}`;offset='';createID='';timeOpen=false}
 let confirmClear=$state<{count:number;snapshot:string}|null>(null), clearing=$state(false);
 let conflict=$state(false), currentTask=$state<Task|null>(null), now=$state(Date.now());
 let generation=0, reader:AbortController|null=null;
 const timezone=Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const local=$derived(dueDate && dueTime ? `${dueDate}T${dueTime}` : '');
 const candidates=$derived(dueCandidates(local,timezone));
+const today=$derived.by(()=>{const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(now));const fields=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${fields.year}-${fields.month}-${fields.day}`});
+const dateValid=$derived(selectedDate.length===1 && dueDate>=today);
+const futureCandidates=$derived(candidates.filter(c=>Date.parse(c.due_at)>now));
+const futureOffset=$derived(dateValid && futureCandidates.some(c=>c.due_at===offset));
+function futureTime(h:string,m:string,p:string){
+ const hour24=String(Number(h)%12+(p==='PM'?12:0)).padStart(2,'0');
+ return dueCandidates(`${dueDate}T${hour24}:${m}`,timezone).some(c=>Date.parse(c.due_at)>now);
+}
+function available(h:string,p:string){return ['00','30','59'].some(m=>futureTime(h,m,p))}
+const todaySelected=$derived(dueDate===today);
+const timeChoiceValid=$derived(dateValid && futureTime(hour,minute,period));
+function hourDisabled(h:string){return todaySelected && !['AM','PM'].some(p=>available(h,p))}
+function minuteDisabled(m:string){return todaySelected && !futureTime(hour,m,period)}
+function periodDisabled(p:string){return todaySelected && !available(hour,p)}
 const capacity=$derived(smsCapacity(message));
 const overdue=$derived(items.filter(t=>Date.parse(t.due_at)<now));
 const upcoming=$derived(items.filter(t=>Date.parse(t.due_at)>=now));
@@ -50,7 +64,8 @@ async function refreshEditing(){
  editing=fresh;currentTask=fresh;conflict=false;
  }catch(e){error=String(e)}finally{busy=false}
 }
-async function save(){if(busy || conflict || capacity.remaining<0 || !message.trim() || !candidates.some(c=>c.due_at===offset))return;
+async function save(){if(busy || conflict || capacity.remaining<0 || !message.trim())return;
+ if(!dateValid || !candidates.some(c=>c.due_at===offset && Date.parse(c.due_at)>Date.now())){error='Choose a future date and time before saving.';return;}
  busy=true;error='';notice='';
  const savingParcel=parcel;
  try {const url=editing?`${path}/${editing.id}/reschedule`:path;
@@ -103,7 +118,7 @@ $effect(()=>{if(refresh>0)void load()});
  {#if capacity.remaining<0}<p role="alert">Message is too long for one SMS. Shorten it to save.</p>{:else}<span>{capacity.remaining} characters remaining</span>{/if}
  <div class="due-fields">
  <div class="due-field"><span>Due date</span>
- <DatePicker value={selectedDate} onValueChange={({valueAsString})=>{dueDate=valueAsString[0] ?? '';offset='';createID=''}} disabled={busy} format={(date)=>date.toString()} parse={(text)=>{try{return parseDate(text)}catch{return undefined}}} positioning={{placement:'bottom-end',gutter:6,flip:true,slide:true,overflowPadding:8,strategy:'fixed'}}>
+ <DatePicker min={parseDate(today)} value={selectedDate} onValueChange={({valueAsString})=>{dueDate=valueAsString[0] ?? '';offset='';createID=''}} disabled={busy} format={(date)=>date.toString()} parse={(text)=>{try{return parseDate(text)}catch{return undefined}}} positioning={{placement:'bottom-end',gutter:6,flip:true,slide:true,overflowPadding:8,strategy:'fixed'}}>
   <DatePicker.Control class="date-control"><input class="input" type="text" aria-label="Due date" placeholder="YYYY-MM-DD" inputmode="numeric" pattern={'[0-9]{4}-[0-9]{2}-[0-9]{2}'} maxlength="10" bind:value={dueDate} oninput={()=>{offset='';createID=''}} required disabled={busy} /><DatePicker.Trigger type="button" class="btn preset-outlined-surface-300-700" aria-label="Choose due date" /></DatePicker.Control>
   <Portal><DatePicker.Positioner class="task-popup"><DatePicker.Content class="calendar-popup">
    <DatePicker.View view="day"><DatePicker.ViewControl class="calendar-heading"><DatePicker.PrevTrigger type="button" aria-label="Previous month" /><DatePicker.RangeText /><DatePicker.NextTrigger type="button" aria-label="Next month" /></DatePicker.ViewControl>
@@ -117,16 +132,18 @@ $effect(()=>{if(refresh>0)void load()});
  <Popover open={timeOpen} onOpenChange={({open})=>timeOpened(open)} positioning={{placement:'bottom-end',offset:{mainAxis:6,crossAxis:-5},flip:true,slide:true,overflowPadding:8,strategy:'fixed'}}>
   <Popover.Trigger type="button" class="input time-trigger" disabled={busy} aria-label="Due time">{dueTime || 'Choose time'} <span aria-hidden="true">▾</span></Popover.Trigger>
   <Portal><Popover.Positioner class="task-popup"><Popover.Content class="time-popup"><Popover.Title>Choose due time</Popover.Title>
-   <div class="time-options"><label>Hour<select class="select" bind:value={hour}>{#each hours as h}<option value={h}>{h}</option>{/each}</select></label><label>Minute<select class="select" bind:value={minute}>{#each minutes as m}<option value={m}>{m}</option>{/each}</select></label><label>AM or PM<select class="select" bind:value={period}><option>AM</option><option>PM</option></select></label></div>
-   <div class="buttons"><button type="button" class="btn btn-sm preset-filled-primary-500" onclick={applyTime}>Set time</button><Popover.CloseTrigger aria-label="Cancel" type="button" class="btn btn-sm preset-outlined-surface-300-700">Cancel</Popover.CloseTrigger></div>
+   <div class="time-options"><label>Hour<select class="select" bind:value={hour}>{#each hours as h}<option value={h} disabled={hourDisabled(h)}>{h}</option>{/each}</select></label><label>Minute<select class="select" bind:value={minute}>{#each minutes as m}<option value={m} disabled={minuteDisabled(m)}>{m}</option>{/each}</select></label><label>AM or PM<select class="select" bind:value={period}><option disabled={periodDisabled('AM')}>AM</option><option disabled={periodDisabled('PM')}>PM</option></select></label></div>
+   <div class="buttons"><button type="button" class="btn btn-sm preset-filled-primary-500" onclick={applyTime} disabled={!timeChoiceValid}>Set time</button><Popover.CloseTrigger aria-label="Cancel" type="button" class="btn btn-sm preset-outlined-surface-300-700">Cancel</Popover.CloseTrigger></div>
   </Popover.Content></Popover.Positioner></Portal>
  </Popover></div></div>
+ {#if dueDate && !dateValid}<p role="alert">Choose today or a future date.</p>{/if}
+ {#if local && candidates.length>0 && futureCandidates.length===0}<p role="alert">This time has passed. Choose a future time.</p>{/if}
  {#if local && candidates.length===0}<p role="alert">This local time does not exist in {timezone}. Choose another time.</p>{/if}
  {#if candidates.length>0}<label>Time zone offset ({timezone})<select class="select" bind:value={offset} onchange={()=>{createID=''}} required disabled={busy}>
- <option value="" disabled>Select an offset</option>{#each candidates as candidate}<option value={candidate.due_at}>{candidate.label}</option>{/each}</select></label>{/if}
+ <option value="" disabled>Select an offset</option>{#each candidates as candidate}<option value={candidate.due_at} disabled={Date.parse(candidate.due_at)<=now}>{candidate.label}</option>{/each}</select></label>{/if}
  {#if conflict}<p role="status">Your draft is preserved. Refresh the task to inspect its current version before retrying.</p><button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void refreshEditing()} disabled={busy}>Refresh task for retry</button>{/if}
  {#if currentTask}<p role="status">Current task (version {currentTask.schedule_version}): {currentTask.message} · {display(currentTask)}. Review this against your draft before saving.</p>{/if}
- <div class="buttons"><button type="submit" class="btn btn-sm preset-filled-primary-500" disabled={busy || conflict || capacity.remaining<0 || !candidates.some(c=>c.due_at===offset) || !message.trim()}>{editing?'Save new schedule version':'Create task'}</button>{#if editing}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={reset}>Stop editing</button>{/if}</div>
+ <div class="buttons"><button type="submit" class="btn btn-sm preset-filled-primary-500" disabled={busy || conflict || capacity.remaining<0 || !futureOffset || !message.trim()}>{editing?'Save new schedule version':'Create task'}</button>{#if editing}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={reset}>Stop editing</button>{/if}</div>
  </form>{/if}
  {#if notice}<p role="status">{notice}</p>{/if}{#if error}<p role="alert">{error}</p>{/if}
  {#if loading && items.length===0}<p role="status">Loading tasks…</p>{/if}

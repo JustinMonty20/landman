@@ -264,8 +264,12 @@ test('edit keeps the loaded fold instant and validates skipped hours before resc
  await expect(pane.getByLabel(/Time zone offset/)).toHaveValue('2030-11-03T01:30:00-05:00');
  await expect(pane.getByLabel(/Time zone offset/).locator('option:not([disabled])')).toHaveCount(2);
  await pane.getByLabel('Due date',{exact:true}).fill('2030-03-10');
- await chooseTime(page,'02:30');
- await expect(pane.getByRole('alert')).toContainText('does not exist');
+ await page.getByRole('button',{name:'Due time'}).click();
+ const skipped=page.getByRole('dialog',{name:'Choose due time'});
+ await skipped.getByLabel('Hour').selectOption('2');await skipped.getByLabel('Minute').selectOption('30');await skipped.getByLabel('AM or PM').selectOption('AM');
+ await expect(skipped.getByRole('button',{name:'Set time'})).toBeDisabled();
+ await skipped.getByRole('button',{name:'Cancel'}).click();
+ await expect(pane.getByRole('button',{name:'Due time'})).toContainText('01:30');
  await expect(pane.getByRole('button',{name:'Save new schedule version'})).toBeDisabled();
  await pane.getByLabel('Due date',{exact:true}).fill('2030-02-30');
  await expect(pane.getByRole('button',{name:'Save new schedule version'})).toBeDisabled();
