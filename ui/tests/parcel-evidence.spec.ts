@@ -53,7 +53,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await expect(panel).toContainText('00123450 · Site address: Fixture Way');
  await expect(panel.getByRole('link', { name: 'Open satellite view' })).toHaveCount(0);
  const evidenceRequests = requested.filter(path => path.startsWith('/api/v1/parcels/') && path.includes(first)).length;
- await panel.getByRole('tab', { name: 'Research links' }).focus();
+ await panel.getByRole('tab', { name: 'Research' }).focus();
  await page.keyboard.press('Enter');
  const sites = panel.getByRole('list', { name: 'External research sites' });
  await expect(sites.getByRole('listitem')).toHaveCount(3);
@@ -117,7 +117,7 @@ test('selected result keeps saved evidence when map layers change', async ({ pag
  await expect(page.getByRole('region', { name: 'Matching parcels' })).toContainText('00123450');
  await page.getByRole('button', { name: /SECOND/ }).click();
  await expect(page.getByRole('region', { name: 'Parcel evidence' })).toContainText('Parcel');
- await panel.getByRole('tab', { name: 'Research links' }).click();
+ await panel.getByRole('tab', { name: 'Research' }).click();
  await expect(panel).toContainText('County parcel number: Not recorded');
  await expect(panel.getByRole('link', { name: 'Union County property records' })).toHaveCount(0);
  await expect(panel.getByRole('link', { name: 'Union County tax records' })).toHaveCount(0);

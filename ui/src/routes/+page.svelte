@@ -3,6 +3,7 @@ import { onMount, tick } from 'svelte';
 import { Tabs, Toast, createToaster } from '@skeletonlabs/skeleton-svelte';
 import ParcelEvidence from '../lib/ParcelEvidence.svelte';
 import ParcelNotes from '../lib/ParcelNotes.svelte';
+import ParcelTasks from '../lib/ParcelTasks.svelte';
 import { noteDrafts, noteEdits, noteRetries } from '../lib/notesState.svelte';
 import { detailGroups, detailFields, defaultDetailFields, parseDetailFields, type DetailField } from '../lib/detailGroups';
 import ParcelMap, { jurisdictionColor, zoningColor } from '../lib/ParcelMap.svelte';
@@ -78,6 +79,9 @@ async function readFavorite(id:string){
   if(!owned())return;
   favorite=data;favoriteRead='ready';
  }catch {if(owned()){favoriteRead='failed';favoriteStatus='Favorite status unavailable.'}}
+}
+function taskCreated(id:string){
+ if(parcelID===id && !favoritePending)void readFavorite(id);
 }
 async function toggleFavorite(){
  if(favoritePending || favoriteRead==='loading')return;
@@ -389,7 +393,12 @@ onMount(() => {
   const county = counties.find((county) => county.id === new URL(window.location.href).searchParams.get('county'));
   if (county) selectCounty(county.id);
   const linkedParcel = new URL(window.location.href).searchParams.get('parcel');
-  if (linkedParcel && /^[0-9a-f-]{36}$/i.test(linkedParcel)) { selectCounty('37179'); inspectParcel(linkedParcel, true); }
+  if (linkedParcel && /^[0-9a-f-]{36}$/i.test(linkedParcel)) {
+    selectCounty('37179'); inspectParcel(linkedParcel, true);
+    if (new URL(window.location.href).searchParams.get('tab') === 'tasks') {
+      evidenceTab = 'tasks';
+    }
+  }
 return () => task.abort();
 });
 </script>
@@ -524,17 +533,18 @@ return () => task.abort();
             </div></div>
             {#if favoriteStatus}<p class="favorite-status" role={favoriteStatus.startsWith('Error') || favoriteStatus.includes('unavailable') ? 'alert':'status'}>{favoriteStatus}</p>{/if}
 <Tabs value={evidenceTab} onValueChange={({ value }) => evidenceTab = value}>
-              <Tabs.List class="map-tabs" aria-label="Parcel evidence views">
-                <Tabs.Trigger class="btn" value="evidence">Evidence</Tabs.Trigger>
-                <Tabs.Trigger class="btn" value="research">Research links</Tabs.Trigger>
+              <Tabs.List class="map-tabs parcel-tabs" aria-label="Parcel evidence views">
+                <Tabs.Trigger class="btn" value="evidence" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Evidence</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="research" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Research</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="notes" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Notes</Tabs.Trigger>
+                <Tabs.Trigger class="btn" value="tasks" onfocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>Tasks</Tabs.Trigger>
               </Tabs.List>
-              <Tabs.Content value="evidence">
+              <Tabs.Content class="parcel-tab-content" value="evidence">
             <div class="detail-editor"><button class="btn btn-sm" aria-expanded={editingDetails} onclick={() => { draftFields = [...groups]; editingDetails = !editingDetails; }}>Choose detail fields</button>
 {#if editingDetails}<form onsubmit={(event) => { event.preventDefault(); saveFields(); }}><fieldset disabled={savingDetails}><legend>Show individual fields in parcel details</legend>{#each detailGroups as group}<div class="field-picker-group"><strong>{group.label}</strong>{#each group.fields as field}<label class="check"><input type="checkbox" class="checkbox" checked={draftFields.includes(field.id)} onchange={() => toggleField(field.id)} />{field.label}</label>{/each}</div>{/each}<button class="btn btn-sm" type="submit">Save details</button></fieldset></form>{/if}<p role="status" aria-live="polite">{preferenceStatus}</p></div>
 <div class="flood-details" aria-live="polite">{#if parcelFocusError}<p role="status">Parcel location is unavailable.</p>{/if}<ParcelEvidence id={parcelID} fields={groups} releaseId={flood?.release?.id} onlocation={focusParcelFromList} onresearch={updateResearch} /></div>
-            {#key parcelID}<ParcelNotes parcel={parcelID} drafts={noteDrafts} edits={noteEdits} retries={noteRetries}/>{/key}
               </Tabs.Content>
-              <Tabs.Content value="research">
+              <Tabs.Content class="parcel-tab-content" value="research">
               <div class="research-content">
                 <ul aria-label="External research sites" class="research-sites">
                   {#if currentResearch?.parcelNumber}
@@ -553,6 +563,16 @@ return () => task.abort();
                 </ul>
                 <p>County parcel number: {currentResearch ? currentResearch.parcelNumber || 'Not recorded' : 'Loading…'}. Both county links open this parcel directly. The tax link opens the 2026 record. An unavailable lookup does not mean the county has no record.</p>
               </div>
+              </Tabs.Content>
+              <Tabs.Content class="parcel-tab-content" value="notes">
+                {#key parcelID}
+                  <ParcelNotes parcel={parcelID} drafts={noteDrafts} edits={noteEdits} retries={noteRetries}/>
+                {/key}
+              </Tabs.Content>
+              <Tabs.Content class="parcel-tab-content" value="tasks">
+                {#key parcelID}
+                  <ParcelTasks parcel={parcelID} editable={favoriteRead==='ready' && !favorite?.excluded} oncreated={taskCreated}/>
+                {/key}
               </Tabs.Content>
             </Tabs>
           </section>
@@ -619,7 +639,13 @@ h1 { font-size: 19px; font-weight: 650; }
 .selected-zoning { border-top: 1px solid var(--border); padding-top: 6px; }
 .selected-zoning li { margin-top: 4px; }
 .field-picker-group { display: grid; gap: 3px; margin: 7px 0; }
-.research-content { padding: 12px 14px; font-size: 13px; line-height: 1.5; overflow-y: auto; }
+:global(.results:has(.parcel-heading) > [data-scope='tabs'][data-part='root']) { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+:global(.parcel-tab-content:not([hidden])) { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+:global(.parcel-tab-content[hidden]) { display: none; }
+:global(.parcel-tabs) { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--muted) var(--surface); }
+:global(.parcel-tabs .btn) { flex: 0 0 50%; white-space: nowrap; }
+:global(.results:has(.parcel-heading)) { overflow: hidden; }
+.research-content { padding: 12px 14px; font-size: 13px; line-height: 1.5; }
 .research-sites { list-style: disc; padding-left: 20px; margin-bottom: 14px; }
 .research-sites li { margin-bottom: 12px; }
 .research-sites a { color: #93c5fd; text-decoration: underline; }

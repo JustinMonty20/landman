@@ -41,7 +41,7 @@ if (path.endsWith('/tax')) return route.fulfill({ json: { bills: [{ year: 2025, 
   const panel = page.getByRole('region', { name: 'Parcel evidence' });
   await expect(panel).toContainText('Parcel');
   await expect(panel).toContainText('FIRST');
-await panel.getByRole('tab', { name: 'Research links' }).click();
+await panel.getByRole('tab', { name: 'Research' }).click();
 await expect(panel.getByRole('link', { name: 'Open satellite view' })).toHaveAttribute('href', 'https://earth.google.com/web/search/34.99,-80.55');
 await panel.getByRole('tab', { name: 'Evidence', exact: true }).click();
   await expect(panel.getByRole('region', { name: 'Soil screening' })).toContainText('Very limited: 1.50 acres');

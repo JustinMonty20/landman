@@ -6,6 +6,8 @@ async function fixture(page:import('@playwright/test').Page){
  await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
  await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
 await page.route('**/api/me/favorites/*/notes*',route=>route.fulfill({json:{items:[],next:''}}));
+ await page.route('**/api/me/parcels/*/tasks*',route=>route.fulfill({json:{items:[],next:''}}));
+ await page.route('**/api/me/crm/tasks*',route=>route.fulfill({json:{items:[],next:''}}));
  await page.route('**/api/coverage*',route=>route.fulfill({json:{counties:[]}}));
 }
 test('star toggles confirmed favorite, toast navigates to Leads; removal retains revision',async ({page},info)=>{
@@ -25,7 +27,7 @@ test('failed write never paints star gold; stale parcel response does not alter 
  await fixture(page);let release:(()=>void)|undefined;let fail=true;
  await page.route(`**/api/me/favorites/${a}`,async route=>{if(route.request().method()==='GET')return route.fulfill({status:404});if(fail){fail=false;return route.fulfill({status:503})}await new Promise<void>(resolve=>release=resolve);return route.fulfill({json:card(a,true,1)})});
  await page.route(`**/api/me/favorites/${b}`,route=>route.fulfill({status:404}));
- await page.goto(`/?parcel=${a}`);await page.getByRole('button',{name:'Favorite parcel'}).click();await expect(page.getByRole('alert')).toContainText('Could not save favorite');await expect(page.getByRole('button',{name:'Favorite parcel'})).toHaveAttribute('aria-pressed','false');
+ await page.goto(`/?parcel=${a}`);await page.getByRole('button',{name:'Favorite parcel'}).click();await expect(page.locator('.favorite-status[role="alert"]')).toContainText('Could not save favorite');await expect(page.getByRole('button',{name:'Favorite parcel'})).toHaveAttribute('aria-pressed','false');
  await page.getByRole('button',{name:'Favorite parcel'}).click();await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeDisabled();await page.goto(`/?parcel=${b}`);await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeEnabled();release?.();await expect(page.getByRole('button',{name:'Favorite parcel'})).toHaveAttribute('aria-pressed','false');await expect(page.getByRole('button',{name:'View board'})).toHaveCount(0);
 });
 

@@ -46,7 +46,7 @@ test('private favorites board supports keyboard state move and reload', async ({
 await page.getByRole('article').filter({hasText:'009845'}).dragTo(page.getByRole('region',{name:'New'}));await expect(page.getByRole('region',{name:'New'}).getByText('009845')).toBeVisible();await page.reload();await expect(page.getByRole('region',{name:'New'}).getByText('009845')).toBeVisible();
 });
 test('column pagination ignores duplicate clicks and stale filter pages', async ({page}) => {
-await page.route('**/*', route => {const url=new URL(route.request().url());if(url.origin!==origin || /^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
+await page.route('**/*', route => {const url=new URL(route.request().url());if(url.origin===origin && url.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(url.origin!==origin || /^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
 await page.route('**/api/me',route=>route.fulfill({json:{id:'buyer-fixture',email:'buyer@example.test',name:'Buyer'}}));
 await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:first,name:'New',position:0,revision:1,count:2}],default_state_id:first,revision:1,next:''}}));
 let resolvePage: (()=>void)|undefined;let requested=0;
@@ -60,7 +60,7 @@ const more=page.getByRole('button',{name:'Load more in New'});await expect(more)
 await page.getByRole('checkbox',{name:'Hide excluded'}).check();await expect(more).toHaveCount(0);resolvePage?.();await expect(page.getByText('SECOND')).toHaveCount(0);await expect(page.getByText('FIRST')).toHaveCount(1);
 });
 test('old page rejection cannot overwrite reloaded board; retry clears current error', async ({page}) => {
-await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin!==origin || /^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
+await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin===origin && url.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(url.origin!==origin || /^\/(api|auth)(\/|$)/.test(url.pathname))return route.abort();return route.continue()});
 await page.route('**/api/me',route=>route.fulfill({json:{id:'buyer-fixture',email:'buyer@example.test',name:'Buyer'}}));
 await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:first,name:'New',position:0,revision:1,count:1}],default_state_id:first,revision:1,next:''}}));
 let release:(()=>void)|undefined, pages=0;
@@ -79,7 +79,7 @@ await more.click();await expect(page.getByText('SECOND')).toBeVisible();await ex
 });
 test('column failure stays scoped while another column succeeds and retry recovers',async ({page},info)=>{
 await page.emulateMedia({reducedMotion:'reduce'});
-await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
+await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin===origin && u.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
 await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
 await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:first,name:'New',count:1,position:0,revision:1},{id:second,name:'Contacted',count:1,position:1,revision:1}],default_state_id:first,revision:1,next:''}}));
 let fail=true;
@@ -90,7 +90,7 @@ await page.screenshot({path:info.outputPath('column-error.png'),fullPage:true});
 });
 test('state-page error retries independently and stale failure cannot overwrite new filter',async ({page},info)=>{
 await page.emulateMedia({reducedMotion:'reduce'});
-await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
+await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin===origin && u.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
 await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
 let fail=true,release:(()=>void)|undefined,stale=false;
 await page.route('**/api/me/crm/board*',async route=>{const cursor=new URL(route.request().url()).searchParams.get('cursor');if(cursor&&stale){await new Promise<void>(resolve=>release=resolve);return route.fulfill({status:503})}if(cursor&&fail)return route.fulfill({status:503});return route.fulfill({json:{states:cursor?[{id:second,name:'Contacted',count:0,position:1,revision:1}]:[{id:first,name:'New',count:0,position:0,revision:1}],default_state_id:first,revision:1,next:cursor?'':'cursor'}})});
@@ -100,7 +100,7 @@ await page.getByRole('button',{name:'Reload board'}).click();stale=true;await mo
 });
 test('board pages beyond fifty states preserve a selected card and expose state 51',async ({page},info)=>{
 await page.emulateMedia({reducedMotion:'reduce'});
-await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
+await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin===origin && u.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
 await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
 const states=Array.from({length:51},(_,i)=>({id:`${String(i+1).padStart(8,'0')}-1111-4111-8111-111111111111`,name:`State ${i+1}`,position:i,revision:1,count:i===0||i===50?1:0}));
 await page.route('**/api/me/crm/board*',route=>{const cursor=new URL(route.request().url()).searchParams.get('cursor');return route.fulfill({json:{states:cursor?states.slice(50):states.slice(0,50),next:cursor?'':'cursor',default_state_id:states[0].id,revision:1}})});
@@ -111,7 +111,7 @@ await last.scrollIntoViewIfNeeded();await page.screenshot({path:info.outputPath(
 });
 test('populated Leads board exposes Skeleton state and card actions with cancellable dialogs',async ({page},info)=>{
  await page.emulateMedia({reducedMotion:'reduce'});
- await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!=='http://127.0.0.1:5174'||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
+ await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin===origin && u.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(u.origin!=='http://127.0.0.1:5174'||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
  await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
  const third='44444444-4444-4444-8444-444444444444';
  const states=[{id:first,name:'New',position:0,revision:1,count:3},{id:second,name:'Contacted',position:1,revision:1,count:2},{id:third,name:'Review',position:2,revision:1,count:2}];
@@ -122,7 +122,7 @@ test('populated Leads board exposes Skeleton state and card actions with cancell
  await page.getByRole('button',{name:'Actions for parcel 10018845'}).click();await page.getByRole('menuitem',{name:'Exclude lead…'}).click();await expect(page.getByRole('dialog')).toContainText('Exclusion reason');await page.getByRole('button',{name:'Cancel'}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 test('state and parcel dialogs send revisions, retain failed form and confirm destructive actions',async ({page})=>{
- await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!=='http://127.0.0.1:5174'||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
+ await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin===origin && u.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(u.origin!=='http://127.0.0.1:5174'||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
  await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
  const states=[{id:first,name:'New',position:0,revision:1,count:1},{id:second,name:'Contacted',position:1,revision:1,count:0}];let defaultId=first,boardRevision=1,cardRevision=1,excluded=false,removed=false,failCreate=true,failDelete=true;
  await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states,default_state_id:defaultId,revision:boardRevision,next:''}}));
@@ -143,7 +143,7 @@ await page.getByRole('button',{name:'Actions for Called'}).click();await page.ge
 });
 
 test('state 51 rename refreshes exact target after conflict without losing entered name',async ({page})=>{
-await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
+await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin===origin && u.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
 await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
 const states=Array.from({length:51},(_,i)=>({id:`${String(i+1).padStart(8,'0')}-1111-4111-8111-111111111111`,name:`State ${i+1}`,position:i,revision:1,count:0}));let revision=1,attempts=0,reads=0;
 await page.route('**/api/me/crm/board*',route=>{const cursor=new URL(route.request().url()).searchParams.get('cursor');return route.fulfill({json:{states:cursor?states.slice(50):states.slice(0,50),next:cursor?'':'cursor',default_state_id:states[0].id,revision:1}})});
@@ -158,7 +158,7 @@ await page.goto('/leads');await page.getByRole('button',{name:'Load more states'
 });
 
 test('card 21 exclusion conflict refreshes exact parcel and validates UTF-8 bytes',async ({page})=>{
-await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
+await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin===origin && u.pathname==='/api/me/crm/tasks')return route.fulfill({json:{items:[],next:''}});if(u.origin!==origin||/^\/(api|auth)(\/|$)/.test(u.pathname))return route.abort();return route.continue()});
 await page.route('**/api/me',route=>route.fulfill({json:{id:'fixture',email:'buyer@example.test',name:'Buyer'}}));
 await page.route('**/api/me/crm/board',route=>route.fulfill({json:{states:[{id:first,name:'New',position:0,revision:1,count:21}],default_state_id:first,revision:1,next:''}}));
 let revision=1,attempts=0,reads=0,reason='';

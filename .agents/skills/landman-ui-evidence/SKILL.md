@@ -14,10 +14,11 @@ Evidence proves the stated browser result. It does not prove a live API result, 
 2. Use an existing test when it already asserts the result. Add a temporary `ui/tests/evidence-action.spec.ts` only when no existing test has the required action.
 3. Route `/api/me` and every request the action makes. Abort other API and auth requests. Keep fixtures in Playwright. Do not change application data for evidence capture.
 4. Use a Playwright assertion for each captured state. Wait for that assertion. Do not use a fixed delay or `networkidle`.
+5. For in-page popups, assert viewport containment **and** internal containment: icon/SVG within trigger, trigger/input within control or pane, and each visible header, cell, and action within popup padding. Check `scrollWidth <= clientWidth` on popup and relevant controls, all grid columns, clipping, and the rightmost action. Confirm the opened popup's interaction produces the expected value.
 
 ## B. Capture screenshots and video
 
-Capture a screenshot after each asserted state. Record video only when the action has important motion or more than one state. Use the configured desktop or tablet project. Keep the viewport, reduced-motion setting, fixtures, and graphics backend fixed for repeated evidence.
+Capture a screenshot after each asserted state. For popup checks, capture the open state at desktop and tablet widths and a close crop showing every edge and child column. Inspect each crop and compare it with the child-bound assertions; a screenshot of the outer popup alone is insufficient. Record video only when the action has important motion or more than one state. Use the configured desktop or tablet project. Keep the viewport, reduced-motion setting, fixtures, and graphics backend fixed for repeated evidence.
 
 Create a temporary test like this. Replace the route, fixtures, action, and assertions with the selected check.
 

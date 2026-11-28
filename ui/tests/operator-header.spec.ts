@@ -11,6 +11,7 @@ for (const photo of ['', 'https://lh3.googleusercontent.com/a/fixture']) {
   await page.route('**/api/me', route => route.fulfill({ json: { ...user, ...(photo ? { profile_image_url: photo } : {}) } }));
   await page.route('https://lh3.googleusercontent.com/**', route => route.abort());
   await page.route('**/api/me/crm/**', route => route.fulfill({ json: { states: [], default_state_id: '', revision: 1, next: '' } }));
+  await page.route('**/api/me/crm/tasks*', route => route.fulfill({ json: { items: [], next: '' } }));
   await page.goto('/leads');
   await expect(page.getByRole('heading', { name: 'Leads', exact: true })).toHaveCount(1);
   const brand = page.getByRole('banner').getByRole('link', { name: 'Landman home' });

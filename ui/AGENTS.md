@@ -1,4 +1,5 @@
 # Parcel UI
+- For parcel-detail scrolling tabs, preserve existing button typography, padding, height, and approximately half-panel width. Scroll the tab row horizontally instead of compressing buttons unless the operator requests resizing.
 - For external parcel research, use the operator-specified parcel URL with the county parcel number. Preserve leading zeros and open it in a new tab. Show an unavailable state when the number is missing. Use a general search page only when the operator approves that fallback.
 
 - Keep the application header to the brand and account controls.
@@ -14,6 +15,8 @@
 - Show all parcels in the selected county by default. Page the list. Show counts at county zoom and bounded parcel outlines at close zoom. Apply the same filters to the list, counts, and outlines. Hide nonmatching parcels when a filter is active. Search can still open a parcel without adding it to the results. Open details when the user selects a finder suggestion.
 
 - For parcel notes, show bounded previews in parcel details and full entries on a parcel-specific Notes page in chronological order. Use action icons with accessible names. Confirm deletion inline on the selected note. Keep storage encoding limits out of the visible UI; show a plain-language length error when needed. Use Scratchpad as the parcel-panel heading. Keep an empty notes list silent. Give the composer an accessible name without a visible label, and separate its text box from the add button.
+- Date/time popup positioning reports: identify the native control opening the popup before selecting a replacement. Browser-native popups cannot be positioned with CSS; use an in-page component when viewport positioning is required.
+- Popup UI evidence: assert the trigger icon, input, and trigger fit their control, and every calendar header/day trigger fits the popup content without horizontal overflow. Inspect open-state crops at desktop and tablet sizes; outer-popup viewport bounds alone cannot prove child containment.
 - Use Skeleton for standard controls, form styles, and shared component behavior. Check its current API before creating a custom standard widget. Keep custom code for parcel/map behavior and the approved sliding-panel layout. Set approved colors through Skeleton theme properties in `src/theme.css`. Keep Google's pre-approved button artwork unchanged.
 
 - Keep the map as the main discovery view on desktop and tablet. Let it fill the available application area. Use compact search and filter controls over the map. Keep filters collapsible and parcel details dismissible. Verify the default map area and panel behavior at both screen sizes after layout changes.

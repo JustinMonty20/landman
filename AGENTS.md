@@ -15,6 +15,7 @@ You are a principal engineer.
 
 ## Rules
 + When corrected, propose and edit to this AGENTS.md so the same mistake does not reocur.
+- When a user explicitly scopes a delivery boundary, proceed within it without redundant confirmation. Ask only if new evidence conflicts with that boundary.
 - The buyer writes handwritten notes outside the application. Lead tracking means a personal scratchpad, explicit lead states, and follow-up reminders to the buyer—not AI outreach, mailing preparation/exports, campaigns, or owner-facing message delivery. Do not add those features without explicit operator authorization.
 - For database rebuild advice, list the verified paths for each source. Distinguish fresh import, replay on a populated database, and replay on an empty database. State which paths need capture metadata or fixture setup. Do not infer a full rebuild from separate source tests.
 - Before marking a countywide importer ready, compare the documented row count with the source page limit. Test multi-page capture, completeness checks, and replay when the layer exceeds one page. Call a single-page capture a diagnostic, not a countywide import.

@@ -64,7 +64,7 @@
 {#if access.kind === 'signed-in'}
   <header class="operator-header">
     <Brand />
-    <nav aria-label="Main navigation"><a href={page.url.pathname === '/leads' ? '/' : '/leads'}>{page.url.pathname === '/leads' ? 'Parcels' : 'Leads'}</a></nav>
+    <nav aria-label="Main navigation"><a href="/" aria-current={page.url.pathname === '/' ? 'page' : undefined}>Parcels</a><a href="/leads" aria-current={page.url.pathname === '/leads' ? 'page' : undefined}>Leads</a><a href="/tasks" aria-current={page.url.pathname === '/tasks' ? 'page' : undefined}>Tasks</a></nav>
     <Menu open={menuOpen} onOpenChange={(details) => menuOpen = details.open} onSelect={(details) => { if (details.value === 'signout') void logout(); }}>
       <Menu.Trigger class="account-trigger" aria-label="Account menu" aria-expanded={menuOpen}>
         <Avatar class="account-avatar"><Avatar.Image src={access.user.profile_image_url || undefined} alt="" referrerpolicy="no-referrer" /><Avatar.Fallback>{initials(access.user.name)}</Avatar.Fallback></Avatar>
@@ -108,7 +108,7 @@
   .google-signin { display: inline-flex; margin: 24px 0; border-radius: 4px; }
   .google-signin img { display: block; width: 180px; height: 40px; }
   .operator-header { gap: 24px; }
-  .operator-header nav { margin-right: auto; font-size: 13px; }
+  .operator-header nav { display: flex; align-items: center; gap: 16px; margin-right: auto; font-size: 13px; }
   .operator-header nav a { color: var(--color-surface-100); text-decoration: none; }
   :global(.account-trigger) { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
   :global(.account-avatar) { display: grid; place-items: center; width: 36px; height: 36px; overflow: hidden; border-radius: 50%; background: var(--color-primary-700); color: white; font-size: 12px; font-weight: 700; }
