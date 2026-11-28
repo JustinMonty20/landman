@@ -1,4 +1,12 @@
 import { expect, test } from '@playwright/test';
+async function chooseTime(page:import('@playwright/test').Page, time:string){
+ await page.getByRole('button',{name:'Due time'}).click();
+ const popup=page.getByRole('dialog',{name:'Choose due time'});
+ await popup.getByLabel('Hour').selectOption(String(Number(time.slice(0,2))%12||12));
+ await popup.getByLabel('Minute').selectOption(time.slice(3));
+ await popup.getByLabel('AM or PM').selectOption(Number(time.slice(0,2))<12?'AM':'PM');
+ await popup.getByRole('button',{name:'Set time'}).click();
+}
 const origin='http://127.0.0.1:5174';
 const parcel='33333333-3333-4333-8333-333333333333';
 const task='44444444-4444-4444-8444-444444444444';
@@ -47,14 +55,14 @@ test('selected parcel composes a single-segment follow-up with explicit offset',
  await expect(pane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
  await pane.getByRole('textbox',{name:'Follow-up message'}).fill('Follow up with buyer');
  await pane.getByLabel('Due date',{exact:true}).fill('2030-12-08');
- await pane.getByLabel('Due time',{exact:true}).fill('14:00');
+ await chooseTime(page,'14:00');
  await page.getByRole('tab',{name:'Research'}).click();
  await page.getByRole('tab',{name:'Evidence',exact:true}).click();
  await expect(pane.getByRole('textbox',{name:'Follow-up message'})).toBeHidden();
  await page.getByRole('tab',{name:'Tasks'}).click();
  await expect(pane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Follow up with buyer');
  await expect(pane.getByLabel('Due date',{exact:true})).toHaveValue('2030-12-08');
- await expect(pane.getByLabel('Due time',{exact:true})).toHaveValue('14:00');
+ await expect(pane.getByRole('button',{name:'Due time'})).toContainText('14:00');
  await expect(pane.getByLabel(/Time zone offset/)).toBeVisible();
  const choices=pane.getByLabel(/Time zone offset/);
  await choices.selectOption({index:1});

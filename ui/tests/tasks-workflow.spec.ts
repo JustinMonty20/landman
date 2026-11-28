@@ -1,4 +1,13 @@
 import { expect, test } from '@playwright/test';
+test.use({timezoneId:'America/New_York'});
+async function chooseTime(page:import('@playwright/test').Page, time:string){
+ await page.getByRole('button',{name:'Due time'}).click();
+ const popup=page.getByRole('dialog',{name:'Choose due time'});
+ await popup.getByLabel('Hour').selectOption(String(Number(time.slice(0,2))%12||12));
+ await popup.getByLabel('Minute').selectOption(time.slice(3));
+ await popup.getByLabel('AM or PM').selectOption(Number(time.slice(0,2))<12?'AM':'PM');
+ await popup.getByRole('button',{name:'Set time'}).click();
+}
 const origin='http://127.0.0.1:5174';
 const parcel='33333333-3333-4333-8333-333333333333',other='55555555-5555-4555-8555-555555555555',state='11111111-1111-4111-8111-111111111111';
 const due='2030-12-08T14:00:00Z';
@@ -64,9 +73,12 @@ await page.route(`**/api/me/parcels/${parcel}/tasks*`,route=>{
 await page.goto(`/?parcel=${parcel}&tab=tasks`);await expect(page.getByRole('button',{name:'Favorite parcel'})).toBeEnabled();
 await page.getByRole('textbox',{name:'Follow-up message'}).fill('First follow up');
 await page.getByLabel('Due date',{exact:true}).fill('2030-12-08');
-await page.getByLabel('Due time',{exact:true}).fill('14:00');
+await page.getByRole('button',{name:'Choose due date'}).click();
+await page.locator('.calendar-popup').getByText('9',{exact:true}).click();
+await expect(page.getByLabel('Due date',{exact:true})).toHaveValue('2030-12-09');
+await chooseTime(page,'14:37');
 selectedZone=await page.evaluate(()=>Intl.DateTimeFormat().resolvedOptions().timeZone);
-selectedDue=(await page.getByLabel(/Time zone offset/).locator('option:not([disabled])').first().getAttribute('value'))!;
+selectedDue='2030-12-09T14:37:00-05:00';
 await page.getByLabel(/Time zone offset/).selectOption(selectedDue);
 await page.getByRole('button',{name:'Create task'}).click();
 await expect(page.getByRole('status').filter({hasText:'Task saved.'})).toBeVisible();
@@ -103,7 +115,7 @@ await page.goto(`/?parcel=${parcel}&tab=tasks`);
 await expect(page.getByText('Fixture follow up')).toBeVisible();
 await page.getByRole('button',{name:'Clear all tasks…'}).click();
 await page.getByRole('button',{name:'Confirm clear all'}).click();
-await expect(page.getByRole('alert')).toContainText('Task count changed');
+await expect(page.getByRole('region',{name:'Parcel follow-up tasks'}).getByRole('alert')).toContainText('Task count changed');
 await expect(page.getByRole('group',{name:'Confirm clear all tasks'})).toHaveCount(0);
 await expect(page.getByText('Fixture follow up')).toBeVisible();expect(attempts).toBe(1);
 });
@@ -118,7 +130,7 @@ for(const viewport of [{width:1440,height:900},{width:1366,height:768},{width:76
  await page.setViewportSize(viewport);
  await page.goto(`/?parcel=${parcel}&tab=tasks`);
  const pane=page.getByRole('region',{name:'Parcel follow-up tasks'});
- const date=pane.getByLabel('Due date',{exact:true}),time=pane.getByLabel('Due time',{exact:true});
+ const date=pane.getByLabel('Due date',{exact:true}),time=pane.getByRole('button',{name:'Due time'});
  await expect(date).toBeVisible();await expect(time).toBeVisible();
  const panelBox=await pane.boundingBox(),dateBox=await date.boundingBox(),timeBox=await time.boundingBox();
  expect(panelBox).not.toBeNull();expect(dateBox).not.toBeNull();expect(timeBox).not.toBeNull();
@@ -126,7 +138,18 @@ for(const viewport of [{width:1440,height:900},{width:1366,height:768},{width:76
   expect(box.x).toBeGreaterThanOrEqual(panelBox!.x-1);
   expect(box.x+box.width).toBeLessThanOrEqual(Math.min(viewport.width,panelBox!.x+panelBox!.width)+1);
  }
- await date.fill('2030-12-08');await time.fill('14:00');
+ await date.fill('2030-12-08');
+ await pane.getByRole('button',{name:'Choose due date'}).click();
+ const calendar=page.locator('.calendar-popup');await expect(calendar).toBeVisible();
+ for(const [name,popup] of [['calendar',calendar],['time',page.getByRole('dialog',{name:'Choose due time'})]] as const){
+  if(name==='time')await time.click();
+  await expect(popup).toBeVisible();
+  await expect.poll(async()=>{const b=await popup.boundingBox();return !!b && b.x>=0 && b.y>=0 && b.x+b.width<=viewport.width && b.y+b.height<=viewport.height}).toBe(true);
+  await page.screenshot({path:info.outputPath(`${name}-open-${viewport.width}x${viewport.height}.png`)});
+  if(name==='calendar')await pane.getByRole('button',{name:'Choose due date'}).click();
+  else {await popup.getByLabel('Hour').selectOption('7');await popup.press('Escape');await expect(time).toBeFocused();await expect(time).toContainText('Choose time');}
+ }
+ await chooseTime(page,'14:00');
  await expect(pane.getByLabel(/Time zone offset/)).toBeVisible();
  await pane.getByRole('textbox',{name:'Follow-up message'}).fill('Plain follow up');
  await expect(pane.getByText('145 characters remaining')).toBeVisible();
@@ -151,8 +174,38 @@ await pane.getByLabel(/Time zone offset/).selectOption({index:1});
 await pane.getByLabel('Due date',{exact:true}).fill('2030-12-09');
 await expect(pane.getByLabel(/Time zone offset/)).toHaveValue('');
 await expect(pane.getByRole('button',{name:'Create task'})).toBeDisabled();
-await page.getByLabel('Due time',{exact:true}).fill('');
+await page.getByLabel('Due date',{exact:true}).fill('');
 await expect(pane.getByLabel(/Time zone offset/)).toHaveCount(0);
 await expect(pane.getByRole('button',{name:'Create task'})).toBeDisabled();
 expect(posts).toBe(0);
+});
+test('edit keeps the loaded fold instant and validates skipped hours before rescheduling',async({page})=>{
+ await fixture(page);
+ const id='44444444-4444-4444-8444-444444444444';
+ let saved=false;
+ const loaded={...task(id,parcel),due_at:'2030-11-03T06:30:00Z',timezone:'America/New_York'};
+ await page.route(`**/api/me/parcels/${parcel}/tasks/${id}/reschedule`,route=>{
+  expect(route.request().postDataJSON()).toEqual({revision:1,message:'Edited reminder',due_at:'2030-11-03T02:45:00-05:00',timezone:'America/New_York'});
+  saved=true;return route.fulfill({json:{...loaded,revision:2,schedule_version:2}});
+ });
+ await page.route(`**/api/me/parcels/${parcel}/tasks*`,route=>route.fulfill({json:{items:saved?[]:[loaded],next:''}}));
+ await page.goto(`/?parcel=${parcel}&tab=tasks`);
+ const pane=page.getByRole('region',{name:'Parcel follow-up tasks'});
+ await pane.getByRole('button',{name:'Edit / snooze'}).click();
+ await expect(pane.getByLabel('Due date',{exact:true})).toHaveValue('2030-11-03');
+ await expect(pane.getByRole('button',{name:'Due time'})).toContainText('01:30');
+ await expect(pane.getByLabel(/Time zone offset/)).toHaveValue('2030-11-03T01:30:00-05:00');
+ await expect(pane.getByLabel(/Time zone offset/).locator('option:not([disabled])')).toHaveCount(2);
+ await pane.getByLabel('Due date',{exact:true}).fill('2030-03-10');
+ await chooseTime(page,'02:30');
+ await expect(pane.getByRole('alert')).toContainText('does not exist');
+ await expect(pane.getByRole('button',{name:'Save new schedule version'})).toBeDisabled();
+ await pane.getByLabel('Due date',{exact:true}).fill('2030-02-30');
+ await expect(pane.getByRole('button',{name:'Save new schedule version'})).toBeDisabled();
+ await pane.getByLabel('Due date',{exact:true}).fill('2030-11-03');
+ await chooseTime(page,'02:45');
+ await pane.getByRole('textbox',{name:'Follow-up message'}).fill('Edited reminder');
+ await pane.getByLabel(/Time zone offset/).selectOption('2030-11-03T02:45:00-05:00');
+ await pane.getByRole('button',{name:'Save new schedule version'}).click();
+ await expect(pane.getByText('Task saved.',{exact:false})).toBeVisible();expect(saved).toBe(true);
 });

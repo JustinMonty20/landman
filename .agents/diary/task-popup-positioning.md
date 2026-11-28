@@ -1,0 +1,2 @@
+- [Scope tangent] DatePicker mounts an empty live announcer, exposing an unscoped alert locator in `favorites-discovery.spec.ts`. Updated the assertion to address the favorite status rather than remove Skeleton's announcer; the favorite behavior is unchanged.
+- [Out-of-scope decision] A tablet favorites board test exceeded its teardown timeout during the full suite, but passed in isolation. No favorites runtime change is warranted for a one-off teardown pause.

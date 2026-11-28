@@ -1,10 +1,17 @@
 <script lang="ts">
 import { onMount } from 'svelte';
+import { DatePicker, parseDate, Popover, Portal } from '@skeletonlabs/skeleton-svelte';
 import { dueCandidates, smsCapacity } from './taskTime';
 let {parcel = '', editable = true, refresh = 0, oncreated}: {parcel?: string; editable?: boolean; refresh?: number; oncreated?: (parcel: string) => void} = $props();
 type Task = {id:string;parcel_id:string;parcel_number:string|null;message:string;due_at:string;timezone:string;status:'open'|'completed'|'canceled';reminder_state:'queued'|'stubbed'|'canceled'|'missed';revision:number;schedule_version:number};
 let items=$state<Task[]>([]), next=$state(''), loading=$state(false), busy=$state(false), error=$state(''), notice=$state('');
 let message=$state(''), dueDate=$state(''), dueTime=$state(''), offset=$state(''), editing=$state<Task|null>(null), createID=$state('');
+let timeOpen=$state(false), hour=$state('12'), minute=$state('00'), period=$state('PM');
+const hours=Array.from({length:12},(_,i)=>String(i+1));
+const minutes=Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
+const selectedDate=$derived.by(()=>{try{return /^\d{4}-\d{2}-\d{2}$/.test(dueDate)?[parseDate(dueDate)]:[]}catch{return []}});
+function timeOpened(open:boolean){timeOpen=open;if(open){const [h,m]=dueTime.split(':').map(Number);hour=String(Number.isFinite(h)?h%12||12:12);minute=String(Number.isFinite(m)?m:0).padStart(2,'0');period=h<12?'AM':'PM'}}
+function applyTime(){dueTime=`${String(Number(hour)%12+(period==='PM'?12:0)).padStart(2,'0')}:${minute}`;offset='';createID='';timeOpen=false}
 let confirmClear=$state<{count:number;snapshot:string}|null>(null), clearing=$state(false);
 let conflict=$state(false), currentTask=$state<Task|null>(null), now=$state(Date.now());
 let generation=0, reader:AbortController|null=null;
@@ -94,8 +101,26 @@ $effect(()=>{if(refresh>0)void load()});
  <form onsubmit={(e)=>{e.preventDefault();void save()}}>
  <label>Message (single SMS segment)<textarea class="textarea" aria-label="Follow-up message" bind:value={message} oninput={()=>{if(!editing)createID=''}} required disabled={busy}></textarea></label>
  {#if capacity.remaining<0}<p role="alert">Message is too long for one SMS. Shorten it to save.</p>{:else}<span>{capacity.remaining} characters remaining</span>{/if}
- <div class="due-fields"><label>Due date<input class="input" type="date" bind:value={dueDate} oninput={()=>{offset='';createID=''}} required disabled={busy}/></label>
- <label>Due time<input class="input" type="time" bind:value={dueTime} oninput={()=>{offset='';createID=''}} required disabled={busy}/></label></div>
+ <div class="due-fields">
+ <div class="due-field"><span>Due date</span>
+ <DatePicker value={selectedDate} onValueChange={({valueAsString})=>{dueDate=valueAsString[0] ?? '';offset='';createID=''}} disabled={busy} format={(date)=>date.toString()} parse={(text)=>{try{return parseDate(text)}catch{return undefined}}} positioning={{placement:'bottom-end',gutter:6,flip:true,slide:true,overflowPadding:8,strategy:'fixed'}}>
+  <DatePicker.Control class="date-control"><input class="input" type="text" aria-label="Due date" placeholder="YYYY-MM-DD" inputmode="numeric" pattern={'[0-9]{4}-[0-9]{2}-[0-9]{2}'} maxlength="10" bind:value={dueDate} oninput={()=>{offset='';createID=''}} required disabled={busy} /><DatePicker.Trigger type="button" class="btn preset-outlined-surface-300-700" aria-label="Choose due date">▦</DatePicker.Trigger></DatePicker.Control>
+  <Portal><DatePicker.Positioner class="task-popup"><DatePicker.Content class="calendar-popup">
+   <DatePicker.View view="day"><DatePicker.ViewControl class="calendar-heading"><DatePicker.PrevTrigger type="button" aria-label="Previous month" /><DatePicker.RangeText /><DatePicker.NextTrigger type="button" aria-label="Next month" /></DatePicker.ViewControl>
+    <DatePicker.Table><DatePicker.TableHead><DatePicker.TableRow><DatePicker.Context>{#snippet children(calendar)}{#each calendar().weekDays as weekday}<DatePicker.TableHeader>{weekday.short}</DatePicker.TableHeader>{/each}{/snippet}</DatePicker.Context></DatePicker.TableRow></DatePicker.TableHead>
+     <DatePicker.TableBody><DatePicker.Context>{#snippet children(calendar)}{#each calendar().weeks as week}<DatePicker.TableRow>{#each week as day}<DatePicker.TableCell value={day} visibleRange={calendar().visibleRange}><DatePicker.TableCellTrigger>{day.day}</DatePicker.TableCellTrigger></DatePicker.TableCell>{/each}</DatePicker.TableRow>{/each}{/snippet}</DatePicker.Context></DatePicker.TableBody>
+    </DatePicker.Table>
+   </DatePicker.View>
+  </DatePicker.Content></DatePicker.Positioner></Portal>
+ </DatePicker></div>
+ <div class="due-field"><span>Due time</span>
+ <Popover open={timeOpen} onOpenChange={({open})=>timeOpened(open)} positioning={{placement:'bottom-end',offset:{mainAxis:6,crossAxis:-5},flip:true,slide:true,overflowPadding:8,strategy:'fixed'}}>
+  <Popover.Trigger type="button" class="input time-trigger" disabled={busy} aria-label="Due time">{dueTime || 'Choose time'} <span aria-hidden="true">▾</span></Popover.Trigger>
+  <Portal><Popover.Positioner class="task-popup"><Popover.Content class="time-popup"><Popover.Title>Choose due time</Popover.Title>
+   <div class="time-options"><label>Hour<select class="select" bind:value={hour}>{#each hours as h}<option value={h}>{h}</option>{/each}</select></label><label>Minute<select class="select" bind:value={minute}>{#each minutes as m}<option value={m}>{m}</option>{/each}</select></label><label>AM or PM<select class="select" bind:value={period}><option>AM</option><option>PM</option></select></label></div>
+   <div class="buttons"><button type="button" class="btn btn-sm preset-filled-primary-500" onclick={applyTime}>Set time</button><Popover.CloseTrigger aria-label="Cancel" type="button" class="btn btn-sm preset-outlined-surface-300-700">Cancel</Popover.CloseTrigger></div>
+  </Popover.Content></Popover.Positioner></Portal>
+ </Popover></div></div>
  {#if local && candidates.length===0}<p role="alert">This local time does not exist in {timezone}. Choose another time.</p>{/if}
  {#if candidates.length>0}<label>Time zone offset ({timezone})<select class="select" bind:value={offset} onchange={()=>{createID=''}} required disabled={busy}>
  <option value="" disabled>Select an offset</option>{#each candidates as candidate}<option value={candidate.due_at}>{candidate.label}</option>{/each}</select></label>{/if}
@@ -120,5 +145,7 @@ $effect(()=>{if(refresh>0)void load()});
  {#if next}<button type="button" class="btn btn-sm preset-outlined-surface-300-700" onclick={()=>void load(true)} disabled={loading || busy}>Load more tasks</button>{/if}
 </section>
 <style>
-.tasks{padding:12px;display:grid;gap:12px;font-size:13px}.tasks header,.buttons{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.tasks header{justify-content:space-between;height:auto;min-height:52px;padding:8px 12px;gap:8px}.tasks h2{font-size:16px;font-weight:650}.tasks h3{font-size:14px;font-weight:650;border-bottom:1px solid var(--border);padding-bottom:6px}.tasks form{display:grid;gap:10px;min-width:0}.tasks label{display:grid;gap:4px;min-width:0}.tasks .due-fields{display:flex;flex-wrap:wrap;gap:10px;min-width:0}.tasks .due-fields label{flex:1 1 140px;min-width:0}.tasks .due-fields input{box-sizing:border-box;width:100%;min-width:0;max-width:100%}.tasks textarea{min-height:70px}.tasks ul{display:grid;gap:8px;list-style:none;padding:0}.tasks li{border:1px solid var(--border);border-radius:8px;padding:12px;overflow-wrap:anywhere}.tasks li p{margin:6px 0}.tasks .message{white-space:pre-wrap}.tasks [role="alert"]{color:#fbbf74}.tasks .stub-note{color:var(--muted)}.tasks a{color:var(--color-primary-300)}
+.tasks{padding:12px;display:grid;gap:12px;font-size:13px}.tasks header,.buttons{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.tasks header{justify-content:space-between;height:auto;min-height:52px;padding:8px 12px;gap:8px}.tasks h2{font-size:16px;font-weight:650}.tasks h3{font-size:14px;font-weight:650;border-bottom:1px solid var(--border);padding-bottom:6px}.tasks form{display:grid;gap:10px;min-width:0}.tasks label{display:grid;gap:4px;min-width:0}.tasks .due-fields{display:flex;flex-wrap:wrap;gap:10px;min-width:0}.tasks .due-field{flex:1 1 140px;min-width:0;display:grid;gap:4px}:global(.tasks .date-control){display:flex;min-width:0;gap:4px}:global(.tasks .date-control input){flex:1;min-width:0}:global(.tasks .time-trigger){display:flex;align-items:center;justify-content:space-between;text-align:left;width:100%}:global(.tasks .due-fields input){box-sizing:border-box;width:100%;min-width:0;max-width:100%}.tasks textarea{min-height:70px}.tasks ul{display:grid;gap:8px;list-style:none;padding:0}.tasks li{border:1px solid var(--border);border-radius:8px;padding:12px;overflow-wrap:anywhere}.tasks li p{margin:6px 0}.tasks .message{white-space:pre-wrap}.tasks [role="alert"]{color:#fbbf74}.tasks .stub-note{color:var(--muted)}.tasks a{color:var(--color-primary-300)}
+
+:global(.task-popup){z-index:30!important}:global(.calendar-popup),:global(.time-popup){background:#303438;color:#f1f3f5;border:1px solid #747c85;border-radius:8px;padding:12px;box-shadow:0 8px 24px #0009;max-width:calc(100vw - 16px)}:global(.calendar-popup){width:280px}:global(.calendar-heading){display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}:global(.calendar-heading button){padding:4px 8px;border-radius:4px}:global(.calendar-popup table){width:100%;table-layout:fixed;text-align:center}:global(.calendar-popup th){font-size:11px;color:#c3cbd2}:global(.calendar-popup td){padding:1px}:global(.calendar-popup td>div){padding:5px;border-radius:4px;cursor:pointer}:global(.calendar-popup td[data-selected] > div){background:#5b87d6;color:#111}:global(.calendar-popup td[data-outside-range] > div){opacity:.5}:global(.calendar-popup :focus-visible),:global(.time-popup :focus-visible){outline:2px solid #85b6ff;outline-offset:2px}:global(.time-popup){width:270px}:global(.time-options){display:flex;gap:6px;margin:10px 0}:global(.time-options label){display:grid;gap:4px;flex:1;font-size:12px}:global(.time-options select){min-width:0;width:100%}
 </style>

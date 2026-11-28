@@ -1,4 +1,12 @@
 import { expect, test } from '@playwright/test';
+async function chooseTime(page:import('@playwright/test').Page, time:string){
+ await page.getByRole('button',{name:'Due time'}).click();
+ const popup=page.getByRole('dialog',{name:'Choose due time'});
+ await popup.getByLabel('Hour').selectOption(String(Number(time.slice(0,2))%12||12));
+ await popup.getByLabel('Minute').selectOption(time.slice(3));
+ await popup.getByLabel('AM or PM').selectOption(Number(time.slice(0,2))<12?'AM':'PM');
+ await popup.getByRole('button',{name:'Set time'}).click();
+}
 // Show native scrollbars in parcel screenshots; Playwright hides them by default.
 test.use({ launchOptions: { args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'], ignoreDefaultArgs: ['--hide-scrollbars'] } });
 const origin='http://127.0.0.1:5174';
@@ -255,7 +263,7 @@ test('full-size parcel tabs scroll horizontally while notes and tasks retain dra
  await expect(taskPane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
  await taskPane.getByRole('textbox',{name:'Follow-up message'}).fill('Retain my unsaved task');
  await taskPane.getByLabel('Due date',{exact:true}).fill('2030-12-08');
- await taskPane.getByLabel('Due time',{exact:true}).fill('14:00');
+ await chooseTime(page,'14:00');
  await expect(taskPane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Retain my unsaved task');
  await panel.getByRole('tabpanel',{name:'Tasks'}).evaluate(el=>el.scrollTop=0);
  await expect(taskPane.getByRole('heading',{name:'Follow-up tasks'})).toBeVisible();
@@ -267,5 +275,5 @@ test('full-size parcel tabs scroll horizontally while notes and tasks retain dra
  await tabs.getByRole('tab',{name:'Tasks'}).click();
  await expect(taskPane.getByRole('textbox',{name:'Follow-up message'})).toHaveValue('Retain my unsaved task');
  await expect(taskPane.getByLabel('Due date',{exact:true})).toHaveValue('2030-12-08');
- await expect(taskPane.getByLabel('Due time',{exact:true})).toHaveValue('14:00');
+ await expect(taskPane.getByLabel('Due time',{exact:true})).toContainText('14:00');
 });
